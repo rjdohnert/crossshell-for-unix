@@ -64,7 +64,6 @@ This architecture brings the best of both worlds: the expressive ergonomics and 
 - **Version:** `15.7`
 - **MSI Package:** `CrossShell-for-UNIX-15.7.msi`
 - **Portable Archive:** `CrossShell-For-UNIX-bin.zip`
-- **Directory:** [Release/](Release/)
 
 ---
 
