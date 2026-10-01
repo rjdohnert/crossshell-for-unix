@@ -1,3 +1,4 @@
+<img width="500" height="210" alt="crossshell-github" src="https://github.com/user-attachments/assets/dc64eede-62b2-48e5-b696-0eac42902d55" />
 
 # CrossShell for UNIX Open Source
 
