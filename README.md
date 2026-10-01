@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # CrossShell for UNIX Open Source
 
 [![Release](https://img.shields.io/badge/release-v15.7-blue.svg)](Release/)
@@ -6,22 +6,16 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Server-lightgrey.svg)](#supported-systems)
 [![Architecture](https://img.shields.io/badge/arch-x64-orange.svg)](#installation)
 =======
-<img width="500" height="210" alt="crossshell-github" src="https://github.com/user-attachments/assets/d3403f71-a434-4e89-8d44-92cef46f614c" />
 
 CrossShell for UNIX v15.7 Open Source 
 ------------
 This is a collection of command line tools for the Windows command line based on the BSD coreutils and more.
->>>>>>> a5020def7ec437320956c2a434ebe52af5fa352c
 
 **CrossShell for UNIX** is the open source release of the UNIX/Linux interoperability command-line environment from **PC/OpenSystems, LLC**.
 
 This project delivers over 250 object-oriented UNIX inspired utilities reimagined for modern Windows environments—without pretending Windows is suddenly BSD, UNIX, or Linux. Built to seamlessly interface with deep Windows subsystems including the Windows Registry and CIM/WMI classes, CrossShell empowers system administrators, developers, lab environments, and infrastructure teams with a familiar, fluid UNIX command-line workflow while remaining 100% native on Windows.
 
 ---
-
-<<<<<<< HEAD
-## Table of Contents
-=======
 Disclaimer
 -----------
 These tools are a reimplimination of common UNIX System V and BSD utilities that were created for interoperability for Windows systems
@@ -33,7 +27,9 @@ observed during the production of one of these utilities UFW.
 GNU and the GPL are registered trademarks of The Free Software Foundation.  FreeBSD is a registered Trademark of
 the FreeBSD foundation.  Linux is a registered trademark of Linus Torvalds.  Windows/Windows Server are registered trademarks of
 Microsoft Corporation
->>>>>>> a5020def7ec437320956c2a434ebe52af5fa352c
+
+## Table of Contents
+=======
 
 - [Overview](#overview)
 - [Current Release](#current-release)
