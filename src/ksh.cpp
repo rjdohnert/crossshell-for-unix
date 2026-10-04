@@ -288,9 +288,12 @@ thread_local int g_next_job_id = 1;
 thread_local std::wstring g_history_file_path;
 thread_local std::wstring g_last_pipeline_error_detail;
 thread_local bool g_is_interactive_session = false;
+thread_local bool g_powershell_bypass_enabled = false;
 thread_local bool g_expansion_error = false;
 thread_local int g_expansion_nesting_depth = 0;
 thread_local int g_eval_nesting_depth = 0;
+volatile LONG g_in_interactive_loop = 0;
+volatile LONG g_foreground_process_active = 0;
 volatile LONG g_pending_int_trap = 0;
 volatile LONG g_pending_break_trap = 0;
 volatile LONG g_pending_hup_trap = 0;
@@ -429,6 +432,13 @@ std::wstring resolve_variable_name(const std::wstring& name, int depth = 0);
 bool assign_parameter_value(const std::wstring& lhs, const std::wstring& rhs, bool array_hint, bool local_scope, std::wstring& error_message, bool is_nameref = false);
 bool parse_array_reference_expression(const std::wstring& expression, std::wstring& base_name, std::wstring& index_text, bool& has_index);
 bool parse_non_negative_index(const std::wstring& text, size_t& out_index);
+bool match_glob_pattern_recursive(
+    const std::wstring& pattern,
+    size_t pattern_index,
+    const std::wstring& candidate,
+    size_t candidate_index,
+    bool case_sensitive,
+    unsigned long long& step_budget);
 // SECTION 03: Shared helpers, command expansion, and shell state.
 bool get_flag_value(const std::map<std::wstring, bool>& flags, const std::wstring& name);
 bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redir, std::wstring& error_message);
@@ -1094,12 +1104,9 @@ inline ShellStateSnapshot capture_shell_state_snapshot() {
     snap.custom_types = g_custom_types;
     snap.custom_fd_table = g_custom_fd_table;
     snap.trap_handlers = g_trap_handlers;
-    DWORD dir_len = GetCurrentDirectoryW(0, NULL);
-    if (dir_len > 0) {
-        std::vector<wchar_t> dir_buf(dir_len);
-        if (GetCurrentDirectoryW(dir_len, dir_buf.data()) > 0) {
-            snap.saved_dir = dir_buf.data();
-        }
+    wchar_t dir_buf[MAX_PATH];
+    if (GetCurrentDirectoryW(MAX_PATH, dir_buf) > 0) {
+        snap.saved_dir = dir_buf;
     }
     return snap;
 }
@@ -1129,7 +1136,12 @@ inline void restore_shell_state_snapshot_if_present(
         }
     }
     if (!snapshot.saved_dir.empty()) {
-        SetCurrentDirectoryW(snapshot.saved_dir.c_str());
+        wchar_t cur[MAX_PATH];
+        if (GetCurrentDirectoryW(MAX_PATH, cur) > 0) {
+            if (_wcsicmp(cur, snapshot.saved_dir.c_str()) != 0) {
+                SetCurrentDirectoryW(snapshot.saved_dir.c_str());
+            }
+        }
     }
     snapshot_opt.reset();
 }
@@ -1234,19 +1246,29 @@ private:
 };
 
 // History section: control variables and timestamp policy.
+inline std::wstring get_system_env_var(const std::wstring& name) {
+    wchar_t buffer[256];
+    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, _countof(buffer));
+    if (ret > 0 && ret < _countof(buffer)) {
+        return std::wstring(buffer, ret);
+    }
+    if (ret >= _countof(buffer)) {
+        std::vector<wchar_t> dyn(ret + 1);
+        DWORD dyn_ret = GetEnvironmentVariableW(name.c_str(), dyn.data(), static_cast<DWORD>(dyn.size()));
+        if (dyn_ret > 0 && dyn_ret < dyn.size()) {
+            return std::wstring(dyn.data(), dyn_ret);
+        }
+    }
+    return L"";
+}
+
 std::wstring get_history_control_value(const std::wstring& name) {
     std::map<std::wstring, std::wstring>::const_iterator it = ksh_env.variables.find(name);
     if (it != ksh_env.variables.end()) {
         return it->second;
     }
 
-    wchar_t buffer[32767];
-    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, 32767);
-    if (ret > 0 && ret < 32767) {
-        return std::wstring(buffer);
-    }
-
-    return L"";
+    return get_system_env_var(name);
 }
 
 bool history_timestamps_enabled() {
@@ -1519,13 +1541,7 @@ std::wstring get_environment_value(const std::wstring& name) {
         return val;
     }
 
-    wchar_t buffer[32767];
-    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, 32767);
-    if (ret > 0 && ret < 32767) {
-        return std::wstring(buffer);
-    }
-
-    return L"";
+    return get_system_env_var(name);
 }
 
 // History section: persistence policy, timestamp formatting, and replay limits.
@@ -1614,14 +1630,7 @@ std::wstring resolve_history_file_path() {
         if (name == nullptr || *name == L'\0') {
             return L"";
         }
-
-        wchar_t buffer[32767];
-        DWORD len = GetEnvironmentVariableW(name, buffer, static_cast<DWORD>(_countof(buffer)));
-        if (len == 0 || len >= _countof(buffer)) {
-            return L"";
-        }
-
-        return std::wstring(buffer, len);
+        return get_system_env_var(name);
     };
 
     // Prefer HOME first for POSIX-style workflows, then USERPROFILE and HOMEDRIVE+HOMEPATH.
@@ -2428,12 +2437,7 @@ const std::vector<CompletionCandidate>& collect_cached_command_candidates() {
         cwd_value = cwd_buffer;
     }
 
-    wchar_t path_buffer[32767];
-    std::wstring path_value;
-    DWORD path_len = GetEnvironmentVariableW(L"PATH", path_buffer, 32767);
-    if (path_len > 0 && path_len < 32767) {
-        path_value = path_buffer;
-    }
+    std::wstring path_value = get_system_env_var(L"PATH");
 
     if (cache.cwd == cwd_value && cache.path_value == path_value && !cache.candidates.empty() && (now_ms - cache.cached_at_ms) < kCompletionCacheTtlMs) {
         return cache.candidates;
@@ -3411,19 +3415,31 @@ BOOL WINAPI ksh_console_ctrl_handler(DWORD ctrl_type) {
     switch (ctrl_type) {
     case CTRL_C_EVENT: {
         const bool int_active = InterlockedCompareExchange(&g_int_trap_active, 0, 0) != 0;
-        if (!int_active) {
-            return FALSE;
+        if (int_active) {
+            InterlockedExchange(&g_pending_int_trap, 1);
+            return TRUE;
         }
-        InterlockedExchange(&g_pending_int_trap, 1);
-        return TRUE;
+        const bool fg_active = InterlockedCompareExchange(&g_foreground_process_active, 0, 0) != 0;
+        const bool interactive = InterlockedCompareExchange(&g_in_interactive_loop, 0, 0) != 0;
+        if (fg_active || interactive) {
+            InterlockedExchange(&g_pending_int_trap, 1);
+            return TRUE;
+        }
+        return FALSE;
     }
     case CTRL_BREAK_EVENT: {
         const bool break_active = InterlockedCompareExchange(&g_break_trap_active, 0, 0) != 0;
-        if (!break_active) {
-            return FALSE;
+        if (break_active) {
+            InterlockedExchange(&g_pending_break_trap, 1);
+            return TRUE;
         }
-        InterlockedExchange(&g_pending_break_trap, 1);
-        return TRUE;
+        const bool fg_active = InterlockedCompareExchange(&g_foreground_process_active, 0, 0) != 0;
+        const bool interactive = InterlockedCompareExchange(&g_in_interactive_loop, 0, 0) != 0;
+        if (fg_active || interactive) {
+            InterlockedExchange(&g_pending_break_trap, 1);
+            return TRUE;
+        }
+        return FALSE;
     }
     case CTRL_CLOSE_EVENT:
     case CTRL_LOGOFF_EVENT:
@@ -4169,7 +4185,7 @@ bool build_cmd_shell_command_line(const std::wstring& command, std::wstring& com
         return false;
     }
 
-    command_line = quote_command_argument(cmd_path) + L" /d /s /c " + quote_command_argument(command);
+    command_line = quote_command_argument(cmd_path) + L" /d /s /c \"" + command + L"\"";
     return true;
 }
 
@@ -4254,11 +4270,37 @@ bool resolve_external_command_path(const std::wstring& command_name, std::wstrin
         return true;
     }
 
-    length = SearchPathW(nullptr, command_name.c_str(), L".exe", MAX_PATH, buffer, nullptr);
-    if (length > 0 && length < MAX_PATH) {
-        resolved_path = buffer;
-        g_command_hash_table[command_name] = { resolved_path, 1 };
-        return true;
+    std::wstring pathext = get_system_env_var(L"PATHEXT");
+    if (pathext.empty()) {
+        pathext = L".COM;.EXE;.BAT;.CMD";
+    }
+
+    std::vector<std::wstring> extensions;
+    size_t ext_start = 0;
+    while (ext_start < pathext.size()) {
+        size_t semi = pathext.find(L';', ext_start);
+        std::wstring ext = (semi != std::wstring::npos) ? pathext.substr(ext_start, semi - ext_start) : pathext.substr(ext_start);
+        ext = trim_copy(ext);
+        if (!ext.empty()) {
+            if (ext[0] != L'.') {
+                ext = L"." + ext;
+            }
+            extensions.push_back(to_lower_copy(ext));
+        }
+        if (semi == std::wstring::npos) break;
+        ext_start = semi + 1;
+    }
+    if (extensions.empty()) {
+        extensions = { L".com", L".exe", L".bat", L".cmd" };
+    }
+
+    for (const auto& ext : extensions) {
+        length = SearchPathW(nullptr, command_name.c_str(), ext.c_str(), MAX_PATH, buffer, nullptr);
+        if (length > 0 && length < MAX_PATH) {
+            resolved_path = buffer;
+            g_command_hash_table[command_name] = { resolved_path, 1 };
+            return true;
+        }
     }
 
     return false;
@@ -4292,12 +4334,19 @@ bool can_capture_builtin_command_substitution(const std::vector<std::wstring>& t
         L"times",
     };
 
-    std::wstring detail;
-    if (resolve_command_kind(tokens[0], detail) != CommandResolutionKind::Builtin) {
+    if (std::find(capture_safe_builtins.begin(), capture_safe_builtins.end(), tokens[0]) == capture_safe_builtins.end()) {
         return false;
     }
 
-    return std::find(capture_safe_builtins.begin(), capture_safe_builtins.end(), tokens[0]) != capture_safe_builtins.end();
+    // Ensure it is not shadowed by an alias or user-defined function
+    if (g_aliases.find(tokens[0]) != g_aliases.end()) {
+        return false;
+    }
+    if (g_shell_functions.find(tokens[0]) != g_shell_functions.end()) {
+        return false;
+    }
+
+    return true;
 }
 
 bool is_snapshot_safe_external_segment(const std::wstring& segment_text) {
@@ -5123,7 +5172,7 @@ bool has_unquoted_shell_metacharacters(const std::wstring& input) {
                 paren_depth++;
             } else if (ch == L')') {
                 if (paren_depth > 0) paren_depth--;
-            } else if (paren_depth == 0 && (ch == L'>' || ch == L'<' || ch == L'&' || ch == L'|')) {
+            } else if (paren_depth == 0 && (ch == L'>' || ch == L'<' || ch == L'&' || ch == L'|' || ch == L';')) {
                 return true;
             }
         }
@@ -6541,6 +6590,22 @@ bool resolve_bash_exe_path(std::wstring& bash_path) {
     return false;
 }
 
+bool is_powershell_bypass_enabled() {
+    if (g_powershell_bypass_enabled) {
+        return true;
+    }
+    std::wstring val = trim_copy(get_environment_value(L"KSH_POWERSHELL_BYPASS"));
+    if (val.empty()) {
+        return false;
+    }
+    for (wchar_t ch : val) {
+        if (ch == L'1' || ch == L'y' || ch == L'Y' || ch == L't' || ch == L'T') {
+            return true;
+        }
+    }
+    return false;
+}
+
 enum class ScriptInterpreterResolution {
     NotScript,
     Resolved,
@@ -6552,6 +6617,11 @@ ScriptInterpreterResolution build_script_interpreter_command(const std::vector<s
         return ScriptInterpreterResolution::NotScript;
     }
 
+    const std::wstring& script_path = tokens[0];
+    if (script_path.empty() || script_path.find(L'=') != std::wstring::npos) {
+        return ScriptInterpreterResolution::NotScript;
+    }
+
     auto append_script_arguments = [&]() {
         for (size_t i = 1; i < tokens.size(); ++i) {
             command_line += L" ";
@@ -6559,14 +6629,27 @@ ScriptInterpreterResolution build_script_interpreter_command(const std::vector<s
         }
     };
 
-    const std::wstring& script_path = tokens[0];
     if (ends_with_case_insensitive(script_path, L".ps1")) {
         std::wstring powershell_path;
         if (!resolve_powershell_exe_path(powershell_path)) {
             return ScriptInterpreterResolution::Failed;
         }
         command_line = quote_command_argument(powershell_path);
-        command_line += L" -NoProfile -ExecutionPolicy Bypass -File ";
+        command_line += L" -NoProfile ";
+        if (is_powershell_bypass_enabled()) {
+            command_line += L"-ExecutionPolicy Bypass ";
+        }
+        command_line += L"-File ";
+        command_line += quote_command_argument(script_path);
+        append_script_arguments();
+        return ScriptInterpreterResolution::Resolved;
+    } else if (ends_with_case_insensitive(script_path, L".cmd") || ends_with_case_insensitive(script_path, L".bat")) {
+        std::wstring cmd_path;
+        if (!resolve_cmd_exe_path(cmd_path)) {
+            return ScriptInterpreterResolution::Failed;
+        }
+        command_line = quote_command_argument(cmd_path);
+        command_line += L" /d /c ";
         command_line += quote_command_argument(script_path);
         append_script_arguments();
         return ScriptInterpreterResolution::Resolved;
@@ -6898,7 +6981,16 @@ std::wstring get_variable_value_simple(const std::wstring& name) {
 
 class ArithmeticParser {
 public:
-    explicit ArithmeticParser(const std::wstring& expression) : expr(expression), pos(0), depth(0) {}
+    explicit ArithmeticParser(const std::wstring& expression) : expr(expression), pos(0), depth(0), has_float_operands(false) {}
+
+    bool is_float() const { return has_float_operands; }
+
+    static long long to_safe_int64(double v) {
+        if (!std::isfinite(v)) return 0;
+        if (v >= static_cast<double>(LLONG_MAX)) return LLONG_MAX;
+        if (v <= static_cast<double>(LLONG_MIN)) return LLONG_MIN;
+        return static_cast<long long>(v);
+    }
 
     double parse() {
         double value = parse_expression();
@@ -6913,6 +7005,7 @@ private:
     const std::wstring& expr;
     size_t pos;
     int depth;
+    bool has_float_operands;
 
     void check_depth() {
         if (depth >= kMaxArithmeticParseDepth) {
@@ -7094,13 +7187,6 @@ private:
         return value;
     }
 
-    static long long to_safe_int64(double v) {
-        if (!std::isfinite(v)) return 0;
-        if (v >= static_cast<double>(LLONG_MAX)) return LLONG_MAX;
-        if (v <= static_cast<double>(LLONG_MIN)) return LLONG_MIN;
-        return static_cast<long long>(v);
-    }
-
     double parse_bitwise_or() {
         double value = parse_bitwise_xor();
         while (true) {
@@ -7199,7 +7285,14 @@ private:
                 if (right == 0.0) {
                     throw std::runtime_error("division by zero");
                 }
-                value /= right;
+                if (!has_float_operands && std::floor(value) == value && std::floor(right) == right) {
+                    long long i_val = to_safe_int64(value);
+                    long long i_right = to_safe_int64(right);
+                    value = static_cast<double>(i_val / i_right);
+                } else {
+                    has_float_operands = true;
+                    value /= right;
+                }
             } else if (consume(L'%')) {
                 double right = parse_power();
                 if (right == 0.0) {
@@ -7326,6 +7419,9 @@ private:
         if (start == pos) {
             throw std::runtime_error("number expected");
         }
+        if (seen_dot) {
+            has_float_operands = true;
+        }
         return std::stod(expr.substr(start, pos - start));
     }
 
@@ -7343,9 +7439,11 @@ private:
             std::wstring identifier = parse_identifier();
             std::wstring lowered = to_lower_copy(identifier);
             if (lowered == L"pi") {
+                has_float_operands = true;
                 return std::acos(-1.0);
             }
             if (lowered == L"e") {
+                has_float_operands = true;
                 return std::exp(1.0);
             }
 
@@ -7363,12 +7461,16 @@ private:
                         }
                     }
                 }
+                has_float_operands = true;
                 return evaluate_math_function(identifier, args);
             }
 
             bool is_set = false;
             std::wstring val = get_variable_value_with_hooks(identifier, is_set);
             if (is_set) {
+                if (val.find(L'.') != std::wstring::npos) {
+                    has_float_operands = true;
+                }
                 return std::stod(val);
             }
             return 0.0;
@@ -7384,6 +7486,10 @@ std::wstring evaluate_arithmetic(const std::wstring& expr) {
         double value = parser.parse();
         if (!std::isfinite(value)) {
             return L"0";
+        }
+
+        if (!parser.is_float()) {
+            return std::to_wstring(ArithmeticParser::to_safe_int64(value));
         }
 
         double nearest = std::round(value);
@@ -7962,10 +8068,20 @@ std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_
             return;
         }
 
-        wchar_t buf[32767];
-        DWORD ret = GetEnvironmentVariableW(name_to_use.c_str(), buf, 32767);
-        if (ret > 0) {
-            out_value = std::wstring(buf);
+        wchar_t small_buf[256];
+        DWORD ret = GetEnvironmentVariableW(name_to_use.c_str(), small_buf, _countof(small_buf));
+        if (ret > 0 && ret < _countof(small_buf)) {
+            out_value.assign(small_buf, ret);
+            is_set = true;
+        } else if (ret >= _countof(small_buf)) {
+            std::vector<wchar_t> dyn_buf(ret + 1);
+            DWORD dyn_ret = GetEnvironmentVariableW(name_to_use.c_str(), dyn_buf.data(), static_cast<DWORD>(dyn_buf.size()));
+            if (dyn_ret > 0 && dyn_ret < dyn_buf.size()) {
+                out_value.assign(dyn_buf.data(), dyn_ret);
+                is_set = true;
+            }
+        } else if (GetLastError() == ERROR_SUCCESS) {
+            out_value.clear();
             is_set = true;
         }
     };
@@ -8041,117 +8157,7 @@ std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_
     auto match_parameter_pattern = [](const std::wstring& pattern, const std::wstring& candidate) -> bool {
         const bool case_sensitive = pattern_match_case_sensitive();
         unsigned long long step_budget = kMaxPatternMatchSteps;
-        std::function<bool(size_t, size_t)> match_recursive;
-
-        auto match_class = [&](size_t class_start, wchar_t ch, size_t& consumed) -> bool {
-            consumed = 0;
-            if (class_start >= pattern.size() || pattern[class_start] != L'[') {
-                return false;
-            }
-
-            size_t i = class_start + 1;
-            bool negate = false;
-            if (i < pattern.size() && (pattern[i] == L'!' || pattern[i] == L'^')) {
-                negate = true;
-                i++;
-            }
-
-            bool matched = false;
-            bool saw_item = false;
-            while (i < pattern.size() && pattern[i] != L']') {
-                wchar_t left = pattern[i];
-                if ((i + 2) < pattern.size() && pattern[i + 1] == L'-' && pattern[i + 2] != L']') {
-                    wchar_t right = pattern[i + 2];
-                    if (case_sensitive) {
-                        if (left <= ch && ch <= right) {
-                            matched = true;
-                        }
-                    } else {
-                        wchar_t lower_ch = static_cast<wchar_t>(std::towlower(ch));
-                        wchar_t lower_left = static_cast<wchar_t>(std::towlower(left));
-                        wchar_t lower_right = static_cast<wchar_t>(std::towlower(right));
-                        if (lower_left <= lower_ch && lower_ch <= lower_right) {
-                            matched = true;
-                        }
-                    }
-                    i += 3;
-                    saw_item = true;
-                    continue;
-                }
-
-                if (case_sensitive ? (left == ch) : (std::towlower(left) == std::towlower(ch))) {
-                    matched = true;
-                }
-                i++;
-                saw_item = true;
-            }
-
-            if (i >= pattern.size() || pattern[i] != L']' || !saw_item) {
-                return false;
-            }
-
-            consumed = (i - class_start) + 1;
-            return negate ? !matched : matched;
-        };
-
-        match_recursive = [&](size_t p, size_t c) -> bool {
-            if (step_budget == 0) {
-                return false;
-            }
-            step_budget--;
-
-            while (p < pattern.size()) {
-                const wchar_t token = pattern[p];
-                if (token == L'*') {
-                    while (p < pattern.size() && pattern[p] == L'*') {
-                        p++;
-                    }
-                    if (p == pattern.size()) {
-                        return true;
-                    }
-                    while (c <= candidate.size()) {
-                        if (match_recursive(p, c)) {
-                            return true;
-                        }
-                        if (c == candidate.size()) {
-                            break;
-                        }
-                        c++;
-                    }
-                    return false;
-                }
-
-                if (c >= candidate.size()) {
-                    return false;
-                }
-
-                if (token == L'?') {
-                    p++;
-                    c++;
-                    continue;
-                }
-
-                if (token == L'[') {
-                    size_t consumed = 0;
-                    if (!match_class(p, candidate[c], consumed)) {
-                        return false;
-                    }
-                    p += consumed;
-                    c++;
-                    continue;
-                }
-
-                if (case_sensitive ? (token != candidate[c]) : (std::towlower(token) != std::towlower(candidate[c]))) {
-                    return false;
-                }
-                p++;
-                c++;
-            }
-
-            return c == candidate.size();
-        };
-
-        return match_recursive(0, 0);
+        return match_glob_pattern_recursive(pattern, 0, candidate, 0, case_sensitive, step_budget);
     };
 
     auto apply_parameter_pattern_removal = [&](const std::wstring& value, const std::wstring& raw_pattern, bool prefix_mode, bool longest_match) -> std::wstring {
@@ -9354,7 +9360,7 @@ std::vector<std::wstring> ksh_tokenize(const std::wstring& input) {
             in_array_def = false;
             current += c;
             i++;
-        } else if (c == L' ' && !in_quotes && !in_single_quotes && !in_array_def) {
+        } else if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
             if (!current.empty()) {
                 tokens.push_back(current);
                 current.clear();
@@ -9438,7 +9444,7 @@ std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input
             continue;
         }
 
-        if (c == L' ' && !in_quotes && !in_single_quotes && !in_array_def) {
+        if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
             if (!current.empty()) {
                 tokens.push_back(current);
                 current.clear();
@@ -11281,6 +11287,15 @@ bool evaluate_ksh_conditional(const std::wstring& condition_str, bool& value, st
 }
 
 bool execute_native_or_fallback(const std::wstring& full_command, const RedirectionSpec* redir = nullptr, DWORD* exit_code_out = nullptr) {
+    struct ScopedForegroundProcessGuard {
+        ScopedForegroundProcessGuard() {
+            InterlockedExchange(&g_foreground_process_active, 1);
+        }
+        ~ScopedForegroundProcessGuard() {
+            InterlockedExchange(&g_foreground_process_active, 0);
+        }
+    } fg_guard;
+
     const bool perf_trace = is_performance_telemetry_enabled();
     const ULONGLONG overall_start = perf_trace ? GetTickCount64() : 0;
 
@@ -14323,6 +14338,10 @@ DWORD WINAPI PipeRelayThread(LPVOID lpParam) {
         dwWait = WaitForMultipleObjects(connect_count, connect_handles, FALSE, get_process_substitution_connect_timeout_ms());
         if (dwWait == WAIT_OBJECT_0 + 1) {
             child_terminated = true;
+            if (is_output) {
+                // Child finished producing output; still wait for reader to connect and drain buffer
+                dwWait = WaitForSingleObject(hEvent, get_process_substitution_connect_timeout_ms());
+            }
         }
         if (dwWait != WAIT_OBJECT_0 && hServer != nullptr && hServer != INVALID_HANDLE_VALUE && ov != nullptr) {
             CancelIoEx(hServer, ov);
@@ -14368,15 +14387,15 @@ DWORD WINAPI PipeRelayThread(LPVOID lpParam) {
                         }
                     }
 
-                    if (child_terminated || bytesWritten != bytesRead) {
+                    if (bytesWritten != bytesRead) {
                         early_reader_exit = true;
                         break;
                     }
                 }
 
-                if (!early_reader_exit && !child_terminated) {
+                if (!early_reader_exit) {
                     FlushFileBuffers(hServer);
-                } else if (early_reader_exit && !child_terminated && hProcess != nullptr && hProcess != INVALID_HANDLE_VALUE) {
+                } else if (hProcess != nullptr && hProcess != INVALID_HANDLE_VALUE) {
                     // Downstream reader exited early (e.g. head -n 1 <(cmd)).
                     // Close hChild immediately to signal broken pipe to child.
                     if (hChild != nullptr && hChild != INVALID_HANDLE_VALUE) {
@@ -14643,37 +14662,97 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
 }
 
 void parse_and_replace_process_substitutions(std::wstring& line) {
+    if (line.find(L"<(") == std::wstring::npos && line.find(L">(") == std::wstring::npos) {
+        return;
+    }
     size_t pos = 0;
-    while (true) {
-        size_t next_in = line.find(L"<(", pos);
-        size_t next_out = line.find(L">(", pos);
-        if (next_in == std::wstring::npos && next_out == std::wstring::npos) {
+    while (pos < line.size()) {
+        bool in_single = false;
+        bool in_double = false;
+        bool escaped = false;
+        size_t start = std::wstring::npos;
+        bool is_in = false;
+
+        for (size_t k = pos; k < line.size(); ++k) {
+            wchar_t c = line[k];
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == L'\\' && !in_single) {
+                escaped = true;
+                continue;
+            }
+            if (c == L'\'' && !in_double) {
+                in_single = !in_single;
+                continue;
+            }
+            if (c == L'"' && !in_single) {
+                in_double = !in_double;
+                continue;
+            }
+            if (!in_single && !in_double) {
+                if ((c == L'<' || c == L'>') && k + 1 < line.size() && line[k + 1] == L'(') {
+                    start = k;
+                    is_in = (c == L'<');
+                    break;
+                }
+            }
+        }
+
+        if (start == std::wstring::npos) {
             break;
         }
-        
-        bool is_in = (next_in != std::wstring::npos && (next_out == std::wstring::npos || next_in < next_out));
-        size_t start = is_in ? next_in : next_out;
-        
+
         size_t i = start + 2;
         int depth = 1;
+        bool inner_single = false;
+        bool inner_double = false;
+        bool inner_escaped = false;
+
         while (i < line.size() && depth > 0) {
-            if (line[i] == L'(') depth++;
-            else if (line[i] == L')') depth--;
-            if (depth == 0) break;
+            wchar_t c = line[i];
+            if (inner_escaped) {
+                inner_escaped = false;
+                i++;
+                continue;
+            }
+            if (c == L'\\' && !inner_single) {
+                inner_escaped = true;
+                i++;
+                continue;
+            }
+            if (c == L'\'' && !inner_double) {
+                inner_single = !inner_single;
+                i++;
+                continue;
+            }
+            if (c == L'"' && !inner_single) {
+                inner_double = !inner_double;
+                i++;
+                continue;
+            }
+            if (!inner_single && !inner_double) {
+                if (c == L'(') depth++;
+                else if (c == L')') {
+                    depth--;
+                    if (depth == 0) break;
+                }
+            }
             i++;
         }
-        
+
         if (depth == 0 && i < line.size()) {
             std::wstring inner = line.substr(start + 2, i - (start + 2));
             parse_and_replace_process_substitutions(inner);
-            
+
             std::wstring pipePath = handle_single_process_substitution(inner, is_in);
             if (pipePath.empty()) {
                 std::wcerr << L"ksh: process substitution setup failed\n";
                 g_expansion_error = true;
                 return;
             }
-            
+
             std::wstring escapedPipePath;
             for (wchar_t ch : pipePath) {
                 if (ch == L'\\') {
@@ -14682,7 +14761,7 @@ void parse_and_replace_process_substitutions(std::wstring& line) {
                     escapedPipePath += ch;
                 }
             }
-            
+
             line.replace(start, i + 1 - start, escapedPipePath);
             pos = start + escapedPipePath.size();
         } else {
@@ -16508,6 +16587,8 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                             g_vi_mode_enabled = enable;
                         } else if (opt_name == L"pipefail") {
                             g_pipefail_enabled = enable;
+                        } else if (opt_name == L"powershellbypass") {
+                            g_powershell_bypass_enabled = enable;
                         } else {
                             std::wcerr << L"ksh: set: unsupported option: " << opt_name << L"\n";
                             ok = false;
@@ -19563,9 +19644,52 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
     // Builtin group: directory and prompt-oriented utilities.
     // Built-in: cd
     if (cmd == L"cd") {
-        std::wstring p = (tokens.size() > 1) ? tokens[1] : L"C:\\";
-        p = normalize_cd_path(p);
+        wchar_t prev_cwd[MAX_PATH];
+        std::wstring old_cwd_str;
+        if (GetCurrentDirectoryW(MAX_PATH, prev_cwd) > 0) {
+            old_cwd_str = prev_cwd;
+        }
+
+        std::wstring target;
+        bool print_after = false;
+
+        if (tokens.size() <= 1) {
+            std::wstring home = get_environment_value(L"HOME");
+            if (home.empty()) {
+                home = get_environment_value(L"USERPROFILE");
+            }
+            if (home.empty()) {
+                home = L"C:\\";
+            }
+            target = home;
+        } else if (tokens[1] == L"-") {
+            std::wstring oldpwd = get_environment_value(L"OLDPWD");
+            if (oldpwd.empty()) {
+                std::wcerr << L"ksh: cd: OLDPWD not set\n";
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+            target = oldpwd;
+            print_after = true;
+        } else {
+            target = tokens[1];
+        }
+
+        std::wstring p = normalize_cd_path(target);
         if (SetCurrentDirectoryW(p.c_str())) {
+            wchar_t new_cwd[MAX_PATH];
+            if (GetCurrentDirectoryW(MAX_PATH, new_cwd) > 0) {
+                if (!old_cwd_str.empty()) {
+                    ksh_env.variables[L"OLDPWD"] = old_cwd_str;
+                    SetEnvironmentVariableW(L"OLDPWD", old_cwd_str.c_str());
+                }
+                std::wstring new_cwd_str = new_cwd;
+                ksh_env.variables[L"PWD"] = new_cwd_str;
+                SetEnvironmentVariableW(L"PWD", new_cwd_str.c_str());
+                if (print_after) {
+                    write_builtin_output(new_cwd_str + L"\n");
+                }
+            }
             ksh_env.variables[L"?"] = L"0";
             return true;
         }
@@ -19839,7 +19963,8 @@ int run_internal_self_tests() {
     // 3. Arithmetic Parser & Evaluation
     assert_eq(evaluate_arithmetic(L"1 + 1"), L"2", L"evaluate_arithmetic simple addition");
     assert_eq(evaluate_arithmetic(L"2 * 3.5"), L"7", L"evaluate_arithmetic whole number float conversion");
-    assert_eq(evaluate_arithmetic(L"5 / 2"), L"2.5", L"evaluate_arithmetic division returning decimal");
+    assert_eq(evaluate_arithmetic(L"5 / 2"), L"2", L"evaluate_arithmetic integer division truncation");
+    assert_eq(evaluate_arithmetic(L"5.0 / 2"), L"2.5", L"evaluate_arithmetic float division returning decimal");
     assert_eq(evaluate_arithmetic(L"2 + 3 * 4"), L"14", L"arithmetic multiplication precedence");
     assert_eq(evaluate_arithmetic(L"2 ** 3"), L"8", L"arithmetic exponentiation operator");
     assert_eq(evaluate_arithmetic(L"5 ^ 3"), L"6", L"arithmetic bitwise xor operator");
@@ -19979,7 +20104,74 @@ int run_internal_self_tests() {
         assert_eq(std::to_wstring(redir.custom_fd_actions.size()), L"1", L"custom fd action recorded");
     }
 
-    // 13. Performance Benchmarks
+    // 13. Tokenizer Tab Separator Verification
+    {
+        std::vector<std::wstring> tokens1 = ksh_tokenize(L"cmd\targ1 \t arg2");
+        assert_eq(std::to_wstring(tokens1.size()), L"3", L"ksh_tokenize splits on tabs");
+        if (tokens1.size() == 3) {
+            assert_eq(tokens1[0], L"cmd", L"tab token 0");
+            assert_eq(tokens1[1], L"arg1", L"tab token 1");
+            assert_eq(tokens1[2], L"arg2", L"tab token 2");
+        }
+
+        std::vector<std::wstring> tokens2 = ksh_tokenize_preserve_quotes(L"echo\t\"hello world\"\t'foo\tbar'");
+        assert_eq(std::to_wstring(tokens2.size()), L"3", L"ksh_tokenize_preserve_quotes splits on tabs outside quotes");
+        if (tokens2.size() == 3) {
+            assert_eq(tokens2[1], L"\"hello world\"", L"preserve quotes with tab separation");
+            assert_eq(tokens2[2], L"'foo\tbar'", L"tab preserved inside quotes");
+        }
+    }
+
+    // 14. Process Substitution Quote Context Verification
+    {
+        std::wstring line1 = L"echo \"<(foo)\"";
+        parse_and_replace_process_substitutions(line1);
+        assert_eq(line1, L"echo \"<(foo)\"", L"process substitution ignored inside double quotes");
+
+        std::wstring line2 = L"echo '<(foo)'";
+        parse_and_replace_process_substitutions(line2);
+        assert_eq(line2, L"echo '<(foo)'", L"process substitution ignored inside single quotes");
+    }
+
+    // 15. Extended Globbing in Parameter Expansion Verification
+    {
+        ksh_env.variables[L"TEST_EXTGLOB"] = L"aaabbbccc";
+        std::wstring exp1 = expand_substitutions_left_to_right(L"${TEST_EXTGLOB#+(a)}");
+        assert_eq(exp1, L"aabbbccc", L"parameter expansion with +(a) shortest match");
+
+        std::wstring exp2 = expand_substitutions_left_to_right(L"${TEST_EXTGLOB##+(a)}");
+        assert_eq(exp2, L"bbbccc", L"parameter expansion with +(a) longest match");
+
+        std::wstring exp3 = expand_substitutions_left_to_right(L"${TEST_EXTGLOB%+(c)}");
+        assert_eq(exp3, L"aaabbbcc", L"parameter expansion with +(c) shortest suffix match");
+
+        std::wstring exp4 = expand_substitutions_left_to_right(L"${TEST_EXTGLOB%%+(c)}");
+        assert_eq(exp4, L"aaabbb", L"parameter expansion with +(c) longest suffix match");
+    }
+
+    // 16. PowerShell Bypass Shell Option & cd - OLDPWD Tracking Verification
+    {
+        assert_true(!is_powershell_bypass_enabled(), L"powershell bypass disabled by default");
+        g_powershell_bypass_enabled = true;
+        assert_true(is_powershell_bypass_enabled(), L"powershell bypass enabled via shell option");
+        g_powershell_bypass_enabled = false;
+
+        // cd - and PWD tracking
+        wchar_t curr[MAX_PATH];
+        if (GetCurrentDirectoryW(MAX_PATH, curr) > 0) {
+            std::wstring orig_cwd = curr;
+            bool should_exit = false;
+            std::wstring capture_buf;
+            g_builtin_capture_output = &capture_buf;
+            execute_command_line(L"cd ..", should_exit);
+            assert_eq(ksh_env.variables[L"OLDPWD"], orig_cwd, L"cd sets OLDPWD");
+            execute_command_line(L"cd -", should_exit);
+            g_builtin_capture_output = nullptr;
+            assert_eq(ksh_env.variables[L"PWD"], orig_cwd, L"cd - restores PWD");
+        }
+    }
+
+    // 17. Performance Benchmarks
     std::wcout << L"\n--- Running Performance Benchmarks ---\n";
     {
         // Benchmark 1: Arithmetic parser throughput
@@ -20060,8 +20252,8 @@ int run_internal_self_tests() {
     {
         // Benchmark 5: In-Process Scoped Subshell throughput
         const int kSubshellIterations = 1000;
-        auto t0 = std::chrono::high_resolution_clock::now();
         bool should_exit = false;
+        auto t0 = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < kSubshellIterations; ++i) {
             execute_command_line(L"(x=1; y=$((x + 1)))", should_exit);
         }
@@ -20107,9 +20299,12 @@ int wmain(int argc, wchar_t* argv[]) {
     bool show_help = false;
     bool show_version = false;
 
+    SetSearchPathMode(BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE | BASE_SEARCH_PATH_PERMANENT);
     SetConsoleCtrlHandler(ksh_console_ctrl_handler, TRUE);
 
     auto finalize_shell_exit = [&](int code) {
+        InterlockedExchange(&g_in_interactive_loop, 0);
+        InterlockedExchange(&g_foreground_process_active, 0);
         run_exit_trap_once(should_exit_shell);
         close_coprocess(true);
         cleanup_all_background_jobs();
@@ -20166,6 +20361,19 @@ int wmain(int argc, wchar_t* argv[]) {
             std::wcerr << L"ksh: script test FAIL (exit " << exit_code << L"): " << startup_options.script_test_path << L"\n";
         }
         return finalize_shell_exit(exit_code);
+    }
+
+    wchar_t initial_cwd[MAX_PATH];
+    if (GetCurrentDirectoryW(MAX_PATH, initial_cwd) > 0) {
+        ksh_env.variables[L"PWD"] = initial_cwd;
+        SetEnvironmentVariableW(L"PWD", initial_cwd);
+    }
+    if (ksh_env.variables.find(L"HOME") == ksh_env.variables.end()) {
+        std::wstring userprofile = get_system_env_var(L"USERPROFILE");
+        if (!userprofile.empty()) {
+            ksh_env.variables[L"HOME"] = userprofile;
+            SetEnvironmentVariableW(L"HOME", userprofile.c_str());
+        }
     }
 
     load_startup_profile(startup_options, should_exit_shell);
@@ -20237,6 +20445,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     std::wstring input_line;
 
+    InterlockedExchange(&g_in_interactive_loop, 1);
     while (true) {
         update_background_jobs(true);
         process_pending_traps(should_exit_shell);
@@ -20260,6 +20469,7 @@ int wmain(int argc, wchar_t* argv[]) {
             break;
         }
     }
+    InterlockedExchange(&g_in_interactive_loop, 0);
 
     return finalize_shell_exit(0);
 }
