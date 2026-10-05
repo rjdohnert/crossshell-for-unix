@@ -241,7 +241,7 @@ The `PROMPT` and `RPROMPT` variables support zsh-style tokens:
 
 ## Architecture
 
-- The implementation intentionally remains one self-contained C++17 translation unit in `src/zsh.cpp` for direct compilation on air-gapped Windows servers.
+- The implementation intentionally remains one self-contained C++17 translation unit in `src/zsh/zsh.cpp` for direct compilation on air-gapped Windows servers.
 - It has no third-party runtime or build dependencies. Internal sections and helpers provide maintainability without requiring generated sources or source-file splitting.
 
 ## Exit Status
