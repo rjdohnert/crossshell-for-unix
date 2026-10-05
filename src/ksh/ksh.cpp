@@ -1,4 +1,4 @@
-/*
+﻿/*
  * BSD 3-Clause License
  *
  * Copyright (c) 2026, Roberto J Dohnert
@@ -7,48 +7,52 @@
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
- * Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- * Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- * Neither the name of the project nor the names of its contributors may be
- * used to endorse or promote products derived from this software without
- * specific prior written permission.
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
+/******************************************************************************
+** This file is an amalgamation of all CrossShell KSH modular source files.
+** It was generated automatically by amalgamate.ps1.
+**
+** SQLite-Style Amalgamation Design:
+** - Primary development occurs modularly in src/ksh/include/ and src/ksh/src/
+** - Single-file drop-in compilation is provided by this amalgamated file
+** - Zero third-party runtime dependencies; standard C++17 and Win32 only
+******************************************************************************/
+
+#ifndef KSH_AMALGAMATION
+#define KSH_AMALGAMATION 1
+#endif
+
 /*
- * CrossShellKSH - Standardized Section Index
- * ==========================================
- * 01. Platform Includes, Types, and Core Data Structures
- * 02. Runtime Globals and Environment State
- * 03. Shared Helpers and Utility Routines
- * 04. Trap, Signal, and Interrupt Handling
- * 05. Function Scope, Snapshots, and Restore
- * 06. File Descriptor, Redirection, and Co-process Handles
- * 07. History, Variable Hooks, and Session State
- * 08. Parser, Lexical Validation, Tokenizer, and Expansion Engine
- * 09. Pipelines, Co-process Launch, Process Wiring, and Job Control
- * 10. Built-in Commands, Co-process I/O, and Dispatch
- * 11. Script Execution and Evaluation Flow
- * 12. Startup, CLI Parsing, and Main Entry Point
- * 13. Built-in Self-Tests and Verification
- *
- * Section Header Convention:
- *   // SECTION NN: <area summary>
- *   // SECTION NNX: <sub-area summary>
- */
+*******************************************************************************
+** SECTION I: HEADER DECLARATIONS AND TYPE DEFINITIONS
+*******************************************************************************
+*/
+/******************************************************************************
+** Begin file ksh_common.h
+******************************************************************************/
+
 
 #include <iostream>
 #include <string>
@@ -74,6 +78,7 @@
 #include <regex>
 #include <chrono>
 #include <ctime>
+#include <memory>
 #include <windows.h>
 #include <sddl.h>
 #include <winternl.h>
@@ -84,7 +89,49 @@
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "User32.lib")
 
-using namespace std;
+// Hardened Resource Security & Depth Limits
+constexpr size_t kDefaultHistoryLimit = 1000;
+constexpr size_t kMaxCommandSubstitutionOutputBytes = 8 * 1024 * 1024;
+constexpr size_t kMaxHereDocContentBytes = 8 * 1024 * 1024;
+constexpr int kMaxExpansionNestingDepth = 64;
+constexpr int kMaxEvalNestingDepth = 64;
+constexpr int kMaxSubstitutionParseDepth = 128;
+constexpr size_t kMaxRegexPatternLength = 512;
+constexpr size_t kMaxRegexInputLength = 8192;
+constexpr unsigned long long kMaxPatternMatchSteps = 200000;
+constexpr int kMaxFunctionCallDepth = 200;
+constexpr size_t kMaxScriptFileSizeBytes = 64 * 1024 * 1024;  // 64 MiB
+constexpr size_t kMaxFunctionHeaderLineLength = 1024;
+constexpr int kMaxArithmeticParseDepth = 200;
+constexpr DWORD kDefaultProcessSubstitutionConnectTimeoutMs = 120000;
+constexpr DWORD kMinProcessSubstitutionConnectTimeoutMs = 1000;
+constexpr DWORD kMaxProcessSubstitutionConnectTimeoutMs = 600000;
+constexpr size_t kMaxArrayIndex = 1000000;       // prevent OOM via arr[huge]=val
+constexpr size_t kMaxShellVariables = 10000;     // per-session variable table cap
+constexpr size_t kMaxShellFunctions = 1000;      // per-session function table cap
+constexpr size_t kMaxShellAliases = 1000;        // per-session alias table cap
+constexpr size_t kMaxTrapHandlers = 64;          // per-session trap-handler table cap
+constexpr size_t kMaxHistoryLineBytes = 16384;   // 16 KiB per history line
+constexpr size_t kMaxHistoryLoadEntries = 10000;  // cap history file load size
+
+constexpr int kMinCustomFd = 3;
+constexpr int kMaxCustomFd = 9;
+constexpr size_t kCustomFdTableSize = 10;
+
+const wchar_t k_array_at_quoted_separator = 0x1F;
+const wchar_t* const kGetoptsCursorVar = L"__ksh_GETOPTS_POS";
+const wchar_t* const kGetoptsOptindMirrorVar = L"__ksh_GETOPTS_OPTIND";
+
+
+/******************************************************************************
+** End of ksh_common.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_types.h
+******************************************************************************/
+
+
 
 struct RegistryValueMetadata {
     DWORD type = REG_NONE;
@@ -232,9 +279,791 @@ struct FunctionScopeContext {
     int return_status = 0;
 };
 
-enum class CommandResolutionKind;
+enum class CommandResolutionKind {
+    None,
+    Alias,
+    Function,
+    Builtin,
+    External,
+    Missing
+};
 
-// Runtime state section: shell globals, history, traps, and job tracking.
+enum class ScriptInterpreterResolution {
+    NotScript,
+    Resolved,
+    Failed
+};
+
+struct CommandHashEntry {
+    std::wstring path;
+    int hits = 0;
+};
+
+struct SubshellPathPerfCounters {
+    unsigned long long command_subst_fast_count = 0;
+    unsigned long long command_subst_fast_ms = 0;
+    unsigned long long command_subst_snapshot_count = 0;
+    unsigned long long command_subst_snapshot_ms = 0;
+    unsigned long long command_subst_direct_count = 0;
+    unsigned long long command_subst_direct_ms = 0;
+    unsigned long long parenthesized_fast_count = 0;
+    unsigned long long parenthesized_fast_ms = 0;
+    unsigned long long parenthesized_snapshot_count = 0;
+    unsigned long long parenthesized_snapshot_ms = 0;
+    unsigned long long parenthesized_direct_count = 0;
+    unsigned long long parenthesized_direct_ms = 0;
+};
+
+struct CompletionCandidate {
+    std::wstring value;
+    int rank = 0;
+};
+
+struct CompletionQuery {
+    std::wstring normalized_prefix;
+    bool quoted = false;
+    wchar_t quote_char = L'\0';
+    bool path_completion = false;
+    std::wstring path_directory;
+};
+
+struct CompletionCache {
+    std::wstring cwd;
+    std::wstring path_value;
+    ULONGLONG cached_at_ms = 0;
+    std::vector<CompletionCandidate> candidates;
+};
+
+constexpr ULONGLONG kCompletionCacheTtlMs = 1000;
+
+struct InProcessPipelineStage {
+    std::wstring command;
+    HANDLE input = INVALID_HANDLE_VALUE;
+    HANDLE output = INVALID_HANDLE_VALUE;
+    HANDLE error = INVALID_HANDLE_VALUE;
+    KshEnvironment environment;
+    std::map<std::wstring, CustomTypeDefinition> custom_types;
+    std::vector<ScriptContext> script_context_stack;
+    std::map<std::wstring, ShellFunctionDefinition> shell_functions;
+    std::vector<FunctionScopeContext> function_scope_stack;
+    std::map<std::wstring, std::wstring> aliases;
+    std::map<std::wstring, std::wstring> trap_handlers;
+};
+
+
+/******************************************************************************
+** End of ksh_types.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_state.h
+******************************************************************************/
+
+
+
+// Runtime state globals
+extern std::map<std::wstring, CustomTypeDefinition> g_main_custom_types;
+extern KshEnvironment g_main_env;
+extern std::vector<ScriptContext> g_main_script_context_stack;
+extern std::map<std::wstring, ShellFunctionDefinition> g_main_shell_functions;
+extern std::vector<FunctionScopeContext> g_main_function_scope_stack;
+extern std::set<HANDLE> g_pipeline_thread_handles;
+extern std::mutex g_pipeline_threads_mutex;
+extern std::map<std::wstring, std::wstring> g_main_aliases;
+
+extern thread_local std::vector<HistoryEntry> g_command_history;
+extern thread_local std::vector<BackgroundJob> g_background_jobs;
+extern thread_local CoProcessState g_coprocess;
+extern thread_local std::vector<std::wstring> g_directory_stack;
+extern thread_local std::map<std::wstring, std::wstring> g_trap_handlers;
+extern thread_local std::map<std::wstring, CommandHashEntry> g_command_hash_table;
+
+extern thread_local KshEnvironment* g_current_env;
+extern thread_local std::map<std::wstring, CustomTypeDefinition>* g_current_custom_types;
+extern thread_local std::vector<ScriptContext>* g_current_script_context_stack;
+extern thread_local std::map<std::wstring, ShellFunctionDefinition>* g_current_shell_functions;
+extern thread_local std::vector<FunctionScopeContext>* g_current_function_scope_stack;
+extern thread_local std::map<std::wstring, std::wstring>* g_current_aliases;
+
+#define ksh_env (*g_current_env)
+#define g_custom_types (*g_current_custom_types)
+#define g_script_context_stack (*g_current_script_context_stack)
+#define g_shell_functions (*g_current_shell_functions)
+#define g_function_scope_stack (*g_current_function_scope_stack)
+#define g_aliases (*g_current_aliases)
+
+extern thread_local bool g_inprocess_pipeline_stage;
+extern thread_local int g_subshell_nesting_depth;
+
+struct ScopedSubshellDepthGuard {
+    ScopedSubshellDepthGuard() {
+        g_subshell_nesting_depth++;
+    }
+    ~ScopedSubshellDepthGuard() {
+        if (g_subshell_nesting_depth > 0) {
+            g_subshell_nesting_depth--;
+        }
+    }
+};
+
+extern thread_local std::array<HANDLE, kCustomFdTableSize> g_custom_fd_table;
+extern thread_local int g_next_job_id;
+extern thread_local std::wstring g_history_file_path;
+extern thread_local std::wstring g_last_pipeline_error_detail;
+extern thread_local bool g_is_interactive_session;
+extern thread_local bool g_powershell_bypass_enabled;
+extern thread_local bool g_expansion_error;
+extern thread_local int g_expansion_nesting_depth;
+extern thread_local int g_eval_nesting_depth;
+extern volatile LONG g_in_interactive_loop;
+extern volatile LONG g_foreground_process_active;
+extern volatile LONG g_pending_int_trap;
+extern volatile LONG g_pending_break_trap;
+extern volatile LONG g_pending_hup_trap;
+extern volatile LONG g_pending_chld_trap;
+extern volatile LONG g_pending_alrm_trap;
+extern volatile LONG g_pending_usr1_trap;
+extern volatile LONG g_pending_usr2_trap;
+extern volatile LONG g_pending_segv_trap;
+extern volatile LONG g_pending_fpe_trap;
+extern volatile LONG g_pending_term_trap;
+extern volatile LONG g_int_trap_active;
+extern volatile LONG g_break_trap_active;
+extern volatile LONG g_hup_trap_active;
+extern volatile LONG g_alrm_trap_active;
+extern volatile LONG g_usr1_trap_active;
+extern volatile LONG g_usr2_trap_active;
+extern volatile LONG g_segv_trap_active;
+extern volatile LONG g_fpe_trap_active;
+extern volatile LONG g_term_trap_active;
+
+extern thread_local bool g_running_trap_handler;
+extern thread_local bool g_xtrace_enabled;
+extern thread_local bool g_errexit_enabled;
+extern thread_local bool g_nounset_enabled;
+extern thread_local bool g_vi_mode_enabled;
+extern thread_local bool g_pipefail_enabled;
+extern thread_local int g_errexit_disabled_depth;
+extern thread_local bool g_exit_trap_executed;
+extern thread_local int g_umask;
+
+extern thread_local SubshellPathPerfCounters g_subshell_path_perf_counters;
+extern thread_local std::set<std::wstring> g_active_get_hooks;
+extern thread_local std::set<std::wstring> g_active_set_hooks;
+extern thread_local std::set<std::wstring> g_active_init_hooks;
+extern thread_local HANDLE g_subshell_stdout;
+extern thread_local HANDLE g_pipeline_stdin;
+extern thread_local HANDLE g_pipeline_stdout;
+extern thread_local HANDLE g_pipeline_stderr;
+extern thread_local std::wstring* g_builtin_capture_output;
+extern thread_local unsigned long long g_child_user_time;
+extern thread_local unsigned long long g_child_kernel_time;
+
+struct ScopedTrapExecutionFlag {
+    explicit ScopedTrapExecutionFlag(bool& flag) : flag_(flag) {
+        flag_ = true;
+    }
+    ~ScopedTrapExecutionFlag() {
+        flag_ = false;
+    }
+private:
+    bool& flag_;
+};
+
+BOOL set_shell_environment_variable(LPCWSTR name, LPCWSTR value);
+DWORD get_shell_environment_variable(LPCWSTR name, LPWSTR buffer, DWORD size);
+
+#ifndef KSH_AMALGAMATION_INLINE_SHIMS
+#define SetEnvironmentVariableW set_shell_environment_variable
+#define GetEnvironmentVariableW get_shell_environment_variable
+#endif
+
+bool get_flag_value(const std::map<std::wstring, bool>& flags, const std::wstring& name);
+void set_flag_value(std::map<std::wstring, bool>& flags, const std::wstring& name, bool value);
+void record_command_substitution_path_perf(bool used_fast_capture, bool used_snapshot_restore, ULONGLONG elapsed_ms);
+void record_parenthesized_subshell_path_perf(bool used_fast_path, bool used_snapshot_restore, ULONGLONG elapsed_ms);
+void log_performance_trace(const std::wstring& phase, ULONGLONG duration_ms, const std::wstring& details = L"");
+bool is_perf_trace_enabled();
+std::wstring get_system_env_var(const std::wstring& name);
+std::wstring get_environment_value(const std::wstring& name);
+
+struct ShellStateSnapshot {
+    KshEnvironment environment;
+    std::map<std::wstring, ShellFunctionDefinition> shell_functions;
+    std::map<std::wstring, std::wstring> aliases;
+    std::map<std::wstring, CustomTypeDefinition> custom_types;
+    std::array<HANDLE, kCustomFdTableSize> custom_fd_table;
+    std::map<std::wstring, std::wstring> trap_handlers;
+    std::wstring saved_dir;
+};
+
+ShellStateSnapshot capture_shell_state_snapshot();
+void restore_shell_state_snapshot_if_present(std::optional<ShellStateSnapshot>& snapshot_opt, const std::wstring& status_default_value);
+
+class ScopedSnapshotRestoreGuard {
+public:
+    ScopedSnapshotRestoreGuard(
+        std::optional<ShellStateSnapshot>& snapshot,
+        const wchar_t* default_status = L"0");
+    ~ScopedSnapshotRestoreGuard();
+    void dismiss();
+
+private:
+    std::optional<ShellStateSnapshot>& snapshot_ref_;
+    std::wstring status_default_;
+    bool dismissed_ = false;
+};
+
+bool is_hardened_mode_enabled();
+bool is_regex_enabled();
+bool is_performance_telemetry_enabled();
+bool pattern_match_case_sensitive();
+bool is_truthy_setting_value(const std::wstring& value);
+bool get_setting_bool(const std::wstring& name, bool default_value);
+
+
+/******************************************************************************
+** End of ksh_state.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_terminal.h
+******************************************************************************/
+
+
+
+void enable_ansi_support();
+void enable_red_error_output();
+bool clear_console_screen();
+bool get_current_directory_path(std::wstring& current_directory);
+std::wstring get_interactive_prompt();
+std::wstring format_prompt_template(const std::wstring& prompt_template);
+bool read_interactive_line(const std::wstring& prompt, std::wstring& out_line);
+void render_input_line(const std::wstring& prompt, const std::wstring& buffer, size_t cursor);
+CompletionQuery analyze_completion_query(const std::wstring& raw_prefix);
+void add_completion_candidate(std::map<std::wstring, CompletionCandidate>& candidates, const std::wstring& candidate, int rank);
+std::vector<std::wstring> collect_completion_candidates(const std::wstring& raw_prefix);
+std::vector<std::wstring> collect_tab_completions(const std::wstring& current_buffer, size_t cursor_pos, size_t& replace_start, size_t& replace_len);
+
+bool IsRunningAsAdmin();
+
+
+/******************************************************************************
+** End of ksh_terminal.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_traps.h
+******************************************************************************/
+
+
+
+class ScopedDebugPrivilege {
+public:
+    ScopedDebugPrivilege() {
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token_handle_)) {
+            return;
+        }
+
+        LUID privilege_luid;
+        if (!LookupPrivilegeValueW(nullptr, L"SeDebugPrivilege", &privilege_luid)) {
+            return;
+        }
+
+        TOKEN_PRIVILEGES requested_state;
+        ZeroMemory(&requested_state, sizeof(requested_state));
+        requested_state.PrivilegeCount = 1;
+        requested_state.Privileges[0].Luid = privilege_luid;
+        requested_state.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+        DWORD previous_state_size = sizeof(previous_state_);
+        const BOOL adjusted = AdjustTokenPrivileges(
+            token_handle_,
+            FALSE,
+            &requested_state,
+            sizeof(previous_state_),
+            &previous_state_,
+            &previous_state_size);
+        const DWORD adjust_error = GetLastError();
+        if (!adjusted || adjust_error == ERROR_NOT_ALL_ASSIGNED) {
+            ZeroMemory(&previous_state_, sizeof(previous_state_));
+            return;
+        }
+
+        has_previous_state_ = true;
+    }
+
+    ~ScopedDebugPrivilege() {
+        if (token_handle_ == nullptr) {
+            return;
+        }
+
+        if (has_previous_state_) {
+            AdjustTokenPrivileges(token_handle_, FALSE, &previous_state_, 0, nullptr, nullptr);
+        }
+
+        CloseHandle(token_handle_);
+    }
+
+private:
+    HANDLE token_handle_ = nullptr;
+    TOKEN_PRIVILEGES previous_state_ = {};
+    bool has_previous_state_ = false;
+};
+
+enum class KillBuiltinSignal {
+    Hup,
+    Int,
+    Quit,
+    Kill,
+    Term
+};
+
+std::wstring normalize_trap_event_name(const std::wstring& raw);
+bool has_trap_handler(const std::wstring& event_name);
+bool parse_kill_builtin_signal(const std::wstring& raw_signal, KillBuiltinSignal& signal);
+std::wstring signal_spec_to_trap_event(const std::wstring& raw_signal);
+bool force_kill_process_by_pid(DWORD pid);
+bool graceful_kill_process_by_pid(DWORD pid);
+bool send_console_event_to_pid(DWORD pid, DWORD control_event);
+bool execute_registered_trap(const std::wstring& event_name, bool& should_exit_shell);
+bool queue_pending_trap_event(const std::wstring& event_name);
+void process_pending_traps(bool& should_exit_shell);
+void run_exit_trap_once(bool& should_exit_shell);
+BOOL WINAPI ksh_console_ctrl_handler(DWORD ctrl_type);
+
+
+/******************************************************************************
+** End of ksh_traps.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_variables.h
+******************************************************************************/
+
+
+
+bool is_executing_function_scope();
+bool is_function_return_requested();
+void request_function_return(int status_code);
+void snapshot_local_variable_if_needed(const std::wstring& name);
+void restore_function_scope_variables(FunctionScopeContext& context);
+void sync_exported_environment_variable(const std::wstring& name);
+
+bool is_valid_shell_identifier(const std::wstring& name);
+bool is_internal_shell_state_variable(const std::wstring& name);
+std::wstring get_variable_value_with_hooks(const std::wstring& name, bool& is_set);
+std::wstring get_environment_value(const std::wstring& name);
+
+std::wstring resolve_variable_name(const std::wstring& name, int depth = 0);
+bool assign_parameter_value(const std::wstring& lhs, const std::wstring& rhs, bool array_hint, bool local_scope, std::wstring& error_message, bool is_nameref = false);
+bool parse_array_reference_expression(const std::wstring& expression, std::wstring& base_name, std::wstring& index_text, bool& has_index);
+bool parse_non_negative_index(const std::wstring& text, size_t& out_index);
+std::vector<std::wstring> get_array_values_vector(const std::wstring& name);
+void assign_scalar_parameter(const std::wstring& name, const std::wstring& value);
+void assign_array_parameter(const std::wstring& name, const std::vector<std::wstring>& values);
+
+bool read_registry_property(const std::wstring& property_path, std::wstring& value, RegistryValueMetadata& metadata);
+bool write_registry_property(const std::wstring& property_path, const std::wstring& value);
+void ensure_registry_namespaces_registered();
+
+bool parse_custom_type_definition(const std::wstring& type_name, const std::wstring& body, CustomTypeDefinition& def);
+void instantiate_custom_type(const std::wstring& type_name, const std::wstring& var_prefix);
+
+
+/******************************************************************************
+** End of ksh_variables.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_io.h
+******************************************************************************/
+
+
+
+bool is_custom_fd_in_range(int fd);
+bool is_valid_handle_value(HANDLE handle);
+std::array<HANDLE, kCustomFdTableSize> make_invalid_custom_fd_table();
+HANDLE get_persistent_custom_fd(int fd);
+bool set_persistent_custom_fd(int fd, HANDLE handle, std::wstring& error_message);
+bool close_persistent_custom_fd(int fd, std::wstring& error_message);
+bool duplicate_persistent_custom_fd(int source_fd, int target_fd, std::wstring& error_message);
+bool apply_persistent_custom_fd_actions(const RedirectionSpec& redir, std::wstring& error_message);
+
+bool try_parse_custom_fd_redirection_token(const std::wstring& token, const std::vector<std::wstring>& tokens, size_t& index, RedirectionSpec& redir, std::wstring& error_message, bool& handled);
+bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redir, std::wstring& error_message);
+bool has_any_redirection(const RedirectionSpec& redir);
+bool setup_redirection_handles(const RedirectionSpec* redir, HANDLE& std_in, HANDLE& std_out, HANDLE& std_err, bool& close_in, bool& close_out, bool& close_err);
+void close_redirection_handles(HANDLE std_in, HANDLE std_out, HANDLE std_err, bool close_in, bool close_out, bool close_err);
+
+std::wstring translate_device_path(const std::wstring& path);
+bool open_redirection_file(const std::wstring& path, DWORD access, DWORD creation, HANDLE& out_handle);
+bool write_text_with_stdout_redirection(const std::wstring& text, const RedirectionSpec& redir);
+
+
+/******************************************************************************
+** End of ksh_io.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_jobs.h
+******************************************************************************/
+
+
+
+void register_child_process_times(HANDLE hProcess);
+bool create_process_with_handle_list(
+    const std::wstring& command_line,
+    const STARTUPINFOW& startup,
+    const std::vector<HANDLE>& handles_to_inherit,
+    DWORD creation_flags,
+    PROCESS_INFORMATION& process_info);
+
+bool launch_process(const std::wstring& command, HANDLE& process_handle, DWORD& pid, const RedirectionSpec* redir = nullptr);
+bool execute_native_or_fallback(const std::wstring& command, const RedirectionSpec* redir = nullptr, DWORD* out_exit_code = nullptr);
+
+void update_background_jobs(bool report_completion);
+void cleanup_all_background_jobs();
+BackgroundJob* find_background_job(int job_id);
+BackgroundJob* find_default_background_job_for_resume_or_foreground();
+bool resolve_job_reference(const std::wstring& raw, int& job_id);
+std::wstring format_background_job_line(const BackgroundJob& job);
+void close_background_job_handles(BackgroundJob& job);
+bool wait_for_background_job(BackgroundJob& job, DWORD& exit_code);
+void remove_background_job(int job_id);
+
+std::vector<std::wstring> split_pipeline_segments(const std::wstring& input);
+DWORD WINAPI run_inprocess_pipeline_stage(LPVOID raw_context);
+bool launch_pipeline_stage_process(
+    const std::wstring& segment,
+    HANDLE segment_stdin,
+    HANDLE segment_stdout,
+    HANDLE segment_stderr,
+    PROCESS_INFORMATION& pi,
+    std::wstring& temp_file_path_out,
+    bool allow_inprocess);
+bool execute_pipeline_segments(
+    const std::vector<std::wstring>& segments,
+    bool run_in_background,
+    DWORD& last_exit_code,
+    HANDLE& background_handle,
+    DWORD& background_pid,
+    std::vector<HANDLE>* background_handles = nullptr,
+    std::vector<DWORD>* background_pids = nullptr,
+    std::vector<std::wstring>* temp_files_out = nullptr);
+
+bool strip_trailing_unquoted_background_marker(const std::wstring& input, std::wstring& stripped_output);
+bool strip_trailing_unquoted_coprocess_marker(const std::wstring& input, std::wstring& stripped_output);
+std::wstring format_win32_error_message(DWORD error_code);
+
+bool execute_builtin_coproc(const std::vector<std::wstring>& tokens);
+bool close_coprocess(bool terminate_process);
+
+bool build_cmd_shell_command_line(const std::wstring& raw_command, std::wstring& cmd_line);
+
+bool is_windows_internal_command(const std::wstring& cmd);
+bool get_system_directory_path(std::wstring& system_directory);
+bool resolve_cmd_exe_path(std::wstring& cmd_path);
+bool resolve_powershell_exe_path(std::wstring& powershell_path);
+bool resolve_bash_exe_path(std::wstring& bash_path);
+bool is_absolute_windows_path(const std::wstring& path);
+std::wstring normalize_cd_path(const std::wstring& input_path);
+bool is_powershell_bypass_enabled();
+ScriptInterpreterResolution build_script_interpreter_command(const std::vector<std::wstring>& tokens, std::wstring& command_line);
+bool is_ksh_script_path(const std::wstring& path);
+bool build_self_script_command(const std::wstring& script_path, const std::vector<std::wstring>& script_args, std::wstring& command_line);
+
+
+/******************************************************************************
+** End of ksh_jobs.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_parser.h
+******************************************************************************/
+
+
+
+std::wstring to_upper_copy(const std::wstring& value);
+std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input);
+bool has_unquoted_shell_metacharacters(const std::wstring& input);
+bool is_valid_shell_identifier(const std::wstring& name);
+bool validate_shell_lexical_state(const std::wstring& input, std::wstring& error_message);
+std::wstring remove_quotes_and_escapes_from_token(const std::wstring& token);
+
+inline bool is_path_separator(wchar_t ch) { return ch == L'/' || ch == L'\\'; }
+bool has_glob_metacharacters(const std::wstring& value);
+bool has_unquoted_glob_metacharacters(const std::wstring& token);
+bool contains_unquoted_wildcards(const std::wstring& token);
+bool match_glob_character_class(const std::wstring& pattern, size_t class_start, wchar_t candidate, size_t& consumed_length, bool case_sensitive);
+bool parse_extended_glob(const std::wstring& pattern, size_t ext_start, size_t& ext_end, std::vector<std::wstring>& sub_patterns);
+bool match_glob_pattern_recursive(
+    const std::wstring& pattern,
+    size_t pattern_index,
+    const std::wstring& candidate,
+    size_t candidate_index,
+    bool case_sensitive,
+    unsigned long long& step_budget);
+bool match_glob_pattern(const std::wstring& pattern, const std::wstring& candidate, bool case_sensitive = false);
+
+std::wstring to_lower_copy(const std::wstring& value);
+std::wstring to_lower_copy(std::wstring_view value);
+bool starts_with_case_insensitive(std::wstring_view value, std::wstring_view prefix);
+bool ends_with_case_insensitive(const std::wstring& value, const std::wstring& suffix);
+std::wstring trim_copy(const std::wstring& value);
+std::wstring trim_copy(std::wstring_view value);
+std::wstring decode_multibyte(const std::string& input, UINT code_page);
+
+bool try_parse_int_strict(const std::wstring& text, int& out_value);
+bool try_parse_positive_int_strict(const std::wstring& text, int& out_value);
+bool parse_positive_int(const std::wstring& text, int& value);
+bool try_parse_unsigned_long_strict(const std::wstring& text, unsigned long& out_value);
+bool try_parse_strict_double(const std::wstring& text, double& out_value);
+
+std::vector<std::wstring> ksh_tokenize(const std::wstring& line);
+std::wstring expand_ansi_c_quoting(const std::wstring& input, size_t& i);
+std::wstring quote_for_single_quoted_shell_literal(const std::wstring& value);
+std::wstring join_tokens_as_command_line(const std::vector<std::wstring>& tokens);
+std::wstring join_tokens_with_spaces(const std::vector<std::wstring>& tokens, size_t start_index = 0);
+std::vector<std::wstring> remove_quotes_and_escapes_from_tokens(const std::vector<std::wstring>& tokens);
+
+
+/******************************************************************************
+** End of ksh_parser.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_expansion.h
+******************************************************************************/
+
+
+
+class ScopedExpansionDepth {
+public:
+    ScopedExpansionDepth() : active_(false) {
+        if (g_expansion_nesting_depth >= kMaxExpansionNestingDepth) {
+            return;
+        }
+        g_expansion_nesting_depth++;
+        active_ = true;
+    }
+
+    ~ScopedExpansionDepth() {
+        if (active_ && g_expansion_nesting_depth > 0) {
+            g_expansion_nesting_depth--;
+        }
+    }
+
+    bool active() const {
+        return active_;
+    }
+
+private:
+    bool active_;
+};
+
+double evaluate_math_function(const std::wstring& function_name, const std::vector<double>& args);
+std::wstring evaluate_arithmetic(const std::wstring& expr);
+double evaluate_arithmetic_double(const std::wstring& expr);
+std::wstring trim_trailing_line_endings(const std::wstring& value);
+
+bool parse_command_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index);
+bool parse_arithmetic_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index);
+std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_index, size_t& next_index, bool in_double_quotes);
+std::wstring expand_substitutions_left_to_right(const std::wstring& input);
+std::wstring evaluate_command_substitutions(const std::wstring& input);
+
+bool can_capture_builtin_command_substitution(const std::vector<std::wstring>& tokens);
+bool is_snapshot_safe_external_segment(const std::wstring& segment_text);
+bool command_requires_environment_snapshot(const std::wstring& command);
+std::wstring execute_command_substitution(const std::wstring& command, bool use_capture_sink);
+
+std::wstring join_fields_with_internal_separator(const std::vector<std::wstring>& fields);
+std::wstring effective_ifs_value();
+std::vector<std::wstring> split_fields_by_ifs(const std::wstring& input);
+std::wstring remove_quotes_and_escapes_from_token(const std::wstring& token);
+std::vector<std::wstring> remove_quotes_and_escapes_from_tokens(const std::vector<std::wstring>& tokens);
+std::wstring ksh_expand(const std::wstring& input);
+std::wstring escape_for_double_quotes(const std::wstring& str);
+
+std::wstring expand_tilde(const std::wstring& input);
+std::vector<std::wstring> expand_tilde_for_tokens(const std::vector<std::wstring>& tokens);
+std::wstring join_path_for_glob(const std::wstring& base, const std::wstring& name);
+std::wstring normalize_relative_glob_result(const std::wstring& value);
+void expand_glob_token(const std::wstring& pattern, std::vector<std::wstring>& matches);
+std::vector<std::wstring> expand_globs_for_tokens(const std::vector<std::wstring>& tokens, const std::vector<std::wstring>& preserved_tokens);
+
+std::wstring run_command_and_capture_stdout(const std::wstring& command, DWORD& exit_code);
+
+/******************************************************************************
+** End of ksh_expansion.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_builtins.h
+******************************************************************************/
+
+
+
+CommandResolutionKind resolve_command_kind(const std::wstring& name, std::wstring& detail);
+std::wstring command_kind_description(const std::wstring& name, bool verbose = false, bool ksh_style = false);
+bool resolve_external_command_path(const std::wstring& command_name, std::wstring& resolved_path);
+const std::vector<std::wstring>& builtin_commands();
+std::wstring get_command_name(const std::wstring& full_command);
+bool is_ksh_builtin_command(const std::wstring& cmd);
+bool is_valid_builtin_name(const std::wstring& name);
+bool is_alias_defined(const std::wstring& name);
+bool initialize_default_shell_aliases();
+
+void print_help_text();
+void write_full_help_text(const std::function<bool(const std::wstring&)>& write_output);
+bool write_help_topic(const std::wstring& raw_topic, const std::function<bool(const std::wstring&)>& write_output);
+bool execute_builtin_help(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output);
+
+bool extract_ksh_conditional_block(const std::wstring& expanded_input, std::wstring& condition, std::wstring& error_message);
+bool tokenize_ksh_conditional(const std::wstring& condition, std::vector<std::wstring>& tokens, std::wstring& error_message);
+bool evaluate_test_condition_expression(const std::vector<std::wstring>& tokens, bool& result, std::wstring& error_message);
+bool evaluate_ksh_conditional(const std::wstring& condition_str, bool& value, std::wstring& error_message);
+
+bool format_printf_time_argument(const std::wstring& arg_value, std::wstring& formatted_time);
+bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstring& output_str, std::wstring& error_msg);
+
+std::wstring decode_raw_bytes(const std::string& bytes);
+bool execute_builtin_read(const std::vector<std::wstring>& tokens);
+bool execute_builtin_getconf(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output);
+bool execute_builtin_pathchk(const std::vector<std::wstring>& tokens);
+
+
+/******************************************************************************
+** End of ksh_builtins.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_executor.h
+******************************************************************************/
+
+
+
+bool execute_command_line(const std::wstring& input_line, bool& should_exit_shell, bool bypass_aliases = false, bool bypass_function_lookup = false);
+bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit_shell, bool bypass_aliases = false, bool bypass_function_lookup = false);
+bool execute_script_file(const std::wstring& script_path, const std::vector<std::wstring>& script_args, bool& should_exit_shell);
+bool execute_defined_function(const std::wstring& function_name, const std::vector<std::wstring>& function_args, bool& should_exit_shell);
+
+bool is_script_empty_or_comment_line(const std::wstring& trimmed);
+bool starts_with_if_control_keyword(const std::wstring& trimmed);
+bool starts_with_elif_control_keyword(const std::wstring& trimmed);
+bool starts_with_while_control_keyword(const std::wstring& trimmed);
+bool starts_with_until_control_keyword(const std::wstring& trimmed);
+bool starts_with_for_control_keyword(const std::wstring& trimmed);
+bool starts_with_case_control_keyword(const std::wstring& trimmed);
+bool starts_with_select_control_keyword(const std::wstring& trimmed);
+bool starts_with_loop_control_keyword(const std::wstring& trimmed);
+
+int count_unquoted_brace_delta(const std::wstring& line);
+bool parse_function_header(const std::wstring& trimmed_line, std::wstring& function_name, bool& has_open_brace);
+bool capture_function_definition(const std::vector<std::wstring>& lines, size_t& line_index, size_t end_index, std::wstring& error_message, size_t& error_line_index);
+
+void parse_and_replace_process_substitutions(std::wstring& line);
+std::wstring make_process_substitution_pipe_name(LONG id);
+
+const std::vector<std::wstring>& current_script_args();
+std::wstring current_script_name();
+std::wstring join_script_args(const std::vector<std::wstring>& args);
+std::wstring quote_command_argument(const std::wstring& arg);
+
+std::wstring decode_script_text(const std::vector<char>& bytes);
+std::vector<std::wstring> split_script_lines(const std::wstring& text);
+std::vector<std::wstring> split_top_level_script_commands(const std::wstring& line);
+std::vector<std::wstring> prepare_script_lines(const std::wstring& text);
+
+class ScopedEvalDepth {
+public:
+    ScopedEvalDepth() : active_(false) {
+        if (g_eval_nesting_depth >= kMaxEvalNestingDepth) {
+            return;
+        }
+        g_eval_nesting_depth++;
+        active_ = true;
+    }
+
+    ~ScopedEvalDepth() {
+        if (active_ && g_eval_nesting_depth > 0) {
+            g_eval_nesting_depth--;
+        }
+    }
+
+    bool active() const {
+        return active_;
+    }
+
+private:
+    bool active_;
+};
+
+
+/******************************************************************************
+** End of ksh_executor.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_startup.h
+******************************************************************************/
+
+
+
+bool parse_startup_arguments(int argc, wchar_t* argv[], StartupOptions& options, int& first_positional_index, bool& show_help, bool& show_version);
+bool file_exists_regular(const std::wstring& path);
+bool ensure_default_home_kshrc_exists(const std::wstring& profile_path);
+std::wstring get_default_startup_profile_path();
+bool load_startup_profile(const StartupOptions& options, bool& should_exit_shell);
+
+std::wstring resolve_history_file_path();
+bool resolve_history_recall(const std::wstring& input, std::wstring& resolved);
+void load_command_history_from_file();
+bool append_history_entry(const std::wstring& command_line);
+void append_history_entry_to_file(const std::wstring& command_line);
+void append_command_to_history_file(const std::wstring& command);
+void rewrite_history_file();
+void enforce_history_size_limit(bool rewrite_file);
+bool history_timestamps_enabled();
+bool history_dedupe_enabled();
+size_t history_size_limit();
+std::wstring format_history_timestamp();
+
+std::wstring get_windows_release_text();
+void print_version_text(const std::function<bool(const std::wstring&)>& write_output);
+void print_startup_system_info();
+std::wstring format_bytes_iec(ULONGLONG bytes);
+
+
+/******************************************************************************
+** End of ksh_startup.h
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_selftest.h
+******************************************************************************/
+
+
+int run_internal_self_tests();
+
+
+/******************************************************************************
+** End of ksh_selftest.h
+******************************************************************************/
+
+
+/*
+*******************************************************************************
+** SECTION II: IMPLEMENTATION UNITS
+*******************************************************************************
+*/
+/******************************************************************************
+** Begin file ksh_state.cpp
+******************************************************************************/
+
+
+// Runtime state definitions
 std::map<std::wstring, CustomTypeDefinition> g_main_custom_types;
 KshEnvironment g_main_env;
 std::vector<ScriptContext> g_main_script_context_stack;
@@ -242,46 +1071,24 @@ std::map<std::wstring, ShellFunctionDefinition> g_main_shell_functions;
 std::vector<FunctionScopeContext> g_main_function_scope_stack;
 std::set<HANDLE> g_pipeline_thread_handles;
 std::mutex g_pipeline_threads_mutex;
+std::map<std::wstring, std::wstring> g_main_aliases;
+
 thread_local std::vector<HistoryEntry> g_command_history;
 thread_local std::vector<BackgroundJob> g_background_jobs;
 thread_local CoProcessState g_coprocess;
 thread_local std::vector<std::wstring> g_directory_stack;
-std::map<std::wstring, std::wstring> g_main_aliases;
 thread_local std::map<std::wstring, std::wstring> g_trap_handlers;
-struct CommandHashEntry {
-    std::wstring path;
-    int hits = 0;
-};
 thread_local std::map<std::wstring, CommandHashEntry> g_command_hash_table;
 
-void enable_ansi_support() {
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut != INVALID_HANDLE_VALUE && hOut != nullptr) {
-        DWORD mode = 0;
-        if (GetConsoleMode(hOut, &mode)) {
-            SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-        }
-    }
-    HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
-    if (hErr != INVALID_HANDLE_VALUE && hErr != nullptr) {
-        DWORD mode = 0;
-        if (GetConsoleMode(hErr, &mode)) {
-            SetConsoleMode(hErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-        }
-    }
-}
+thread_local KshEnvironment* g_current_env = &g_main_env;
+thread_local std::map<std::wstring, CustomTypeDefinition>* g_current_custom_types = &g_main_custom_types;
+thread_local std::vector<ScriptContext>* g_current_script_context_stack = &g_main_script_context_stack;
+thread_local std::map<std::wstring, ShellFunctionDefinition>* g_current_shell_functions = &g_main_shell_functions;
+thread_local std::vector<FunctionScopeContext>* g_current_function_scope_stack = &g_main_function_scope_stack;
+thread_local std::map<std::wstring, std::wstring>* g_current_aliases = &g_main_aliases;
 
-constexpr int kMinCustomFd = 3;
-constexpr int kMaxCustomFd = 9;
-constexpr size_t kCustomFdTableSize = 10;
-
-std::array<HANDLE, kCustomFdTableSize> make_invalid_custom_fd_table() {
-    std::array<HANDLE, kCustomFdTableSize> table = {};
-    table.fill(INVALID_HANDLE_VALUE);
-    return table;
-}
+thread_local bool g_inprocess_pipeline_stage = false;
+thread_local int g_subshell_nesting_depth = 0;
 
 thread_local std::array<HANDLE, kCustomFdTableSize> g_custom_fd_table = make_invalid_custom_fd_table();
 thread_local int g_next_job_id = 1;
@@ -314,41 +1121,39 @@ volatile LONG g_segv_trap_active = 0;
 volatile LONG g_fpe_trap_active = 0;
 volatile LONG g_term_trap_active = 0;
 
-thread_local KshEnvironment* g_current_env = &g_main_env;
-thread_local std::map<std::wstring, CustomTypeDefinition>* g_current_custom_types = &g_main_custom_types;
-thread_local std::vector<ScriptContext>* g_current_script_context_stack = &g_main_script_context_stack;
-thread_local std::map<std::wstring, ShellFunctionDefinition>* g_current_shell_functions = &g_main_shell_functions;
-thread_local std::vector<FunctionScopeContext>* g_current_function_scope_stack = &g_main_function_scope_stack;
-thread_local std::map<std::wstring, std::wstring>* g_current_aliases = &g_main_aliases;
+thread_local bool g_running_trap_handler = false;
+thread_local bool g_xtrace_enabled = false;
+thread_local bool g_errexit_enabled = false;
+thread_local bool g_nounset_enabled = false;
+thread_local bool g_vi_mode_enabled = false;
+thread_local bool g_pipefail_enabled = false;
+thread_local int g_errexit_disabled_depth = 0;
+thread_local bool g_exit_trap_executed = false;
+thread_local int g_umask = 022;
 
-#define ksh_env (*g_current_env)
-#define g_custom_types (*g_current_custom_types)
-#define g_script_context_stack (*g_current_script_context_stack)
-#define g_shell_functions (*g_current_shell_functions)
-#define g_function_scope_stack (*g_current_function_scope_stack)
-#define g_aliases (*g_current_aliases)
+thread_local SubshellPathPerfCounters g_subshell_path_perf_counters;
+thread_local std::set<std::wstring> g_active_get_hooks;
+thread_local std::set<std::wstring> g_active_set_hooks;
+thread_local std::set<std::wstring> g_active_init_hooks;
+thread_local HANDLE g_subshell_stdout = INVALID_HANDLE_VALUE;
+thread_local HANDLE g_pipeline_stdin = INVALID_HANDLE_VALUE;
+thread_local HANDLE g_pipeline_stdout = INVALID_HANDLE_VALUE;
+thread_local HANDLE g_pipeline_stderr = INVALID_HANDLE_VALUE;
+thread_local std::wstring* g_builtin_capture_output = nullptr;
+thread_local unsigned long long g_child_user_time = 0;
+thread_local unsigned long long g_child_kernel_time = 0;
 
-thread_local bool g_inprocess_pipeline_stage = false;
-thread_local int g_subshell_nesting_depth = 0;
+#undef SetEnvironmentVariableW
+#undef GetEnvironmentVariableW
 
-struct ScopedSubshellDepthGuard {
-    ScopedSubshellDepthGuard() {
-        g_subshell_nesting_depth++;
-    }
-    ~ScopedSubshellDepthGuard() {
-        if (g_subshell_nesting_depth > 0) {
-            g_subshell_nesting_depth--;
-        }
-    }
-};
-
-inline BOOL set_shell_environment_variable(LPCWSTR name, LPCWSTR value) {
+BOOL set_shell_environment_variable(LPCWSTR name, LPCWSTR value) {
     if (g_inprocess_pipeline_stage || g_subshell_nesting_depth > 0) {
         return TRUE;
     }
     return ::SetEnvironmentVariableW(name, value);
 }
-inline DWORD get_shell_environment_variable(LPCWSTR name, LPWSTR buffer, DWORD size) {
+
+DWORD get_shell_environment_variable(LPCWSTR name, LPWSTR buffer, DWORD size) {
     if (!g_inprocess_pipeline_stage && g_subshell_nesting_depth == 0) {
         return ::GetEnvironmentVariableW(name, buffer, size);
     }
@@ -368,107 +1173,10 @@ inline DWORD get_shell_environment_variable(LPCWSTR name, LPWSTR buffer, DWORD s
     buffer[value.size()] = L'\0';
     return static_cast<DWORD>(value.size());
 }
+
 #define SetEnvironmentVariableW set_shell_environment_variable
 #define GetEnvironmentVariableW get_shell_environment_variable
 
-thread_local bool g_running_trap_handler = false;
-thread_local bool g_xtrace_enabled = false;
-thread_local bool g_errexit_enabled = false;
-thread_local bool g_nounset_enabled = false;
-thread_local bool g_vi_mode_enabled = false;
-thread_local bool g_pipefail_enabled = false;
-thread_local int g_errexit_disabled_depth = 0;
-thread_local bool g_exit_trap_executed = false;
-const wchar_t k_array_at_quoted_separator = 0x1F;
-constexpr size_t kDefaultHistoryLimit = 1000;
-constexpr size_t kMaxCommandSubstitutionOutputBytes = 8 * 1024 * 1024;
-constexpr size_t kMaxHereDocContentBytes = 8 * 1024 * 1024;
-constexpr int kMaxExpansionNestingDepth = 64;
-constexpr int kMaxEvalNestingDepth = 64;
-constexpr int kMaxSubstitutionParseDepth = 128;
-constexpr size_t kMaxRegexPatternLength = 512;
-constexpr size_t kMaxRegexInputLength = 8192;
-constexpr unsigned long long kMaxPatternMatchSteps = 200000;
-constexpr int kMaxFunctionCallDepth = 200;
-constexpr size_t kMaxScriptFileSizeBytes = 64 * 1024 * 1024;  // 64 MiB
-constexpr size_t kMaxFunctionHeaderLineLength = 1024;
-constexpr int kMaxArithmeticParseDepth = 200;
-constexpr DWORD kDefaultProcessSubstitutionConnectTimeoutMs = 120000;
-constexpr DWORD kMinProcessSubstitutionConnectTimeoutMs = 1000;
-constexpr DWORD kMaxProcessSubstitutionConnectTimeoutMs = 600000;
-constexpr size_t kMaxArrayIndex = 1000000;       // prevent OOM via arr[huge]=val
-constexpr size_t kMaxShellVariables = 10000;     // per-session variable table cap
-constexpr size_t kMaxShellFunctions = 1000;      // per-session function table cap
-constexpr size_t kMaxShellAliases = 1000;        // per-session alias table cap
-constexpr size_t kMaxTrapHandlers = 64;          // per-session trap-handler table cap
-constexpr size_t kMaxHistoryLineBytes = 16384;   // 16 KiB per history line
-constexpr size_t kMaxHistoryLoadEntries = 10000;  // cap history file load size
-const wchar_t* kGetoptsCursorVar = L"__ksh_GETOPTS_POS";
-const wchar_t* kGetoptsOptindMirrorVar = L"__ksh_GETOPTS_OPTIND";
-
-struct StartupOptions;
-void register_child_process_times(HANDLE hProcess);
-
-std::wstring evaluate_arithmetic(const std::wstring& expr);
-std::wstring evaluate_command_substitutions(const std::wstring& input);
-std::wstring expand_substitutions_left_to_right(const std::wstring& input);
-bool execute_script_file(const std::wstring& script_path, const std::vector<std::wstring>& script_args, bool& should_exit_shell);
-bool execute_command_line(const std::wstring& input_line, bool& should_exit_shell, bool bypass_aliases = false, bool bypass_function_lookup = false);
-std::wstring trim_copy(const std::wstring& value);
-std::wstring trim_copy(std::wstring_view value);
-std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input);
-std::wstring get_interactive_prompt();
-std::wstring format_prompt_template(const std::wstring& prompt_template);
-std::wstring resolve_history_file_path();
-bool file_exists_regular(const std::wstring& path);
-bool ensure_default_home_kshrc_exists(const std::wstring& profile_path);
-bool resolve_cmd_exe_path(std::wstring& cmd_path);
-bool resolve_powershell_exe_path(std::wstring& powershell_path);
-bool resolve_bash_exe_path(std::wstring& bash_path);
-bool load_startup_profile(const StartupOptions& options, bool& should_exit_shell);
-bool parse_startup_arguments(int argc, wchar_t* argv[], StartupOptions& options, int& first_positional_index, bool& show_help, bool& show_version);
-std::vector<std::wstring> get_array_values_vector(const std::wstring& name);
-std::wstring resolve_variable_name(const std::wstring& name, int depth = 0);
-bool assign_parameter_value(const std::wstring& lhs, const std::wstring& rhs, bool array_hint, bool local_scope, std::wstring& error_message, bool is_nameref = false);
-bool parse_array_reference_expression(const std::wstring& expression, std::wstring& base_name, std::wstring& index_text, bool& has_index);
-bool parse_non_negative_index(const std::wstring& text, size_t& out_index);
-bool match_glob_pattern_recursive(
-    const std::wstring& pattern,
-    size_t pattern_index,
-    const std::wstring& candidate,
-    size_t candidate_index,
-    bool case_sensitive,
-    unsigned long long& step_budget);
-// SECTION 03: Shared helpers, command expansion, and shell state.
-bool get_flag_value(const std::map<std::wstring, bool>& flags, const std::wstring& name);
-bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redir, std::wstring& error_message);
-std::vector<std::wstring> split_pipeline_segments(const std::wstring& input);
-bool is_custom_fd_in_range(int fd);
-bool is_valid_handle_value(HANDLE handle);
-HANDLE get_persistent_custom_fd(int fd);
-bool has_unquoted_shell_metacharacters(const std::wstring& input);
-bool is_valid_shell_identifier(const std::wstring& name);
-std::wstring to_lower_copy(const std::wstring& value);
-std::wstring to_lower_copy(std::wstring_view value);
-bool starts_with_case_insensitive(std::wstring_view value, std::wstring_view prefix);
-std::wstring get_status_value(const std::wstring& default_value);
-bool execute_defined_function(const std::wstring& function_name, const std::vector<std::wstring>& function_args, bool& should_exit_shell);
-std::wstring get_command_name(const std::wstring& full_command);
-bool execute_builtin_coproc(const std::vector<std::wstring>& tokens);
-bool close_coprocess(bool terminate_process);
-bool validate_shell_lexical_state(const std::wstring& input, std::wstring& error_message);
-bool starts_with_for_control_keyword(const std::wstring& trimmed);
-
-// SECTION 04: Trap normalization, handlers, and pending dispatch.
-std::wstring normalize_trap_event_name(const std::wstring& raw);
-bool has_trap_handler(const std::wstring& event_name);
-bool execute_registered_trap(const std::wstring& event_name, bool& should_exit_shell);
-void process_pending_traps(bool& should_exit_shell);
-void run_exit_trap_once(bool& should_exit_shell);
-BOOL WINAPI ksh_console_ctrl_handler(DWORD ctrl_type);
-CommandResolutionKind resolve_command_kind(const std::wstring& name, std::wstring& detail);
-
-// SECTION 05A: Function helper implementations shared by runtime and builtins.
 bool get_flag_value(const std::map<std::wstring, bool>& flags, const std::wstring& name) {
     std::map<std::wstring, bool>::const_iterator it = flags.find(name);
     return it != flags.end() && it->second;
@@ -477,6 +1185,533 @@ bool get_flag_value(const std::map<std::wstring, bool>& flags, const std::wstrin
 void set_flag_value(std::map<std::wstring, bool>& flags, const std::wstring& name, bool value) {
     flags[name] = value;
 }
+
+void record_command_substitution_path_perf(bool used_fast_capture, bool used_snapshot_restore, ULONGLONG elapsed_ms) {
+    if (used_fast_capture) {
+        g_subshell_path_perf_counters.command_subst_fast_count++;
+        g_subshell_path_perf_counters.command_subst_fast_ms += static_cast<unsigned long long>(elapsed_ms);
+        return;
+    }
+
+    if (used_snapshot_restore) {
+        g_subshell_path_perf_counters.command_subst_snapshot_count++;
+        g_subshell_path_perf_counters.command_subst_snapshot_ms += static_cast<unsigned long long>(elapsed_ms);
+        return;
+    }
+
+    g_subshell_path_perf_counters.command_subst_direct_count++;
+    g_subshell_path_perf_counters.command_subst_direct_ms += static_cast<unsigned long long>(elapsed_ms);
+}
+
+void record_parenthesized_subshell_path_perf(bool used_fast_path, bool used_snapshot_restore, ULONGLONG elapsed_ms) {
+    if (used_fast_path) {
+        g_subshell_path_perf_counters.parenthesized_fast_count++;
+        g_subshell_path_perf_counters.parenthesized_fast_ms += static_cast<unsigned long long>(elapsed_ms);
+        return;
+    }
+
+    if (used_snapshot_restore) {
+        g_subshell_path_perf_counters.parenthesized_snapshot_count++;
+        g_subshell_path_perf_counters.parenthesized_snapshot_ms += static_cast<unsigned long long>(elapsed_ms);
+        return;
+    }
+
+    g_subshell_path_perf_counters.parenthesized_direct_count++;
+    g_subshell_path_perf_counters.parenthesized_direct_ms += static_cast<unsigned long long>(elapsed_ms);
+}
+
+bool is_perf_trace_enabled() {
+    auto it = ksh_env.variables.find(L"KSH_PERF_TRACE");
+    if (it != ksh_env.variables.end() && it->second == L"1") {
+        return true;
+    }
+    wchar_t buf[8] = {};
+    DWORD n = GetEnvironmentVariableW(L"KSH_PERF_TRACE", buf, _countof(buf));
+    return (n > 0 && std::wstring(buf, n) == L"1");
+}
+
+void log_performance_trace(const std::wstring& phase, ULONGLONG duration_ms, const std::wstring& details) {
+    if (!is_perf_trace_enabled()) {
+        return;
+    }
+    if (details.empty()) {
+        std::wcerr << L"[perf] " << phase << L": " << duration_ms << L" ms\n";
+    } else {
+        std::wcerr << L"[perf] " << phase << L": " << duration_ms << L" ms (" << details << L")\n";
+    }
+}
+
+std::wstring get_system_env_var(const std::wstring& name) {
+    wchar_t buffer[256];
+    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, _countof(buffer));
+    if (ret > 0 && ret < _countof(buffer)) {
+        return std::wstring(buffer, ret);
+    }
+    if (ret >= _countof(buffer)) {
+        std::vector<wchar_t> dyn(ret + 1);
+        DWORD dyn_ret = GetEnvironmentVariableW(name.c_str(), dyn.data(), static_cast<DWORD>(dyn.size()));
+        if (dyn_ret > 0 && dyn_ret < dyn.size()) {
+            return std::wstring(dyn.data(), dyn_ret);
+        }
+    }
+    return L"";
+}
+
+std::wstring get_status_value(const std::wstring& default_value) {
+    std::map<std::wstring, std::wstring>::const_iterator status_it = ksh_env.variables.find(L"?");
+    if (status_it != ksh_env.variables.end()) {
+        return status_it->second;
+    }
+    return default_value;
+}
+
+bool is_truthy_setting_value(const std::wstring& value) {
+    const std::wstring trimmed = trim_copy(value);
+    std::wstring lowered;
+    lowered.reserve(trimmed.size());
+    for (wchar_t ch : trimmed) {
+        lowered.push_back(static_cast<wchar_t>(std::towlower(ch)));
+    }
+    return lowered == L"1" || lowered == L"true" || lowered == L"yes" || lowered == L"on";
+}
+
+bool get_setting_bool(const std::wstring& name, bool default_value) {
+    std::map<std::wstring, std::wstring>::const_iterator it = ksh_env.variables.find(name);
+    if (it != ksh_env.variables.end()) {
+        return is_truthy_setting_value(it->second);
+    }
+
+    wchar_t buffer[64];
+    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, _countof(buffer));
+    if (ret > 0 && ret < _countof(buffer)) {
+        return is_truthy_setting_value(std::wstring(buffer, ret));
+    }
+
+    return default_value;
+}
+
+bool is_hardened_mode_enabled() {
+    return get_setting_bool(L"ksh_HARDENED_MODE", false);
+}
+
+bool is_regex_enabled() {
+    if (is_hardened_mode_enabled()) {
+        return false;
+    }
+    return get_setting_bool(L"ksh_ENABLE_REGEX", true);
+}
+
+bool is_performance_telemetry_enabled() {
+    return get_setting_bool(L"ksh_PERF_TRACE", false);
+}
+
+bool pattern_match_case_sensitive() {
+    return !get_setting_bool(L"ksh_PATTERN_CASE_INSENSITIVE", false);
+}
+
+ShellStateSnapshot capture_shell_state_snapshot() {
+    ShellStateSnapshot snap;
+    snap.environment = ksh_env;
+    snap.shell_functions = g_shell_functions;
+    snap.aliases = g_aliases;
+    snap.custom_types = g_custom_types;
+    snap.custom_fd_table = g_custom_fd_table;
+    snap.trap_handlers = g_trap_handlers;
+    wchar_t dir_buf[MAX_PATH];
+    if (GetCurrentDirectoryW(MAX_PATH, dir_buf) > 0) {
+        snap.saved_dir = dir_buf;
+    }
+    return snap;
+}
+
+void restore_shell_state_snapshot_if_present(
+    std::optional<ShellStateSnapshot>& snapshot_opt,
+    const std::wstring& status_default_value) {
+    if (!snapshot_opt.has_value()) {
+        return;
+    }
+
+    ShellStateSnapshot& snapshot = *snapshot_opt;
+    std::wstring status = get_status_value(status_default_value);
+    std::swap(ksh_env, snapshot.environment);
+    ksh_env.variables[L"?"] = status;
+    std::swap(g_shell_functions, snapshot.shell_functions);
+    std::swap(g_aliases, snapshot.aliases);
+    std::swap(g_custom_types, snapshot.custom_types);
+    g_trap_handlers = snapshot.trap_handlers;
+
+    for (size_t fd = 0; fd < kCustomFdTableSize; ++fd) {
+        if (g_custom_fd_table[fd] != snapshot.custom_fd_table[fd]) {
+            if (is_valid_handle_value(g_custom_fd_table[fd])) {
+                CloseHandle(g_custom_fd_table[fd]);
+            }
+            g_custom_fd_table[fd] = snapshot.custom_fd_table[fd];
+        }
+    }
+    if (!snapshot.saved_dir.empty()) {
+        wchar_t cur[MAX_PATH];
+        if (GetCurrentDirectoryW(MAX_PATH, cur) > 0) {
+            if (_wcsicmp(cur, snapshot.saved_dir.c_str()) != 0) {
+                SetCurrentDirectoryW(snapshot.saved_dir.c_str());
+            }
+        }
+    }
+    snapshot_opt.reset();
+}
+
+ScopedSnapshotRestoreGuard::ScopedSnapshotRestoreGuard(
+    std::optional<ShellStateSnapshot>& snapshot,
+    const wchar_t* default_status)
+    : snapshot_ref_(snapshot),
+      status_default_(default_status != nullptr ? default_status : L"0") {}
+
+ScopedSnapshotRestoreGuard::~ScopedSnapshotRestoreGuard() {
+    if (!dismissed_) {
+        restore_shell_state_snapshot_if_present(snapshot_ref_, status_default_);
+    }
+}
+
+void ScopedSnapshotRestoreGuard::dismiss() {
+    dismissed_ = true;
+}
+
+
+/******************************************************************************
+** End of ksh_state.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_traps.cpp
+******************************************************************************/
+
+
+std::wstring normalize_trap_event_name(const std::wstring& raw) {
+    std::wstring token = trim_copy(raw);
+    if (token.empty()) {
+        return L"";
+    }
+
+    if (token.size() >= 3) {
+        std::wstring prefix;
+        prefix.reserve(3);
+        prefix.push_back(static_cast<wchar_t>(std::towupper(token[0])));
+        prefix.push_back(static_cast<wchar_t>(std::towupper(token[1])));
+        prefix.push_back(static_cast<wchar_t>(std::towupper(token[2])));
+        if (prefix == L"SIG") {
+            token = token.substr(3);
+        }
+    }
+
+    std::wstring upper;
+    upper.reserve(token.size());
+    for (wchar_t ch : token) {
+        upper.push_back(static_cast<wchar_t>(std::towupper(ch)));
+    }
+
+    if (upper == L"0" || upper == L"EXIT") return L"EXIT";
+    if (upper == L"1" || upper == L"HUP") return L"HUP";
+    if (upper == L"2" || upper == L"INT") return L"INT";
+    if (upper == L"3" || upper == L"BREAK") return L"BREAK";
+    if (upper == L"QUIT") return L"QUIT";
+    if (upper == L"8" || upper == L"FPE") return L"FPE";
+    if (upper == L"10" || upper == L"USR1") return L"USR1";
+    if (upper == L"11" || upper == L"SEGV") return L"SEGV";
+    if (upper == L"12" || upper == L"USR2") return L"USR2";
+    if (upper == L"14" || upper == L"ALRM") return L"ALRM";
+    if (upper == L"15" || upper == L"TERM") return L"TERM";
+    if (upper == L"17" || upper == L"CHLD" || upper == L"CLD") return L"CHLD";
+
+    return L"";
+}
+
+bool has_trap_handler(const std::wstring& event_name) {
+    return g_trap_handlers.find(event_name) != g_trap_handlers.end();
+}
+
+BOOL WINAPI ksh_console_ctrl_handler(DWORD ctrl_type) {
+    switch (ctrl_type) {
+    case CTRL_C_EVENT: {
+        const bool int_active = InterlockedCompareExchange(&g_int_trap_active, 0, 0) != 0;
+        if (int_active) {
+            InterlockedExchange(&g_pending_int_trap, 1);
+            return TRUE;
+        }
+        const bool fg_active = InterlockedCompareExchange(&g_foreground_process_active, 0, 0) != 0;
+        const bool interactive = InterlockedCompareExchange(&g_in_interactive_loop, 0, 0) != 0;
+        if (fg_active || interactive) {
+            InterlockedExchange(&g_pending_int_trap, 1);
+            return TRUE;
+        }
+        return FALSE;
+    }
+    case CTRL_BREAK_EVENT: {
+        const bool break_active = InterlockedCompareExchange(&g_break_trap_active, 0, 0) != 0;
+        if (break_active) {
+            InterlockedExchange(&g_pending_break_trap, 1);
+            return TRUE;
+        }
+        const bool fg_active = InterlockedCompareExchange(&g_foreground_process_active, 0, 0) != 0;
+        const bool interactive = InterlockedCompareExchange(&g_in_interactive_loop, 0, 0) != 0;
+        if (fg_active || interactive) {
+            InterlockedExchange(&g_pending_break_trap, 1);
+            return TRUE;
+        }
+        return FALSE;
+    }
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT: {
+        const bool hup_active = InterlockedCompareExchange(&g_hup_trap_active, 0, 0) != 0;
+        const bool term_active = InterlockedCompareExchange(&g_term_trap_active, 0, 0) != 0;
+        if (!hup_active && !term_active) {
+            return FALSE;
+        }
+        if (hup_active) {
+            InterlockedExchange(&g_pending_hup_trap, 1);
+        }
+        InterlockedExchange(&g_pending_term_trap, 1);
+        return TRUE;
+    }
+    default:
+        return FALSE;
+    }
+}
+
+bool execute_registered_trap(const std::wstring& event_name, bool& should_exit_shell) {
+    std::map<std::wstring, std::wstring>::const_iterator it = g_trap_handlers.find(event_name);
+    if (it == g_trap_handlers.end()) {
+        return true;
+    }
+
+    const std::wstring command = it->second;
+    if (command.empty()) {
+        return true;
+    }
+
+    if (g_running_trap_handler) {
+        return true;
+    }
+
+    ScopedTrapExecutionFlag trap_guard(g_running_trap_handler);
+    bool trap_exit_requested = false;
+    bool ok = execute_command_line(command, trap_exit_requested);
+    if (trap_exit_requested) {
+        should_exit_shell = true;
+    }
+    return ok;
+}
+
+void process_pending_traps(bool& should_exit_shell) {
+    if (InterlockedExchange(&g_pending_int_trap, 0) != 0) {
+        if (!has_trap_handler(L"INT")) {
+            ksh_env.variables[L"?"] = L"130";
+        }
+        execute_registered_trap(L"INT", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_break_trap, 0) != 0) {
+        if (!has_trap_handler(L"BREAK")) {
+            ksh_env.variables[L"?"] = L"131";
+        }
+        execute_registered_trap(L"BREAK", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_hup_trap, 0) != 0) {
+        if (!has_trap_handler(L"HUP")) {
+            ksh_env.variables[L"?"] = L"129";
+            should_exit_shell = true;
+        }
+        execute_registered_trap(L"HUP", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_alrm_trap, 0) != 0) {
+        execute_registered_trap(L"ALRM", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_usr1_trap, 0) != 0) {
+        execute_registered_trap(L"USR1", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_usr2_trap, 0) != 0) {
+        execute_registered_trap(L"USR2", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_segv_trap, 0) != 0) {
+        execute_registered_trap(L"SEGV", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_fpe_trap, 0) != 0) {
+        execute_registered_trap(L"FPE", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_term_trap, 0) != 0) {
+        if (!has_trap_handler(L"TERM")) {
+            ksh_env.variables[L"?"] = L"143";
+            should_exit_shell = true;
+        }
+        execute_registered_trap(L"TERM", should_exit_shell);
+    }
+
+    if (InterlockedExchange(&g_pending_chld_trap, 0) != 0) {
+        execute_registered_trap(L"CHLD", should_exit_shell);
+    }
+}
+
+void run_exit_trap_once(bool& should_exit_shell) {
+    if (g_exit_trap_executed) {
+        return;
+    }
+
+    g_exit_trap_executed = true;
+    execute_registered_trap(L"EXIT", should_exit_shell);
+}
+
+struct KillWindowEnumData {
+    DWORD pid;
+    bool window_found;
+};
+
+static BOOL CALLBACK kill_window_enum_proc(HWND window_handle, LPARAM parameter) {
+    KillWindowEnumData* data = reinterpret_cast<KillWindowEnumData*>(parameter);
+    DWORD window_pid = 0;
+    GetWindowThreadProcessId(window_handle, &window_pid);
+
+    if (window_pid == data->pid && IsWindowVisible(window_handle)) {
+        PostMessageW(window_handle, WM_CLOSE, 0, 0);
+        data->window_found = true;
+    }
+
+    return TRUE;
+}
+
+bool parse_kill_builtin_signal(const std::wstring& raw_signal, KillBuiltinSignal& signal) {
+    std::wstring normalized_signal = normalize_trap_event_name(raw_signal);
+    if (normalized_signal == L"HUP") {
+        signal = KillBuiltinSignal::Hup;
+        return true;
+    }
+    if (normalized_signal == L"INT") {
+        signal = KillBuiltinSignal::Int;
+        return true;
+    }
+    if (normalized_signal == L"BREAK" || normalized_signal == L"QUIT") {
+        signal = KillBuiltinSignal::Quit;
+        return true;
+    }
+    if (normalized_signal == L"TERM") {
+        signal = KillBuiltinSignal::Term;
+        return true;
+    }
+
+    std::wstring upper_signal;
+    upper_signal.reserve(raw_signal.size());
+    for (wchar_t ch : raw_signal) {
+        upper_signal.push_back(static_cast<wchar_t>(std::towupper(ch)));
+    }
+    if (upper_signal.rfind(L"SIG", 0) == 0) {
+        upper_signal = upper_signal.substr(3);
+    }
+
+    if (upper_signal == L"9" || upper_signal == L"KILL") {
+        signal = KillBuiltinSignal::Kill;
+        return true;
+    }
+
+    return false;
+}
+
+std::wstring signal_spec_to_trap_event(const std::wstring& raw_signal) {
+    std::wstring normalized_signal = normalize_trap_event_name(raw_signal);
+    if (normalized_signal == L"QUIT") {
+        return L"BREAK";
+    }
+    return normalized_signal;
+}
+
+bool force_kill_process_by_pid(DWORD pid) {
+    HANDLE process_handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+    if (process_handle == nullptr) {
+        return false;
+    }
+
+    const BOOL terminated = TerminateProcess(process_handle, 1);
+    CloseHandle(process_handle);
+    return terminated != FALSE;
+}
+
+bool graceful_kill_process_by_pid(DWORD pid) {
+    KillWindowEnumData enum_data = { pid, false };
+    EnumWindows(kill_window_enum_proc, reinterpret_cast<LPARAM>(&enum_data));
+    if (!enum_data.window_found) {
+        return force_kill_process_by_pid(pid);
+    }
+    return true;
+}
+
+bool send_console_event_to_pid(DWORD pid, DWORD control_event) {
+    if (!AttachConsole(pid)) {
+        return false;
+    }
+
+    SetConsoleCtrlHandler(nullptr, TRUE);
+    const BOOL generated = GenerateConsoleCtrlEvent(control_event, 0);
+    FreeConsole();
+    SetConsoleCtrlHandler(nullptr, FALSE);
+    return generated != FALSE;
+}
+
+bool queue_pending_trap_event(const std::wstring& event_name) {
+    if (event_name == L"INT") {
+        InterlockedExchange(&g_pending_int_trap, 1);
+        return true;
+    }
+    if (event_name == L"BREAK") {
+        InterlockedExchange(&g_pending_break_trap, 1);
+        return true;
+    }
+    if (event_name == L"HUP") {
+        InterlockedExchange(&g_pending_hup_trap, 1);
+        return true;
+    }
+    if (event_name == L"ALRM") {
+        InterlockedExchange(&g_pending_alrm_trap, 1);
+        return true;
+    }
+    if (event_name == L"USR1") {
+        InterlockedExchange(&g_pending_usr1_trap, 1);
+        return true;
+    }
+    if (event_name == L"USR2") {
+        InterlockedExchange(&g_pending_usr2_trap, 1);
+        return true;
+    }
+    if (event_name == L"SEGV") {
+        InterlockedExchange(&g_pending_segv_trap, 1);
+        return true;
+    }
+    if (event_name == L"FPE") {
+        InterlockedExchange(&g_pending_fpe_trap, 1);
+        return true;
+    }
+    if (event_name == L"TERM") {
+        InterlockedExchange(&g_pending_term_trap, 1);
+        return true;
+    }
+    if (event_name == L"CHLD") {
+        InterlockedExchange(&g_pending_chld_trap, 1);
+        return true;
+    }
+    return false;
+}
+
+/******************************************************************************
+** End of ksh_traps.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_variables.cpp
+******************************************************************************/
+
 
 bool is_executing_function_scope() {
     return !g_function_scope_stack.empty();
@@ -495,7 +1730,6 @@ void request_function_return(int status_code) {
     g_function_scope_stack.back().return_status = status_code;
 }
 
-// SECTION 05B: Function scope snapshots, restore, and environment sync.
 void snapshot_local_variable_if_needed(const std::wstring& name) {
     if (!is_executing_function_scope()) {
         return;
@@ -652,638 +1886,6 @@ void sync_exported_environment_variable(const std::wstring& name) {
         SetEnvironmentVariableW(name.c_str(), nullptr);
     }
 }
-
-// SECTION 06: Persistent custom file descriptor helpers.
-bool is_custom_fd_in_range(int fd) {
-    return fd >= kMinCustomFd && fd <= kMaxCustomFd;
-}
-
-bool is_valid_handle_value(HANDLE handle) {
-    return handle != nullptr && handle != INVALID_HANDLE_VALUE;
-}
-
-HANDLE get_persistent_custom_fd(int fd) {
-    if (!is_custom_fd_in_range(fd)) {
-        return INVALID_HANDLE_VALUE;
-    }
-    return g_custom_fd_table[static_cast<size_t>(fd)];
-}
-
-class RedStderrBuffer : public std::wstreambuf {
-public:
-    explicit RedStderrBuffer(std::wstreambuf* target)
-        : target_(target), stderr_handle_(GetStdHandle(STD_ERROR_HANDLE)), is_console_(false) {
-        if (stderr_handle_ != nullptr && stderr_handle_ != INVALID_HANDLE_VALUE) {
-            DWORD mode = 0;
-            if (GetConsoleMode(stderr_handle_, &mode)) {
-                is_console_ = true;
-            }
-        }
-    }
-
-protected:
-    int_type overflow(int_type ch) override {
-        if (traits_type::eq_int_type(ch, traits_type::eof())) {
-            return traits_type::not_eof(ch);
-        }
-
-        const wchar_t wide_ch = traits_type::to_char_type(ch);
-        if (!write_with_color(&wide_ch, 1)) {
-            return traits_type::eof();
-        }
-        return ch;
-    }
-
-    std::streamsize xsputn(const wchar_t* s, std::streamsize n) override {
-        if (n <= 0) {
-            return 0;
-        }
-
-        if (!write_with_color(s, n)) {
-            return 0;
-        }
-        return n;
-    }
-
-    int sync() override {
-        return target_->pubsync();
-    }
-
-private:
-    bool write_with_color(const wchar_t* text, std::streamsize count) {
-        WORD previous_attributes = 0;
-        const bool changed_color = try_set_red(previous_attributes);
-        const std::streamsize written = target_->sputn(text, count);
-        if (changed_color) {
-            SetConsoleTextAttribute(stderr_handle_, previous_attributes);
-        }
-        return written == count;
-    }
-
-    bool try_set_red(WORD& previous_attributes) {
-        if (!is_console_) {
-            return false;
-        }
-
-        if (stderr_handle_ == nullptr || stderr_handle_ == INVALID_HANDLE_VALUE) {
-            return false;
-        }
-
-        CONSOLE_SCREEN_BUFFER_INFO info;
-        if (!GetConsoleScreenBufferInfo(stderr_handle_, &info)) {
-            return false;
-        }
-
-        previous_attributes = info.wAttributes;
-        if (!SetConsoleTextAttribute(stderr_handle_, FOREGROUND_RED | FOREGROUND_INTENSITY)) {
-            return false;
-        }
-
-        return true;
-    }
-
-    std::wstreambuf* target_;
-    HANDLE stderr_handle_;
-    bool is_console_;
-};
-
-std::wstreambuf* g_original_wcerr_buffer = nullptr;
-RedStderrBuffer* g_red_stderr_buffer = nullptr;
-
-void enable_red_error_output() {
-    if (g_red_stderr_buffer != nullptr) {
-        return;
-    }
-
-    g_original_wcerr_buffer = std::wcerr.rdbuf();
-    static RedStderrBuffer red_buffer(g_original_wcerr_buffer);
-    g_red_stderr_buffer = &red_buffer;
-    std::wcerr.rdbuf(g_red_stderr_buffer);
-}
-
-bool IsRunningAsAdmin() {
-    SID_IDENTIFIER_AUTHORITY nt_authority = SECURITY_NT_AUTHORITY;
-    PSID admin_group = nullptr;
-
-    if (!AllocateAndInitializeSid(
-            &nt_authority,
-            2,
-            SECURITY_BUILTIN_DOMAIN_RID,
-            DOMAIN_ALIAS_RID_ADMINS,
-            0, 0, 0, 0, 0, 0,
-            &admin_group)) {
-        return false;
-    }
-
-    BOOL is_admin = FALSE;
-    CheckTokenMembership(NULL, admin_group, &is_admin);
-    FreeSid(admin_group);
-
-    return is_admin == TRUE;
-}
-
-bool string_equals_case_insensitive(const std::wstring& left, const std::wstring& right) {
-    if (left.size() != right.size()) {
-        return false;
-    }
-
-    for (size_t i = 0; i < left.size(); ++i) {
-        if (std::towlower(left[i]) != std::towlower(right[i])) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-std::wstring get_environment_value(const wchar_t* name) {
-    if (name == nullptr || *name == L'\0') {
-        return L"";
-    }
-
-    DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
-    if (needed == 0) {
-        return L"";
-    }
-
-    std::vector<wchar_t> buffer(needed);
-    DWORD written = GetEnvironmentVariableW(name, buffer.data(), needed);
-    if (written == 0 || written >= needed) {
-        return L"";
-    }
-
-    return std::wstring(buffer.data(), written);
-}
-
-std::wstring get_current_working_directory_for_prompt() {
-    DWORD needed = GetCurrentDirectoryW(0, nullptr);
-    if (needed == 0) {
-        return L".";
-    }
-
-    std::vector<wchar_t> buffer(needed);
-    DWORD written = GetCurrentDirectoryW(needed, buffer.data());
-    if (written == 0 || written >= needed) {
-        return L".";
-    }
-
-    return std::wstring(buffer.data(), written);
-}
-
-std::wstring get_username_for_prompt() {
-    wchar_t username[256] = { 0 };
-    DWORD username_len = ARRAYSIZE(username);
-    if (GetUserNameW(username, &username_len) && username_len > 0) {
-        size_t actual_len = std::wcslen(username);
-        return std::wstring(username, actual_len);
-    }
-    return L"";
-}
-
-std::wstring get_domain_for_prompt() {
-    std::wstring domain = get_environment_value(L"USERDNSDOMAIN");
-    if (!domain.empty()) {
-        return domain;
-    }
-    domain = get_environment_value(L"USERDOMAIN");
-    if (!domain.empty()) {
-        return domain;
-    }
-    return L"";
-}
-
-std::wstring get_hostname_for_prompt() {
-    wchar_t hostname[256] = { 0 };
-    DWORD host_len = ARRAYSIZE(hostname);
-    if (GetComputerNameW(hostname, &host_len) && host_len > 0) {
-        return std::wstring(hostname, host_len);
-    }
-    return L"";
-}
-
-std::wstring format_prompt_template(const std::wstring& prompt_template) {
-    const std::wstring username = get_username_for_prompt();
-    const std::wstring domain = get_domain_for_prompt();
-    const std::wstring cwd = get_current_working_directory_for_prompt();
-    const std::wstring hostname = get_hostname_for_prompt();
-    const wchar_t prompt_char = IsRunningAsAdmin() ? L'#' : L'$';
-
-    std::wstring formatted;
-    formatted.reserve(prompt_template.size() + 32);
-
-    for (size_t i = 0; i < prompt_template.size(); ++i) {
-        wchar_t ch = prompt_template[i];
-        if (ch == L'%' && i + 1 < prompt_template.size()) {
-            wchar_t token = prompt_template[i + 1];
-            bool consumed = true;
-            if (token == L'u') {
-                formatted += username;
-            } else if (token == L'd') {
-                formatted += domain;
-            } else if (token == L'w') {
-                formatted += cwd;
-            } else if (token == L'm') {
-                formatted += hostname;
-            } else if (token == L'#') {
-                formatted.push_back(prompt_char);
-            } else if (token == L'%') {
-                formatted.push_back(L'%');
-            } else {
-                consumed = false;
-            }
-
-            if (consumed) {
-                ++i;
-                continue;
-            }
-        }
-
-        formatted.push_back(ch);
-    }
-
-    return formatted;
-}
-
-bool get_current_directory_path(std::wstring& current_directory) {
-    DWORD needed = GetCurrentDirectoryW(0, nullptr);
-    if (needed == 0) {
-        return false;
-    }
-
-    std::vector<wchar_t> buffer(needed);
-    DWORD written = GetCurrentDirectoryW(needed, buffer.data());
-    if (written == 0 || written >= needed) {
-        return false;
-    }
-
-    current_directory.assign(buffer.data(), written);
-    return true;
-}
-
-std::wstring get_interactive_prompt() {
-    std::wstring prompt_template;
-
-    auto scalar_it = ksh_env.variables.find(L"PS1");
-    if (scalar_it != ksh_env.variables.end()) {
-        prompt_template = scalar_it->second;
-    } else {
-        prompt_template = get_environment_value(L"PS1");
-    }
-
-    if (!prompt_template.empty()) {
-        return format_prompt_template(prompt_template);
-    }
-
-    return IsRunningAsAdmin() ? L"# " : L"$ ";
-}
-
-bool clear_console_screen() {
-    HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (console == nullptr || console == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-
-    CONSOLE_SCREEN_BUFFER_INFO screen_info;
-    if (!GetConsoleScreenBufferInfo(console, &screen_info)) {
-        return false;
-    }
-
-    const DWORD cell_count =
-        static_cast<DWORD>(screen_info.dwSize.X) * static_cast<DWORD>(screen_info.dwSize.Y);
-    COORD top_left = { 0, 0 };
-    DWORD written = 0;
-
-    if (!FillConsoleOutputCharacterW(console, L' ', cell_count, top_left, &written)) {
-        return false;
-    }
-
-    if (!FillConsoleOutputAttribute(console, screen_info.wAttributes, cell_count, top_left, &written)) {
-        return false;
-    }
-
-    if (!SetConsoleCursorPosition(console, top_left)) {
-        return false;
-    }
-
-    return true;
-}
-
-std::wstring get_command_name(const std::wstring& full_command) {
-    std::wstring trimmed = trim_copy(full_command);
-    if (trimmed.empty()) return L"";
-    if (trimmed[0] == L'"') {
-        size_t end_quote = trimmed.find(L'"', 1);
-        if (end_quote != std::wstring::npos) {
-            return trimmed.substr(1, end_quote - 1);
-        }
-    }
-    size_t space = trimmed.find_first_of(L" \t");
-    if (space != std::wstring::npos) {
-        return trimmed.substr(0, space);
-    }
-    return trimmed;
-}
-
-bool is_windows_internal_command(const std::wstring& cmd) {
-    static const std::vector<std::wstring> internals = {
-        L"dir", L"copy", L"move", L"del", L"erase", L"type", L"ren", L"rename",
-        L"md", L"mkdir", L"rd", L"rmdir", L"cls", L"color", L"date", L"time",
-        L"ver", L"vol", L"path", L"prompt", L"assoc", L"ftype", L"mklink"
-    };
-    std::wstring lower_cmd = to_lower_copy(cmd);
-    return std::find(internals.begin(), internals.end(), lower_cmd) != internals.end();
-}
-
-bool is_truthy_setting_value(const std::wstring& value) {
-    const std::wstring trimmed = trim_copy(value);
-    std::wstring lowered;
-    lowered.reserve(trimmed.size());
-    for (wchar_t ch : trimmed) {
-        lowered.push_back(static_cast<wchar_t>(std::towlower(ch)));
-    }
-    return lowered == L"1" || lowered == L"true" || lowered == L"yes" || lowered == L"on";
-}
-
-bool get_setting_bool(const std::wstring& name, bool default_value) {
-    std::map<std::wstring, std::wstring>::const_iterator it = ksh_env.variables.find(name);
-    if (it != ksh_env.variables.end()) {
-        return is_truthy_setting_value(it->second);
-    }
-
-    wchar_t buffer[64];
-    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, _countof(buffer));
-    if (ret > 0 && ret < _countof(buffer)) {
-        return is_truthy_setting_value(buffer);
-    }
-
-    return default_value;
-}
-
-bool is_hardened_mode_enabled() {
-    return get_setting_bool(L"ksh_HARDENED_MODE", false);
-}
-
-bool is_regex_enabled() {
-    if (is_hardened_mode_enabled()) {
-        return false;
-    }
-    return get_setting_bool(L"ksh_ENABLE_REGEX", true);
-}
-
-bool is_performance_telemetry_enabled() {
-    return get_setting_bool(L"ksh_PERF_TRACE", false);
-}
-
-struct SubshellPathPerfCounters {
-    unsigned long long command_subst_fast_count = 0;
-    unsigned long long command_subst_fast_ms = 0;
-    unsigned long long command_subst_snapshot_count = 0;
-    unsigned long long command_subst_snapshot_ms = 0;
-    unsigned long long command_subst_direct_count = 0;
-    unsigned long long command_subst_direct_ms = 0;
-    unsigned long long parenthesized_fast_count = 0;
-    unsigned long long parenthesized_fast_ms = 0;
-    unsigned long long parenthesized_snapshot_count = 0;
-    unsigned long long parenthesized_snapshot_ms = 0;
-    unsigned long long parenthesized_direct_count = 0;
-    unsigned long long parenthesized_direct_ms = 0;
-};
-
-thread_local SubshellPathPerfCounters g_subshell_path_perf_counters;
-
-// Performance section: subshell path accounting and trace emission.
-void record_command_substitution_path_perf(bool used_fast_capture, bool used_snapshot_restore, ULONGLONG elapsed_ms) {
-    if (used_fast_capture) {
-        g_subshell_path_perf_counters.command_subst_fast_count++;
-        g_subshell_path_perf_counters.command_subst_fast_ms += static_cast<unsigned long long>(elapsed_ms);
-        return;
-    }
-
-    if (used_snapshot_restore) {
-        g_subshell_path_perf_counters.command_subst_snapshot_count++;
-        g_subshell_path_perf_counters.command_subst_snapshot_ms += static_cast<unsigned long long>(elapsed_ms);
-        return;
-    }
-
-    g_subshell_path_perf_counters.command_subst_direct_count++;
-    g_subshell_path_perf_counters.command_subst_direct_ms += static_cast<unsigned long long>(elapsed_ms);
-}
-
-void record_parenthesized_subshell_path_perf(bool used_fast_path, bool used_snapshot_restore, ULONGLONG elapsed_ms) {
-    if (used_fast_path) {
-        g_subshell_path_perf_counters.parenthesized_fast_count++;
-        g_subshell_path_perf_counters.parenthesized_fast_ms += static_cast<unsigned long long>(elapsed_ms);
-        return;
-    }
-
-    if (used_snapshot_restore) {
-        g_subshell_path_perf_counters.parenthesized_snapshot_count++;
-        g_subshell_path_perf_counters.parenthesized_snapshot_ms += static_cast<unsigned long long>(elapsed_ms);
-        return;
-    }
-
-    g_subshell_path_perf_counters.parenthesized_direct_count++;
-    g_subshell_path_perf_counters.parenthesized_direct_ms += static_cast<unsigned long long>(elapsed_ms);
-}
-
-struct ShellStateSnapshot {
-    KshEnvironment environment;
-    std::map<std::wstring, ShellFunctionDefinition> shell_functions;
-    std::map<std::wstring, std::wstring> aliases;
-    std::map<std::wstring, CustomTypeDefinition> custom_types;
-    std::array<HANDLE, kCustomFdTableSize> custom_fd_table = make_invalid_custom_fd_table();
-    std::map<std::wstring, std::wstring> trap_handlers;
-    std::wstring saved_dir;
-};
-
-inline ShellStateSnapshot capture_shell_state_snapshot() {
-    ShellStateSnapshot snap;
-    snap.environment = ksh_env;
-    snap.shell_functions = g_shell_functions;
-    snap.aliases = g_aliases;
-    snap.custom_types = g_custom_types;
-    snap.custom_fd_table = g_custom_fd_table;
-    snap.trap_handlers = g_trap_handlers;
-    wchar_t dir_buf[MAX_PATH];
-    if (GetCurrentDirectoryW(MAX_PATH, dir_buf) > 0) {
-        snap.saved_dir = dir_buf;
-    }
-    return snap;
-}
-
-inline void restore_shell_state_snapshot_if_present(
-    std::optional<ShellStateSnapshot>& snapshot_opt,
-    const std::wstring& status_default_value) {
-    if (!snapshot_opt.has_value()) {
-        return;
-    }
-
-    ShellStateSnapshot& snapshot = *snapshot_opt;
-    std::wstring status = get_status_value(status_default_value);
-    std::swap(ksh_env, snapshot.environment);
-    ksh_env.variables[L"?"] = status;
-    std::swap(g_shell_functions, snapshot.shell_functions);
-    std::swap(g_aliases, snapshot.aliases);
-    std::swap(g_custom_types, snapshot.custom_types);
-    g_trap_handlers = snapshot.trap_handlers;
-
-    for (size_t fd = 0; fd < kCustomFdTableSize; ++fd) {
-        if (g_custom_fd_table[fd] != snapshot.custom_fd_table[fd]) {
-            if (is_valid_handle_value(g_custom_fd_table[fd])) {
-                CloseHandle(g_custom_fd_table[fd]);
-            }
-            g_custom_fd_table[fd] = snapshot.custom_fd_table[fd];
-        }
-    }
-    if (!snapshot.saved_dir.empty()) {
-        wchar_t cur[MAX_PATH];
-        if (GetCurrentDirectoryW(MAX_PATH, cur) > 0) {
-            if (_wcsicmp(cur, snapshot.saved_dir.c_str()) != 0) {
-                SetCurrentDirectoryW(snapshot.saved_dir.c_str());
-            }
-        }
-    }
-    snapshot_opt.reset();
-}
-
-class ScopedSnapshotRestoreGuard {
-public:
-    ScopedSnapshotRestoreGuard(
-        std::optional<ShellStateSnapshot>& snapshot,
-        const wchar_t* default_status)
-        : snapshot_ref_(snapshot),
-          status_default_(default_status != nullptr ? default_status : L"0") {}
-
-    ~ScopedSnapshotRestoreGuard() {
-        if (!dismissed_) {
-            restore_shell_state_snapshot_if_present(snapshot_ref_, status_default_);
-        }
-    }
-
-    void dismiss() {
-        dismissed_ = true;
-    }
-
-private:
-    std::optional<ShellStateSnapshot>& snapshot_ref_;
-    std::wstring status_default_;
-    bool dismissed_ = false;
-};
-
-void log_performance_trace(const std::wstring& phase, ULONGLONG elapsed_ms, const std::wstring& detail = L"") {
-    std::wcerr << L"[perf] " << phase << L": " << elapsed_ms << L" ms";
-    if (!detail.empty()) {
-        std::wcerr << L" (" << detail << L")";
-    }
-    std::wcerr << L"\n";
-}
-
-bool pattern_match_case_sensitive() {
-    // Default to ksh-style case-sensitive matching; allow explicit opt-out.
-    return !get_setting_bool(L"ksh_PATTERN_CASE_INSENSITIVE", false);
-}
-
-class ScopedExpansionDepth {
-public:
-    ScopedExpansionDepth() : active_(false) {
-        if (g_expansion_nesting_depth >= kMaxExpansionNestingDepth) {
-            return;
-        }
-        g_expansion_nesting_depth++;
-        active_ = true;
-    }
-
-    ~ScopedExpansionDepth() {
-        if (active_ && g_expansion_nesting_depth > 0) {
-            g_expansion_nesting_depth--;
-        }
-    }
-
-    bool active() const {
-        return active_;
-    }
-
-private:
-    bool active_;
-};
-
-class ScopedEvalDepth {
-public:
-    ScopedEvalDepth() : active_(false) {
-        if (g_eval_nesting_depth >= kMaxEvalNestingDepth) {
-            return;
-        }
-        g_eval_nesting_depth++;
-        active_ = true;
-    }
-
-    ~ScopedEvalDepth() {
-        if (active_ && g_eval_nesting_depth > 0) {
-            g_eval_nesting_depth--;
-        }
-    }
-
-    bool active() const {
-        return active_;
-    }
-
-private:
-    bool active_;
-};
-
-class ScopedTrapExecutionFlag {
-public:
-    explicit ScopedTrapExecutionFlag(bool& flag) : flag_(flag) {
-        flag_ = true;
-    }
-
-    ~ScopedTrapExecutionFlag() {
-        flag_ = false;
-    }
-
-private:
-    bool& flag_;
-};
-
-// History section: control variables and timestamp policy.
-inline std::wstring get_system_env_var(const std::wstring& name) {
-    wchar_t buffer[256];
-    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, _countof(buffer));
-    if (ret > 0 && ret < _countof(buffer)) {
-        return std::wstring(buffer, ret);
-    }
-    if (ret >= _countof(buffer)) {
-        std::vector<wchar_t> dyn(ret + 1);
-        DWORD dyn_ret = GetEnvironmentVariableW(name.c_str(), dyn.data(), static_cast<DWORD>(dyn.size()));
-        if (dyn_ret > 0 && dyn_ret < dyn.size()) {
-            return std::wstring(dyn.data(), dyn_ret);
-        }
-    }
-    return L"";
-}
-
-std::wstring get_history_control_value(const std::wstring& name) {
-    std::map<std::wstring, std::wstring>::const_iterator it = ksh_env.variables.find(name);
-    if (it != ksh_env.variables.end()) {
-        return it->second;
-    }
-
-    return get_system_env_var(name);
-}
-
-bool history_timestamps_enabled() {
-    return !trim_copy(get_history_control_value(L"HISTTIMEFORMAT")).empty();
-}
-
-// Variable hook section: get/set/init dispatch state.
-thread_local std::set<std::wstring> g_active_get_hooks;
-thread_local std::set<std::wstring> g_active_set_hooks;
-thread_local std::set<std::wstring> g_active_init_hooks;
-thread_local HANDLE g_subshell_stdout = INVALID_HANDLE_VALUE;
-thread_local HANDLE g_pipeline_stdin = INVALID_HANDLE_VALUE;
-thread_local HANDLE g_pipeline_stdout = INVALID_HANDLE_VALUE;
-thread_local HANDLE g_pipeline_stderr = INVALID_HANDLE_VALUE;
-thread_local std::wstring* g_builtin_capture_output = nullptr;
 
 bool read_registry_property(const std::wstring& property_path, std::wstring& value, RegistryValueMetadata& metadata) {
     const size_t separator = property_path.find(L'.');
@@ -1453,7 +2055,7 @@ bool write_registry_property(const std::wstring& property_path, const std::wstri
     return status == ERROR_SUCCESS;
 }
 
-void register_registry_namespaces() {
+static void register_registry_namespaces() {
     for (const wchar_t* name : {L"HKLM", L"HKCU"}) {
         CustomTypeDefinition& definition = g_custom_types[name];
         definition.name = name;
@@ -1470,6 +2072,618 @@ void register_registry_namespaces() {
 void ensure_registry_namespaces_registered() {
     static std::once_flag registry_namespace_once;
     std::call_once(registry_namespace_once, register_registry_namespaces);
+}
+
+bool parse_non_negative_index(const std::wstring& text, size_t& out_index) {
+    if (text.empty()) {
+        return false;
+    }
+
+    try {
+        size_t consumed = 0;
+        unsigned long long parsed = std::stoull(text, &consumed);
+        if (consumed != text.size()) {
+            return false;
+        }
+        out_index = static_cast<size_t>(parsed);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_array_reference_expression(const std::wstring& expression, std::wstring& base_name, std::wstring& index_text, bool& has_index) {
+    base_name.clear();
+    index_text.clear();
+    has_index = false;
+
+    if (expression.empty()) {
+        return false;
+    }
+
+    size_t open = expression.find(L'[');
+    if (open == std::wstring::npos) {
+        if (!is_valid_shell_identifier(expression)) {
+            return false;
+        }
+        base_name = expression;
+        return true;
+    }
+
+    int bracket_depth = 0;
+    size_t match_pos = std::wstring::npos;
+    for (size_t i = open; i < expression.size(); ++i) {
+        if (expression[i] == L'[') {
+            bracket_depth++;
+        } else if (expression[i] == L']') {
+            bracket_depth--;
+            if (bracket_depth == 0) {
+                match_pos = i;
+                break;
+            }
+        }
+    }
+    if (match_pos == std::wstring::npos || match_pos != expression.size() - 1) {
+        return false;
+    }
+
+    base_name = expression.substr(0, open);
+    if (!is_valid_shell_identifier(base_name)) {
+        return false;
+    }
+
+    index_text = expression.substr(open + 1, expression.size() - open - 2);
+    if (index_text.empty()) {
+        return false;
+    }
+
+    has_index = true;
+    return true;
+}
+
+static bool parse_array_literal(const std::wstring& value, std::vector<std::wstring>& elements) {
+    elements.clear();
+    std::wstring trimmed = trim_copy(value);
+    if (trimmed.size() < 2 || trimmed.front() != L'(' || trimmed.back() != L')') {
+        return false;
+    }
+
+    std::wstring inner = trim_copy(trimmed.substr(1, trimmed.size() - 2));
+    if (inner.empty()) {
+        return true;
+    }
+
+    std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(inner);
+    size_t next_positional_index = 0;
+
+    for (const std::wstring& token : tokens) {
+        if (token.empty()) {
+            continue;
+        }
+
+        size_t close_bracket = token.find(L']');
+        if (token[0] == L'[' && close_bracket != std::wstring::npos && (close_bracket + 1) < token.size() && token[close_bracket + 1] == L'=') {
+            std::wstring index_text = token.substr(1, close_bracket - 1);
+            size_t explicit_index = 0;
+            if (!parse_non_negative_index(index_text, explicit_index)) {
+                return false;
+            }
+            if (explicit_index >= kMaxArrayIndex) {
+                return false;
+            }
+
+            std::wstring explicit_value = token.substr(close_bracket + 2);
+            if (elements.size() <= explicit_index) {
+                elements.resize(explicit_index + 1);
+            }
+            elements[explicit_index] = explicit_value;
+            if (next_positional_index <= explicit_index) {
+                next_positional_index = explicit_index + 1;
+            }
+            continue;
+        }
+
+        if (elements.size() <= next_positional_index) {
+            elements.resize(next_positional_index + 1);
+        }
+        elements[next_positional_index] = token;
+        next_positional_index++;
+    }
+
+    return true;
+}
+
+static bool parse_associative_array_literal(const std::wstring& value, std::map<std::wstring, std::wstring>& elements) {
+    elements.clear();
+    std::wstring trimmed = trim_copy(value);
+    if (trimmed.size() < 2 || trimmed.front() != L'(' || trimmed.back() != L')') {
+        return false;
+    }
+
+    std::wstring inner = trim_copy(trimmed.substr(1, trimmed.size() - 2));
+    if (inner.empty()) {
+        return true;
+    }
+
+    std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(inner);
+
+    for (const std::wstring& token : tokens) {
+        if (token.empty()) {
+            continue;
+        }
+
+        size_t close_bracket = token.find(L']');
+        if (token[0] == L'[' && close_bracket != std::wstring::npos && (close_bracket + 1) < token.size() && token[close_bracket + 1] == L'=') {
+            std::wstring key = token.substr(1, close_bracket - 1);
+            std::wstring explicit_value = token.substr(close_bracket + 2);
+            elements[key] = explicit_value;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::vector<std::wstring> get_array_values_vector(const std::wstring& name) {
+    std::vector<std::wstring> result;
+    std::map<std::wstring, std::map<std::wstring, std::wstring>>::const_iterator it = ksh_env.arrays.find(name);
+    if (it == ksh_env.arrays.end()) {
+        return result;
+    }
+
+    const std::map<std::wstring, std::wstring>& m = it->second;
+    bool is_assoc = false;
+    std::map<std::wstring, bool>::const_iterator assoc_it = ksh_env.associative_flags.find(name);
+    if (assoc_it != ksh_env.associative_flags.end()) {
+        is_assoc = assoc_it->second;
+    }
+
+    if (is_assoc) {
+        for (const auto& pair : m) {
+            result.push_back(pair.second);
+        }
+    } else {
+        size_t max_idx = 0;
+        bool has_any = false;
+        std::vector<std::pair<size_t, std::wstring>> parsed;
+        for (const auto& pair : m) {
+            size_t idx = 0;
+            if (parse_non_negative_index(pair.first, idx)) {
+                parsed.push_back({idx, pair.second});
+                if (idx > max_idx) {
+                    max_idx = idx;
+                }
+                has_any = true;
+            }
+        }
+        if (has_any) {
+            result.resize(max_idx + 1);
+            for (const auto& p : parsed) {
+                result[p.first] = p.second;
+            }
+        }
+    }
+    return result;
+}
+
+void assign_scalar_parameter(const std::wstring& name, const std::wstring& value) {
+    ensure_registry_namespaces_registered();
+    const size_t namespace_separator = name.find(L'.');
+    if (namespace_separator != std::wstring::npos) {
+        const std::wstring namespace_name = name.substr(0, namespace_separator);
+        std::map<std::wstring, CustomTypeDefinition>::const_iterator namespace_it = g_custom_types.find(namespace_name);
+        if (namespace_it != g_custom_types.end() && namespace_it->second.is_dynamic_namespace && namespace_it->second.property_setter) {
+            if (!namespace_it->second.property_setter(name, value)) {
+                ksh_env.variables[L"?"] = L"1";
+            } else {
+                ksh_env.variables[L"?"] = L"0";
+            }
+            return;
+        }
+    }
+
+    bool exists = ksh_env.variables.find(name) != ksh_env.variables.end();
+    if (!exists && g_shell_functions.find(name + L".init") != g_shell_functions.end() &&
+        g_active_init_hooks.find(name) == g_active_init_hooks.end()) {
+        
+        g_active_init_hooks.insert(name);
+        bool dummy = false;
+        execute_defined_function(name + L".init", {}, dummy);
+        g_active_init_hooks.erase(name);
+    }
+
+    std::wstring assigned_value = value;
+    if (g_shell_functions.find(name + L".set") != g_shell_functions.end() &&
+        g_active_set_hooks.find(name) == g_active_set_hooks.end()) {
+        
+        g_active_set_hooks.insert(name);
+        
+        std::wstring old_sh_val;
+        bool had_sh_val = false;
+        auto sh_it = ksh_env.variables.find(L".sh.value");
+        if (sh_it != ksh_env.variables.end()) {
+            old_sh_val = sh_it->second;
+            had_sh_val = true;
+        }
+        
+        ksh_env.variables[L".sh.value"] = value;
+        
+        bool dummy = false;
+        execute_defined_function(name + L".set", {}, dummy);
+        
+        assigned_value = ksh_env.variables[L".sh.value"];
+        
+        if (had_sh_val) {
+            ksh_env.variables[L".sh.value"] = old_sh_val;
+        } else {
+            ksh_env.variables.erase(L".sh.value");
+        }
+        
+        g_active_set_hooks.erase(name);
+    }
+
+    const bool uppercase_mode = get_flag_value(ksh_env.uppercase_flags, name);
+    const bool lowercase_mode = get_flag_value(ksh_env.lowercase_flags, name);
+    if (uppercase_mode) {
+        assigned_value = to_upper_copy(assigned_value);
+    } else if (lowercase_mode) {
+        assigned_value = to_lower_copy(assigned_value);
+    }
+
+    std::map<std::wstring, wchar_t>::const_iterator justify_mode_it = ksh_env.justify_modes.find(name);
+    if (justify_mode_it != ksh_env.justify_modes.end()) {
+        std::map<std::wstring, int>::const_iterator justify_width_it = ksh_env.justify_widths.find(name);
+        int justify_width = (justify_width_it != ksh_env.justify_widths.end()) ? justify_width_it->second : 0;
+        if (justify_width > 0) {
+            const size_t width = static_cast<size_t>(justify_width);
+            if (justify_mode_it->second == L'L') {
+                if (assigned_value.size() > width) {
+                    assigned_value = assigned_value.substr(0, width);
+                } else if (assigned_value.size() < width) {
+                    assigned_value.append(width - assigned_value.size(), L' ');
+                }
+            } else if (justify_mode_it->second == L'R') {
+                if (assigned_value.size() > width) {
+                    assigned_value = assigned_value.substr(assigned_value.size() - width);
+                } else if (assigned_value.size() < width) {
+                    assigned_value.insert(0, width - assigned_value.size(), L' ');
+                }
+            } else if (justify_mode_it->second == L'Z') {
+                if (assigned_value.size() > width) {
+                    assigned_value = assigned_value.substr(assigned_value.size() - width);
+                } else if (assigned_value.size() < width) {
+                    size_t pad_count = width - assigned_value.size();
+                    if (!assigned_value.empty() && (assigned_value[0] == L'+' || assigned_value[0] == L'-')) {
+                        assigned_value.insert(1, pad_count, L'0');
+                    } else {
+                        assigned_value.insert(0, pad_count, L'0');
+                    }
+                }
+            }
+        }
+    }
+
+    ksh_env.variables[name] = assigned_value;
+    ksh_env.registry_metadata.erase(name);
+    ksh_env.arrays.erase(name);
+    ksh_env.associative_flags.erase(name);
+    SetEnvironmentVariableW(name.c_str(), assigned_value.c_str());
+}
+
+void assign_array_parameter(const std::wstring& name, const std::vector<std::wstring>& values) {
+    std::map<std::wstring, std::wstring> map_values;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (!values[i].empty()) {
+            map_values[std::to_wstring(i)] = values[i];
+        }
+    }
+    ksh_env.arrays[name] = std::move(map_values);
+    ksh_env.variables.erase(name);
+    ksh_env.registry_metadata.erase(name);
+    ksh_env.justify_modes.erase(name);
+    ksh_env.justify_widths.erase(name);
+    SetEnvironmentVariableW(name.c_str(), nullptr);
+}
+
+std::wstring resolve_variable_name(const std::wstring& name, int depth) {
+    if (name.empty() || depth > 10) {
+        return name;
+    }
+
+    std::wstring base_name;
+    std::wstring index_text;
+    bool has_index = false;
+    if (parse_array_reference_expression(name, base_name, index_text, has_index)) {
+        if (has_index) {
+            std::wstring resolved_base = resolve_variable_name(base_name, depth + 1);
+            return resolved_base + L"[" + index_text + L"]";
+        }
+    }
+
+    std::map<std::wstring, bool>::const_iterator nameref_it = ksh_env.nameref_flags.find(name);
+    if (nameref_it != ksh_env.nameref_flags.end() && nameref_it->second) {
+        std::map<std::wstring, std::wstring>::const_iterator val_it = ksh_env.variables.find(name);
+        if (val_it != ksh_env.variables.end()) {
+            return resolve_variable_name(val_it->second, depth + 1);
+        }
+    }
+
+    return name;
+}
+
+bool assign_parameter_value(const std::wstring& lhs, const std::wstring& rhs, bool array_hint, bool local_scope, std::wstring& error_message, bool is_nameref) {
+    error_message.clear();
+
+    if (lhs.empty()) {
+        error_message = L"missing variable name for assignment";
+        return false;
+    }
+
+    if (is_nameref) {
+        std::wstring base_name;
+        std::wstring index_text;
+        bool has_index = false;
+        if (!parse_array_reference_expression(lhs, base_name, index_text, has_index)) {
+            error_message = L"invalid variable name for nameref: " + lhs;
+            return false;
+        }
+
+        if (has_index) {
+            error_message = L"cannot define array element as a nameref: " + lhs;
+            return false;
+        }
+
+        if (local_scope) {
+            snapshot_local_variable_if_needed(base_name);
+        }
+
+        if (get_flag_value(ksh_env.readonly_flags, base_name)) {
+            error_message = L"variable is read-only: " + base_name;
+            return false;
+        }
+
+        ksh_env.variables[base_name] = rhs;
+        ksh_env.arrays.erase(base_name);
+        ksh_env.associative_flags.erase(base_name);
+        set_flag_value(ksh_env.nameref_flags, base_name, true);
+        return true;
+    }
+
+    std::wstring resolved_lhs = resolve_variable_name(lhs);
+
+    std::wstring base_name;
+    std::wstring index_text;
+    bool has_index = false;
+    if (!parse_array_reference_expression(resolved_lhs, base_name, index_text, has_index)) {
+        error_message = L"invalid assignment target: " + lhs;
+        return false;
+    }
+
+    if (!has_index) {
+        ensure_registry_namespaces_registered();
+        const size_t namespace_separator = base_name.find(L'.');
+        if (namespace_separator != std::wstring::npos) {
+            const std::wstring namespace_name = base_name.substr(0, namespace_separator);
+            std::map<std::wstring, CustomTypeDefinition>::const_iterator namespace_it = g_custom_types.find(namespace_name);
+            if (namespace_it != g_custom_types.end() && namespace_it->second.is_dynamic_namespace && namespace_it->second.property_setter) {
+                if (!namespace_it->second.property_setter(base_name, rhs)) {
+                    error_message = L"failed to set Registry property: " + base_name;
+                    return false;
+                }
+                ksh_env.variables[L"?"] = L"0";
+                return true;
+            }
+        }
+    }
+
+    if (local_scope) {
+        snapshot_local_variable_if_needed(base_name);
+    }
+
+    if (get_flag_value(ksh_env.readonly_flags, base_name)) {
+        error_message = L"variable is read-only: " + base_name;
+        return false;
+    }
+
+    const bool integer_mode = get_flag_value(ksh_env.integer_flags, base_name);
+
+    if (integer_mode && (has_index || array_hint)) {
+        error_message = L"integer variable cannot be assigned as an array: " + base_name;
+        return false;
+    }
+
+    const bool is_assoc = get_flag_value(ksh_env.associative_flags, base_name);
+
+    if (is_assoc) {
+        if (integer_mode) {
+            error_message = L"integer variable cannot be assigned as an array: " + base_name;
+            return false;
+        }
+
+        if (has_index) {
+            if (index_text.empty()) {
+                error_message = L"associative array key cannot be empty";
+                return false;
+            }
+            ksh_env.arrays[base_name][index_text] = rhs;
+            ksh_env.variables.erase(base_name);
+            return true;
+        }
+
+        std::wstring trimmed_rhs = trim_copy(rhs);
+        if (!trimmed_rhs.empty() && trimmed_rhs.front() == L'(' && trimmed_rhs.back() == L')') {
+            std::map<std::wstring, std::wstring> assoc_elements;
+            if (parse_associative_array_literal(rhs, assoc_elements)) {
+                ksh_env.arrays[base_name] = std::move(assoc_elements);
+                ksh_env.variables.erase(base_name);
+                return true;
+            } else {
+                error_message = L"invalid associative array literal assignment";
+                return false;
+            }
+        }
+
+        ksh_env.arrays[base_name][L"0"] = rhs;
+        ksh_env.variables.erase(base_name);
+        return true;
+    }
+
+    std::vector<std::wstring> literal_values;
+    const bool rhs_is_array_literal = parse_array_literal(rhs, literal_values);
+
+    if (integer_mode && rhs_is_array_literal) {
+        error_message = L"integer variable cannot be assigned an array literal: " + base_name;
+        return false;
+    }
+
+    if (has_index) {
+        size_t index = 0;
+        if (!parse_non_negative_index(index_text, index)) {
+            error_message = L"array index must be a non-negative integer";
+            return false;
+        }
+        if (index >= kMaxArrayIndex) {
+            error_message = L"array index exceeds maximum allowed value";
+            return false;
+        }
+
+        std::map<std::wstring, std::wstring>& target_array = ksh_env.arrays[base_name];
+        target_array[std::to_wstring(index)] = rhs;
+        ksh_env.variables.erase(base_name);
+        return true;
+    }
+
+    if (array_hint || rhs_is_array_literal) {
+        if (!rhs_is_array_literal && array_hint) {
+            literal_values.push_back(rhs);
+        }
+        assign_array_parameter(base_name, literal_values);
+        sync_exported_environment_variable(base_name);
+        return true;
+    }
+
+    std::wstring scalar_value = rhs;
+    if (integer_mode) {
+        scalar_value = evaluate_arithmetic(rhs);
+    }
+
+    // Enforce per-session variable table cap (new entries only).
+    const bool scalar_exists = ksh_env.variables.find(base_name) != ksh_env.variables.end();
+    const bool array_exists  = ksh_env.arrays.find(base_name)    != ksh_env.arrays.end();
+    if (!scalar_exists && !array_exists) {
+        const size_t total = ksh_env.variables.size() + ksh_env.arrays.size();
+        if (total >= kMaxShellVariables) {
+            error_message = L"shell variable table limit reached, cannot create: " + base_name;
+            return false;
+        }
+    }
+
+    assign_scalar_parameter(base_name, scalar_value);
+    sync_exported_environment_variable(base_name);
+    return true;
+}
+
+bool parse_custom_type_definition(const std::wstring& type_name, const std::wstring& body, CustomTypeDefinition& def) {
+    def.name = type_name;
+    std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(body);
+    
+    size_t i = 0;
+    while (i < tokens.size()) {
+        if (tokens[i] == L";" || tokens[i] == L"\n") {
+            i++;
+            continue;
+        }
+        
+        std::wstring type_kw = tokens[i];
+        bool is_integer = false;
+        bool is_array = false;
+        bool is_associative = false;
+        std::wstring member_type_name = L"";
+        
+        if (type_kw == L"integer") {
+            is_integer = true;
+            i++;
+        } else if (type_kw == L"typeset") {
+            i++;
+            while (i < tokens.size() && tokens[i][0] == L'-') {
+                std::wstring opt = tokens[i];
+                for (size_t j = 1; j < opt.size(); ++j) {
+                    if (opt[j] == L'i') is_integer = true;
+                    else if (opt[j] == L'a') is_array = true;
+                    else if (opt[j] == L'A') is_associative = true;
+                }
+                i++;
+            }
+        } else if (g_custom_types.find(type_kw) != g_custom_types.end()) {
+            member_type_name = type_kw;
+            i++;
+        } else {
+            // Default variable type
+        }
+        
+        while (i < tokens.size() && tokens[i] != L";" && tokens[i] != L"\n" &&
+               tokens[i] != L"integer" && tokens[i] != L"typeset" &&
+               g_custom_types.find(tokens[i]) == g_custom_types.end()) {
+            
+            std::wstring token = tokens[i];
+            i++;
+            
+            std::wstring name = token;
+            std::wstring def_val = L"";
+            size_t eq = token.find(L'=');
+            if (eq != std::wstring::npos) {
+                name = token.substr(0, eq);
+                def_val = remove_quotes_and_escapes_from_token(token.substr(eq + 1));
+            }
+            
+            if (name.empty()) continue;
+            
+            CustomTypeMember m;
+            m.name = name;
+            m.is_integer = is_integer;
+            m.is_array = is_array;
+            m.is_associative = is_associative;
+            m.type_name = member_type_name;
+            m.default_value = def_val;
+            
+            def.members.push_back(m);
+        }
+    }
+    return true;
+}
+
+void instantiate_custom_type(const std::wstring& type_name, const std::wstring& var_prefix) {
+    auto it = g_custom_types.find(type_name);
+    if (it == g_custom_types.end()) return;
+    
+    for (const auto& member : it->second.members) {
+        std::wstring full_member_name = var_prefix + L"." + member.name;
+        if (!member.type_name.empty()) {
+            instantiate_custom_type(member.type_name, full_member_name);
+        } else {
+            std::wstring val = member.default_value;
+            if (val.empty() && member.is_integer) {
+                val = L"0";
+            }
+            
+            if (member.is_integer) {
+                set_flag_value(ksh_env.integer_flags, full_member_name, true);
+            }
+            if (member.is_array) {
+                ksh_env.arrays[full_member_name].clear();
+            } else if (member.is_associative) {
+                ksh_env.arrays[full_member_name].clear();
+                ksh_env.associative_flags[full_member_name] = true;
+            } else {
+                ksh_env.variables[full_member_name] = val;
+                SetEnvironmentVariableW(full_member_name.c_str(), val.c_str());
+            }
+        }
+    }
+}
+
+bool is_internal_shell_state_variable(const std::wstring& name) {
+    return name == kGetoptsCursorVar || name == kGetoptsOptindMirrorVar;
 }
 
 std::wstring get_variable_value_with_hooks(const std::wstring& name, bool& is_set) {
@@ -1544,7 +2758,897 @@ std::wstring get_environment_value(const std::wstring& name) {
     return get_system_env_var(name);
 }
 
-// History section: persistence policy, timestamp formatting, and replay limits.
+
+/******************************************************************************
+** End of ksh_variables.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_io.cpp
+******************************************************************************/
+
+
+bool is_custom_fd_in_range(int fd) {
+    return fd >= kMinCustomFd && fd <= kMaxCustomFd;
+}
+
+bool is_valid_handle_value(HANDLE handle) {
+    return handle != nullptr && handle != INVALID_HANDLE_VALUE;
+}
+
+std::array<HANDLE, kCustomFdTableSize> make_invalid_custom_fd_table() {
+    std::array<HANDLE, kCustomFdTableSize> table = {};
+    table.fill(INVALID_HANDLE_VALUE);
+    return table;
+}
+
+HANDLE get_persistent_custom_fd(int fd) {
+    if (!is_custom_fd_in_range(fd)) {
+        return INVALID_HANDLE_VALUE;
+    }
+    return g_custom_fd_table[static_cast<size_t>(fd)];
+}
+
+bool open_redirection_file(const std::wstring& path, DWORD access, DWORD creation, HANDLE& handle) {
+    std::wstring normalized_path = translate_device_path(path);
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = nullptr;
+    sa.bInheritHandle = TRUE;
+
+    handle = CreateFileW(
+        normalized_path.c_str(),
+        access,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &sa,
+        creation,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    return handle != INVALID_HANDLE_VALUE;
+}
+
+bool set_persistent_custom_fd(int fd, HANDLE new_handle, std::wstring& error_message) {
+    if (!is_custom_fd_in_range(fd)) {
+        error_message = L"ksh: custom fd out of range (expected 3-9)";
+        return false;
+    }
+
+    HANDLE& slot = g_custom_fd_table[static_cast<size_t>(fd)];
+    if (is_valid_handle_value(slot)) {
+        CloseHandle(slot);
+    }
+
+    if (is_valid_handle_value(new_handle)) {
+        slot = new_handle;
+    } else {
+        slot = INVALID_HANDLE_VALUE;
+    }
+    return true;
+}
+
+static bool duplicate_handle_for_custom_fd_source(int source_fd, HANDLE& duplicated_handle, std::wstring& error_message) {
+    duplicated_handle = INVALID_HANDLE_VALUE;
+
+    HANDLE source_handle = INVALID_HANDLE_VALUE;
+    if (source_fd == 0) {
+        source_handle = GetStdHandle(STD_INPUT_HANDLE);
+    } else if (source_fd == 1) {
+        source_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    } else if (source_fd == 2) {
+        source_handle = GetStdHandle(STD_ERROR_HANDLE);
+    } else if (is_custom_fd_in_range(source_fd)) {
+        HANDLE persistent = get_persistent_custom_fd(source_fd);
+        if (!is_valid_handle_value(persistent)) {
+            error_message = L"ksh: source custom fd is not open: " + std::to_wstring(source_fd);
+            return false;
+        }
+        source_handle = persistent;
+    } else {
+        error_message = L"ksh: unsupported source fd: " + std::to_wstring(source_fd);
+        return false;
+    }
+
+    if (!is_valid_handle_value(source_handle)) {
+        error_message = L"ksh: source fd is not available: " + std::to_wstring(source_fd);
+        return false;
+    }
+
+    if (!DuplicateHandle(
+            GetCurrentProcess(),
+            source_handle,
+            GetCurrentProcess(),
+            &duplicated_handle,
+            0,
+            TRUE,
+            DUPLICATE_SAME_ACCESS)) {
+        error_message = L"ksh: failed to duplicate fd: " + std::to_wstring(source_fd);
+        return false;
+    }
+
+    return true;
+}
+
+bool close_persistent_custom_fd(int fd, std::wstring& error_message) {
+    return set_persistent_custom_fd(fd, INVALID_HANDLE_VALUE, error_message);
+}
+
+bool duplicate_persistent_custom_fd(int source_fd, int target_fd, std::wstring& error_message) {
+    HANDLE duplicated = INVALID_HANDLE_VALUE;
+    if (!duplicate_handle_for_custom_fd_source(source_fd, duplicated, error_message)) {
+        return false;
+    }
+    return set_persistent_custom_fd(target_fd, duplicated, error_message);
+}
+
+bool has_any_redirection(const RedirectionSpec& redir) {
+    return redir.has_stdin || redir.has_stdout || redir.stdout_to_stderr || redir.has_stderr || redir.stderr_to_stdout || !redir.custom_fd_actions.empty();
+}
+
+bool try_parse_custom_fd_redirection_token(
+    const std::wstring& token,
+    const std::vector<std::wstring>& tokens,
+    size_t& token_index,
+    RedirectionSpec& redir,
+    std::wstring& error_message,
+    bool& handled) {
+    handled = false;
+    if (token.size() < 2 || !std::iswdigit(token[0])) {
+        return true;
+    }
+
+    const int fd = token[0] - L'0';
+    if (!is_custom_fd_in_range(fd)) {
+        return true;
+    }
+
+    std::wstring suffix = token.substr(1);
+    if (suffix.empty() || (suffix[0] != L'>' && suffix[0] != L'<')) {
+        return true;
+    }
+    handled = true;
+
+    auto consume_target = [&](size_t op_len, std::wstring& target_out) -> bool {
+        if (suffix.size() > op_len) {
+            target_out = suffix.substr(op_len);
+            return true;
+        }
+        if (token_index + 1 >= tokens.size()) {
+            return false;
+        }
+        token_index++;
+        target_out = tokens[token_index];
+        return true;
+    };
+
+    if (suffix == L">&-" || suffix == L"<&-") {
+        RedirectionSpec::CustomFdAction action;
+        action.fd = fd;
+        action.kind = RedirectionSpec::CustomFdAction::Kind::Close;
+        redir.custom_fd_actions.push_back(action);
+        return true;
+    }
+
+    if (suffix.rfind(L">&", 0) == 0) {
+        std::wstring source_text;
+        if (!consume_target(2, source_text) || source_text.size() != 1 || !std::iswdigit(source_text[0])) {
+            error_message = L"ksh: invalid custom fd duplication: " + token;
+            return false;
+        }
+
+        RedirectionSpec::CustomFdAction action;
+        action.fd = fd;
+        action.kind = RedirectionSpec::CustomFdAction::Kind::Duplicate;
+        action.duplicate_source_fd = source_text[0] - L'0';
+        redir.custom_fd_actions.push_back(action);
+        return true;
+    }
+
+    std::wstring target_path;
+    if (suffix.rfind(L">>", 0) == 0) {
+        if (!consume_target(2, target_path) || target_path.empty()) {
+            error_message = L"ksh: missing file for custom fd append redirection";
+            return false;
+        }
+        RedirectionSpec::CustomFdAction action;
+        action.fd = fd;
+        action.kind = RedirectionSpec::CustomFdAction::Kind::OpenWriteAppend;
+        action.path = target_path;
+        redir.custom_fd_actions.push_back(action);
+        return true;
+    }
+
+    if (suffix.rfind(L">", 0) == 0) {
+        if (!consume_target(1, target_path) || target_path.empty()) {
+            error_message = L"ksh: missing file for custom fd output redirection";
+            return false;
+        }
+        RedirectionSpec::CustomFdAction action;
+        action.fd = fd;
+        action.kind = RedirectionSpec::CustomFdAction::Kind::OpenWriteTruncate;
+        action.path = target_path;
+        redir.custom_fd_actions.push_back(action);
+        return true;
+    }
+
+    if (suffix.rfind(L"<", 0) == 0) {
+        if (!consume_target(1, target_path) || target_path.empty()) {
+            error_message = L"ksh: missing file for custom fd input redirection";
+            return false;
+        }
+        RedirectionSpec::CustomFdAction action;
+        action.fd = fd;
+        action.kind = RedirectionSpec::CustomFdAction::Kind::OpenRead;
+        action.path = target_path;
+        redir.custom_fd_actions.push_back(action);
+        return true;
+    }
+
+    error_message = L"ksh: unsupported custom fd redirection construct: " + token;
+    return false;
+}
+
+bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redir, std::wstring& error_message) {
+    std::vector<std::wstring> filtered;
+    filtered.reserve(tokens.size());
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const std::wstring& token = tokens[i];
+
+        bool handled_custom_fd = false;
+        if (!try_parse_custom_fd_redirection_token(token, tokens, i, redir, error_message, handled_custom_fd)) {
+            return false;
+        }
+        if (handled_custom_fd) {
+            continue;
+        }
+
+        enum class RedirKind {
+            None,
+            In,
+            OutTrunc,
+            OutAppend,
+            OutToErr,
+            ErrTrunc,
+            ErrAppend,
+            ErrToOut
+        };
+
+        auto classify_token = [&](const std::wstring& value, size_t& operator_len, RedirKind& kind) -> bool {
+            operator_len = 0;
+            kind = RedirKind::None;
+
+            if (value == L"2>&1") {
+                operator_len = value.size();
+                kind = RedirKind::ErrToOut;
+                return true;
+            }
+            if (value == L"1>&2" || value == L">&2") {
+                operator_len = value.size();
+                kind = RedirKind::OutToErr;
+                return true;
+            }
+
+            size_t dup_pos = value.find(L">&");
+            if (dup_pos != std::wstring::npos) {
+                int source_fd = 1;
+                if (dup_pos > 0) {
+                    if (dup_pos > 1 || !std::iswdigit(value[0])) {
+                        return false;
+                    }
+                    source_fd = value[0] - L'0';
+                }
+
+                if (dup_pos + 2 >= value.size() || (dup_pos + 3) != value.size() || !std::iswdigit(value[dup_pos + 2])) {
+                    return false;
+                }
+
+                int target_fd = value[dup_pos + 2] - L'0';
+                if (source_fd == 1 && target_fd == 2) {
+                    operator_len = value.size();
+                    kind = RedirKind::OutToErr;
+                    return true;
+                }
+                if (source_fd == 2 && target_fd == 1) {
+                    operator_len = value.size();
+                    kind = RedirKind::ErrToOut;
+                    return true;
+                }
+
+                if (source_fd == target_fd && (source_fd == 1 || source_fd == 2)) {
+                    operator_len = value.size();
+                    kind = RedirKind::None;
+                    return true;
+                }
+
+                return false;
+            }
+
+            int fd = -1;
+            size_t pos = 0;
+            if (!value.empty() && std::iswdigit(value[0])) {
+                fd = value[0] - L'0';
+                pos = 1;
+            }
+
+            if (pos >= value.size()) {
+                return false;
+            }
+
+            if (value.compare(pos, 2, L">>") == 0) {
+                if (fd == -1 || fd == 1) {
+                    operator_len = pos + 2;
+                    kind = RedirKind::OutAppend;
+                    return true;
+                }
+                if (fd == 2) {
+                    operator_len = pos + 2;
+                    kind = RedirKind::ErrAppend;
+                    return true;
+                }
+                return false;
+            }
+
+            if (value[pos] == L'>') {
+                if (fd == -1 || fd == 1) {
+                    operator_len = pos + 1;
+                    kind = RedirKind::OutTrunc;
+                    return true;
+                }
+                if (fd == 2) {
+                    operator_len = pos + 1;
+                    kind = RedirKind::ErrTrunc;
+                    return true;
+                }
+                return false;
+            }
+
+            if (value[pos] == L'<') {
+                if (fd == -1 || fd == 0 || fd == 1) {
+                    operator_len = pos + 1;
+                    kind = RedirKind::In;
+                    return true;
+                }
+                return false;
+            }
+
+            return false;
+        };
+
+        auto consume_target = [&](size_t operator_len, std::wstring& target_out) -> bool {
+            if (token.size() > operator_len) {
+                target_out = token.substr(operator_len);
+                return true;
+            }
+            if (i + 1 >= tokens.size()) {
+                return false;
+            }
+            i++;
+            target_out = tokens[i];
+            return true;
+        };
+
+        size_t op_len = 0;
+        RedirKind kind = RedirKind::None;
+        if (!classify_token(token, op_len, kind)) {
+            size_t redir_pos = 0;
+            if (!token.empty() && std::iswdigit(token[0])) {
+                redir_pos = 1;
+            }
+
+            if (redir_pos < token.size() && (token[redir_pos] == L'>' || token[redir_pos] == L'<')) {
+                error_message = L"ksh: unsupported or invalid redirection construct: " + token;
+                return false;
+            }
+
+            filtered.push_back(token);
+            continue;
+        }
+
+        std::wstring target;
+        if (kind == RedirKind::None) {
+            continue;
+        }
+
+        if (kind == RedirKind::ErrToOut) {
+            redir.stderr_to_stdout = true;
+            redir.has_stderr = false;
+            redir.append_stderr = false;
+            redir.stderr_path.clear();
+            continue;
+        }
+
+        if (kind == RedirKind::OutToErr) {
+            redir.stdout_to_stderr = true;
+            redir.has_stdout = false;
+            redir.append_stdout = false;
+            redir.stdout_path.clear();
+            continue;
+        }
+
+        if (kind == RedirKind::In) {
+            if (!consume_target(op_len, target)) {
+                error_message = L"ksh: missing file for input redirection";
+                return false;
+            }
+            redir.has_stdin = true;
+            redir.stdin_path = target;
+            continue;
+        }
+
+        if (kind == RedirKind::OutAppend) {
+            if (!consume_target(op_len, target)) {
+                error_message = L"ksh: missing file for output redirection";
+                return false;
+            }
+            redir.has_stdout = true;
+            redir.stdout_to_stderr = false;
+            redir.append_stdout = true;
+            redir.stdout_path = target;
+            continue;
+        }
+
+        if (kind == RedirKind::OutTrunc) {
+            if (!consume_target(op_len, target)) {
+                error_message = L"ksh: missing file for output redirection";
+                return false;
+            }
+            redir.has_stdout = true;
+            redir.stdout_to_stderr = false;
+            redir.append_stdout = false;
+            redir.stdout_path = target;
+            continue;
+        }
+
+        if (kind == RedirKind::ErrAppend) {
+            if (!consume_target(op_len, target)) {
+                error_message = L"ksh: missing file for stderr redirection";
+                return false;
+            }
+            redir.has_stderr = true;
+            redir.stderr_to_stdout = false;
+            redir.append_stderr = true;
+            redir.stderr_path = target;
+            continue;
+        }
+
+        if (kind == RedirKind::ErrTrunc) {
+            if (!consume_target(op_len, target)) {
+                error_message = L"ksh: missing file for stderr redirection";
+                return false;
+            }
+            redir.has_stderr = true;
+            redir.stderr_to_stdout = false;
+            redir.append_stderr = false;
+            redir.stderr_path = target;
+            continue;
+        }
+    }
+
+    if (redir.stdout_to_stderr && (redir.has_stderr || redir.stderr_to_stdout)) {
+        error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
+        return false;
+    }
+    if (redir.stderr_to_stdout && (redir.has_stdout || redir.stdout_to_stderr)) {
+        error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
+        return false;
+    }
+
+    tokens = filtered;
+    return true;
+}
+
+class ScopedCustomFdTransaction {
+public:
+    ScopedCustomFdTransaction(
+        const std::vector<RedirectionSpec::CustomFdAction>& actions,
+        std::wstring& error_message)
+        : committed_(false), ready_(true) {
+        for (const RedirectionSpec::CustomFdAction& action : actions) {
+            if (!is_custom_fd_in_range(action.fd)) {
+                error_message = L"ksh: custom fd out of range (expected 3-9)";
+                ready_ = false;
+                cleanup_saved_handles();
+                return;
+            }
+
+            const size_t slot = static_cast<size_t>(action.fd);
+            if (has_snapshot_[slot]) {
+                continue;
+            }
+            has_snapshot_[slot] = true;
+
+            Snapshot snapshot;
+            snapshot.had_entry = false;
+            snapshot.saved_handle = INVALID_HANDLE_VALUE;
+
+            HANDLE current = g_custom_fd_table[slot];
+            if (is_valid_handle_value(current)) {
+                HANDLE duplicated = INVALID_HANDLE_VALUE;
+                if (!DuplicateHandle(
+                        GetCurrentProcess(),
+                        current,
+                        GetCurrentProcess(),
+                        &duplicated,
+                        0,
+                        TRUE,
+                        DUPLICATE_SAME_ACCESS)) {
+                    error_message = L"ksh: failed to snapshot custom fd: " + std::to_wstring(action.fd);
+                    ready_ = false;
+                    cleanup_saved_handles();
+                    return;
+                }
+
+                snapshot.had_entry = true;
+                snapshot.saved_handle = duplicated;
+            }
+
+            snapshots_[slot] = snapshot;
+        }
+    }
+
+    ~ScopedCustomFdTransaction() {
+        if (!ready_) {
+            return;
+        }
+
+        if (!committed_) {
+            rollback();
+            return;
+        }
+
+        cleanup_saved_handles();
+    }
+
+    bool ready() const {
+        return ready_;
+    }
+
+    void commit() {
+        committed_ = true;
+    }
+
+private:
+    struct Snapshot {
+        bool had_entry;
+        HANDLE saved_handle;
+    };
+
+    void rollback() {
+        for (int fd = kMinCustomFd; fd <= kMaxCustomFd; ++fd) {
+            const size_t slot = static_cast<size_t>(fd);
+            if (!has_snapshot_[slot]) {
+                continue;
+            }
+
+            Snapshot& snapshot = snapshots_[slot];
+            if (is_valid_handle_value(g_custom_fd_table[slot])) {
+                CloseHandle(g_custom_fd_table[slot]);
+            }
+
+            if (snapshot.had_entry && is_valid_handle_value(snapshot.saved_handle)) {
+                g_custom_fd_table[slot] = snapshot.saved_handle;
+                snapshot.saved_handle = INVALID_HANDLE_VALUE;
+            } else {
+                g_custom_fd_table[slot] = INVALID_HANDLE_VALUE;
+            }
+        }
+    }
+
+    void cleanup_saved_handles() {
+        for (int fd = kMinCustomFd; fd <= kMaxCustomFd; ++fd) {
+            const size_t slot = static_cast<size_t>(fd);
+            if (!has_snapshot_[slot]) {
+                continue;
+            }
+
+            HANDLE& handle = snapshots_[slot].saved_handle;
+            if (is_valid_handle_value(handle)) {
+                CloseHandle(handle);
+                handle = INVALID_HANDLE_VALUE;
+            }
+        }
+    }
+
+    std::array<Snapshot, kCustomFdTableSize> snapshots_ = {};
+    std::array<bool, kCustomFdTableSize> has_snapshot_ = {};
+    bool committed_;
+    bool ready_;
+};
+
+static bool is_custom_fd_source_available_preflight(int source_fd, const std::array<bool, kCustomFdTableSize>& simulated_custom_open) {
+    if (is_custom_fd_in_range(source_fd)) {
+        return simulated_custom_open[static_cast<size_t>(source_fd)];
+    }
+
+    HANDLE source_handle = INVALID_HANDLE_VALUE;
+    if (source_fd == 0) {
+        source_handle = GetStdHandle(STD_INPUT_HANDLE);
+    } else if (source_fd == 1) {
+        source_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    } else if (source_fd == 2) {
+        source_handle = GetStdHandle(STD_ERROR_HANDLE);
+    } else {
+        return false;
+    }
+
+    return source_handle != nullptr && source_handle != INVALID_HANDLE_VALUE;
+}
+
+static bool preflight_validate_persistent_custom_fd_actions(
+    const std::vector<RedirectionSpec::CustomFdAction>& actions,
+    std::wstring& error_message) {
+    std::array<bool, kCustomFdTableSize> simulated_custom_open = {};
+    for (int fd = kMinCustomFd; fd <= kMaxCustomFd; ++fd) {
+        simulated_custom_open[static_cast<size_t>(fd)] =
+            is_valid_handle_value(g_custom_fd_table[static_cast<size_t>(fd)]);
+    }
+
+    for (const RedirectionSpec::CustomFdAction& action : actions) {
+        if (!is_custom_fd_in_range(action.fd)) {
+            error_message = L"ksh: custom fd out of range (expected 3-9)";
+            return false;
+        }
+
+        if (action.kind == RedirectionSpec::CustomFdAction::Kind::Close) {
+            simulated_custom_open[static_cast<size_t>(action.fd)] = false;
+            continue;
+        }
+
+        if (action.kind == RedirectionSpec::CustomFdAction::Kind::Duplicate) {
+            if (!is_custom_fd_source_available_preflight(action.duplicate_source_fd, simulated_custom_open)) {
+                if (action.duplicate_source_fd >= 3 && action.duplicate_source_fd <= 9) {
+                    error_message = L"ksh: source custom fd is not open: " + std::to_wstring(action.duplicate_source_fd);
+                } else {
+                    error_message = L"ksh: source fd is not available: " + std::to_wstring(action.duplicate_source_fd);
+                }
+                return false;
+            }
+            simulated_custom_open[static_cast<size_t>(action.fd)] = true;
+            continue;
+        }
+
+        // Open actions conceptually make the destination fd available once applied.
+        simulated_custom_open[static_cast<size_t>(action.fd)] = true;
+    }
+
+    return true;
+}
+
+bool apply_persistent_custom_fd_actions(const RedirectionSpec& redir, std::wstring& error_message) {
+    if (!preflight_validate_persistent_custom_fd_actions(redir.custom_fd_actions, error_message)) {
+        return false;
+    }
+
+    ScopedCustomFdTransaction transaction(redir.custom_fd_actions, error_message);
+    if (!transaction.ready()) {
+        return false;
+    }
+
+    for (const RedirectionSpec::CustomFdAction& action : redir.custom_fd_actions) {
+        if (action.fd < 3 || action.fd > 9) {
+            error_message = L"ksh: custom fd out of range (expected 3-9)";
+            return false;
+        }
+
+        if (action.kind == RedirectionSpec::CustomFdAction::Kind::Close) {
+            if (!set_persistent_custom_fd(action.fd, INVALID_HANDLE_VALUE, error_message)) {
+                return false;
+            }
+            continue;
+        }
+
+        HANDLE new_handle = INVALID_HANDLE_VALUE;
+        if (action.kind == RedirectionSpec::CustomFdAction::Kind::OpenRead) {
+            if (!open_redirection_file(action.path, GENERIC_READ, OPEN_EXISTING, new_handle)) {
+                error_message = L"ksh: failed opening custom fd input file: " + action.path;
+                return false;
+            }
+        } else if (action.kind == RedirectionSpec::CustomFdAction::Kind::OpenWriteTruncate) {
+            if (!open_redirection_file(action.path, GENERIC_WRITE, CREATE_ALWAYS, new_handle)) {
+                error_message = L"ksh: failed opening custom fd output file: " + action.path;
+                return false;
+            }
+        } else if (action.kind == RedirectionSpec::CustomFdAction::Kind::OpenWriteAppend) {
+            if (!open_redirection_file(action.path, GENERIC_WRITE, OPEN_ALWAYS, new_handle)) {
+                error_message = L"ksh: failed opening custom fd append file: " + action.path;
+                return false;
+            }
+            SetFilePointer(new_handle, 0, nullptr, FILE_END);
+        } else if (action.kind == RedirectionSpec::CustomFdAction::Kind::Duplicate) {
+            if (!duplicate_handle_for_custom_fd_source(action.duplicate_source_fd, new_handle, error_message)) {
+                return false;
+            }
+        }
+
+        if (!set_persistent_custom_fd(action.fd, new_handle, error_message)) {
+            if (new_handle != nullptr && new_handle != INVALID_HANDLE_VALUE) {
+                CloseHandle(new_handle);
+            }
+            return false;
+        }
+    }
+
+    transaction.commit();
+    return true;
+}
+
+bool setup_redirection_handles(
+    const RedirectionSpec* redir,
+    HANDLE& std_in,
+    HANDLE& std_out,
+    HANDLE& std_err,
+    bool& close_in,
+    bool& close_out,
+    bool& close_err) {
+    std_in = (g_pipeline_stdin != INVALID_HANDLE_VALUE) ? g_pipeline_stdin : GetStdHandle(STD_INPUT_HANDLE);
+    std_out = (g_pipeline_stdout != INVALID_HANDLE_VALUE)
+        ? g_pipeline_stdout
+        : ((g_subshell_stdout != INVALID_HANDLE_VALUE) ? g_subshell_stdout : GetStdHandle(STD_OUTPUT_HANDLE));
+    std_err = (g_pipeline_stderr != INVALID_HANDLE_VALUE) ? g_pipeline_stderr : GetStdHandle(STD_ERROR_HANDLE);
+    close_in = false;
+    close_out = false;
+    close_err = false;
+
+    if (redir == nullptr || !has_any_redirection(*redir)) {
+        return true;
+    }
+
+    if ((redir->stderr_to_stdout && redir->has_stderr) ||
+        (redir->stdout_to_stderr && redir->has_stdout) ||
+        (redir->stderr_to_stdout && redir->stdout_to_stderr)) {
+        return false;
+    }
+
+    if (redir->has_stdin) {
+        if (!open_redirection_file(redir->stdin_path, GENERIC_READ, OPEN_EXISTING, std_in)) {
+            return false;
+        }
+        close_in = true;
+    }
+
+    if (redir->has_stdout) {
+        const DWORD creation = redir->append_stdout ? OPEN_ALWAYS : CREATE_ALWAYS;
+        if (!open_redirection_file(redir->stdout_path, GENERIC_WRITE, creation, std_out)) {
+            if (close_in) CloseHandle(std_in);
+            return false;
+        }
+        if (redir->append_stdout) {
+            SetFilePointer(std_out, 0, nullptr, FILE_END);
+        }
+        close_out = true;
+    }
+
+    if (redir->has_stderr) {
+        const DWORD creation = redir->append_stderr ? OPEN_ALWAYS : CREATE_ALWAYS;
+        if (!open_redirection_file(redir->stderr_path, GENERIC_WRITE, creation, std_err)) {
+            if (close_in) CloseHandle(std_in);
+            if (close_out) CloseHandle(std_out);
+            return false;
+        }
+        if (redir->append_stderr) {
+            SetFilePointer(std_err, 0, nullptr, FILE_END);
+        }
+        close_err = true;
+    }
+
+    if (redir->stderr_to_stdout) {
+        std_err = std_out;
+        close_err = false;
+    }
+
+    if (redir->stdout_to_stderr) {
+        std_out = std_err;
+        close_out = false;
+    }
+
+    return true;
+}
+
+void close_redirection_handles(HANDLE std_in, HANDLE std_out, HANDLE std_err, bool close_in, bool close_out, bool close_err) {
+    if (close_in && std_in != nullptr && std_in != INVALID_HANDLE_VALUE) {
+        CloseHandle(std_in);
+    }
+
+    if (std_out == std_err && std_out != nullptr && std_out != INVALID_HANDLE_VALUE) {
+        if (close_out || close_err) {
+            CloseHandle(std_out);
+        }
+        return;
+    }
+
+    if (close_out && std_out != nullptr && std_out != INVALID_HANDLE_VALUE) {
+        CloseHandle(std_out);
+    }
+    if (close_err && std_err != nullptr && std_err != INVALID_HANDLE_VALUE) {
+        CloseHandle(std_err);
+    }
+}
+
+std::wstring translate_device_path(const std::wstring& path) {
+    std::wstring norm_path = path;
+    for (auto& ch : norm_path) {
+        if (ch == L'\\') ch = L'/';
+    }
+    if (norm_path == L"/dev/null") {
+        return L"NUL";
+    }
+    if (norm_path == L"/dev/stdout" || norm_path == L"/dev/stderr") {
+        return L"CONOUT$";
+    }
+    if (norm_path == L"/dev/stdin") {
+        return L"CONIN$";
+    }
+    return path;
+}
+
+bool write_text_with_stdout_redirection(const std::wstring& text, const RedirectionSpec& redir) {
+    if (redir.stdout_to_stderr) {
+        if (g_pipeline_stderr != INVALID_HANDLE_VALUE) {
+            int byte_count = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+            if (byte_count > 0) {
+                std::string bytes(static_cast<size_t>(byte_count), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), &bytes[0], byte_count, nullptr, nullptr);
+                DWORD written = 0;
+                return WriteFile(g_pipeline_stderr, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE;
+            }
+        }
+        std::wcerr << text;
+        return true;
+    }
+
+    if (!redir.has_stdout) {
+        if (g_pipeline_stdout != INVALID_HANDLE_VALUE) {
+            int byte_count = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+            if (byte_count > 0) {
+                std::string bytes(static_cast<size_t>(byte_count), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), &bytes[0], byte_count, nullptr, nullptr);
+                DWORD written = 0;
+                return WriteFile(g_pipeline_stdout, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE;
+            }
+        }
+        std::wcout << text;
+        return true;
+    }
+
+    std::wstring target_path = translate_device_path(redir.stdout_path);
+    std::wofstream out_file;
+    if (redir.append_stdout) {
+        out_file.open(target_path.c_str(), std::ios::app);
+    } else {
+        out_file.open(target_path.c_str(), std::ios::trunc);
+    }
+
+    if (!out_file.is_open()) {
+        std::wcerr << L"ksh: failed to open output file: " << redir.stdout_path << L"\n";
+        return false;
+    }
+
+    out_file << text;
+    return true;
+}
+
+/******************************************************************************
+** End of ksh_io.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_startup.cpp
+******************************************************************************/
+
+
+std::wstring get_history_control_value(const std::wstring& name) {
+    std::map<std::wstring, std::wstring>::const_iterator it = ksh_env.variables.find(name);
+    if (it != ksh_env.variables.end()) {
+        return it->second;
+    }
+
+    return get_system_env_var(name);
+}
+
+bool history_timestamps_enabled() {
+    return !trim_copy(get_history_control_value(L"HISTTIMEFORMAT")).empty();
+}
+
 bool history_dedupe_enabled() {
     std::wstring value = trim_copy(get_history_control_value(L"HISTCONTROL"));
     if (value.empty()) {
@@ -1710,6 +3814,69 @@ bool append_history_entry(const std::wstring& command_line) {
     return true;
 }
 
+bool resolve_history_recall(const std::wstring& input, std::wstring& resolved) {
+    resolved = input;
+    if (input.empty() || input[0] != L'!') {
+        return true;
+    }
+
+    if (input == L"!!") {
+        if (g_command_history.empty()) {
+            std::wcerr << L"ksh: history empty\n";
+            return false;
+        }
+        resolved = g_command_history.back().command;
+        return true;
+    }
+
+    if (input.size() > 1 && input[1] == L'-') {
+        unsigned long rel = 0;
+        if (!try_parse_unsigned_long_strict(input.substr(2), rel)) {
+            std::wcerr << L"ksh: invalid history reference\n";
+            return false;
+        }
+        if (rel == 0 || rel > g_command_history.size()) {
+            std::wcerr << L"ksh: history event not found\n";
+            return false;
+        }
+        resolved = g_command_history[g_command_history.size() - static_cast<size_t>(rel)].command;
+        return true;
+    }
+
+    bool numeric = input.size() > 1;
+    for (size_t i = 1; i < input.size(); ++i) {
+        if (!std::iswdigit(input[i])) {
+            numeric = false;
+            break;
+        }
+    }
+
+    if (numeric) {
+        unsigned long index = 0;
+        if (!try_parse_unsigned_long_strict(input.substr(1), index)) {
+            std::wcerr << L"ksh: invalid history reference\n";
+            return false;
+        }
+        if (index == 0 || index > g_command_history.size()) {
+            std::wcerr << L"ksh: history event not found\n";
+            return false;
+        }
+        resolved = g_command_history[static_cast<size_t>(index - 1)].command;
+        return true;
+    }
+
+    std::wstring prefix = input.substr(1);
+    for (size_t i = g_command_history.size(); i > 0; --i) {
+        if (starts_with_case_insensitive(g_command_history[i - 1].command, prefix)) {
+            resolved = g_command_history[i - 1].command;
+            return true;
+        }
+    }
+
+    std::wcerr << L"ksh: history event not found\n";
+    return false;
+}
+
 void load_command_history_from_file() {
     g_history_file_path = resolve_history_file_path();
 
@@ -1868,40 +4035,192 @@ void print_version_text(const std::function<bool(const std::wstring&)>& write_ou
     write_output(out);
 }
 
-void initialize_default_shell_aliases() {
-    if (g_main_aliases.empty()) {
-        g_main_aliases[L"integer"] = L"typeset -i";
-        g_main_aliases[L"float"] = L"typeset -E";
-        g_main_aliases[L"nameref"] = L"typeset -n";
-        g_main_aliases[L"functions"] = L"typeset -f";
-        g_main_aliases[L"autoload"] = L"typeset -fu";
-        g_main_aliases[L"compound"] = L"typeset -C";
-        g_main_aliases[L"history"] = L"fc -l";
-        g_main_aliases[L"r"] = L"fc -s";
-        g_main_aliases[L"type"] = L"whence -v";
-    }
-}
 
 void print_startup_system_info() {
     std::wcout << L"CrossShellKSH v3.1.16-2026" << std::endl;
 }
 
-std::wstring longest_common_prefix_case_insensitive(const std::vector<std::wstring>& values) {
-    if (values.empty()) {
-        return L"";
+void append_command_to_history_file(const std::wstring& command) {
+    append_history_entry_to_file(command);
+}
+
+bool file_exists_regular(const std::wstring& path) {
+    DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+bool ensure_default_home_kshrc_exists(const std::wstring& profile_path) {
+    if (profile_path.empty()) {
+        return false;
     }
 
-    std::wstring prefix = values[0];
-    for (size_t i = 1; i < values.size() && !prefix.empty(); ++i) {
-        size_t common = 0;
-        size_t limit = (prefix.size() < values[i].size()) ? prefix.size() : values[i].size();
-        while (common < limit && std::towlower(prefix[common]) == std::towlower(values[i][common])) {
-            common++;
-        }
-        prefix = prefix.substr(0, common);
+    DWORD attributes = GetFileAttributesW(profile_path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES) {
+        return (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
     }
-    return prefix;
+
+    std::ofstream profile_file(profile_path.c_str(), std::ios::binary);
+    if (!profile_file.is_open()) {
+        std::wcerr << L"ksh: warning: could not create startup profile: " << profile_path << L"\n";
+        return false;
+    }
+
+    const char* default_profile =
+        "# ksh startup profile (.kshrc)\n"
+        "# This file is loaded automatically when ksh starts.\n"
+        "# Add aliases, variables, and shell functions here.\n"
+        "\n"
+        "# Prompt customization tokens for PS1:\n"
+        "#   %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent\n"
+        "# Example:\n"
+        "# PS1='%u@%d %w %# '\n"
+        "# alias ll='dir'\n";
+    profile_file.write(default_profile, static_cast<std::streamsize>(std::strlen(default_profile)));
+    if (!profile_file.good()) {
+        std::wcerr << L"ksh: warning: failed writing startup profile: " << profile_path << L"\n";
+        return false;
+    }
+
+    return true;
 }
+
+std::wstring get_default_startup_profile_path() {
+    wchar_t userprofile_path[MAX_PATH];
+    DWORD userprofile_len = GetEnvironmentVariableW(L"USERPROFILE", userprofile_path, MAX_PATH);
+    if (userprofile_len > 0 && userprofile_len < MAX_PATH) {
+        std::wstring candidate = std::wstring(userprofile_path) + L"\\.kshrc";
+        if (file_exists_regular(candidate) || ensure_default_home_kshrc_exists(candidate)) {
+            return candidate;
+        }
+    }
+
+    // Legacy fallback for existing installs that use the AppData profile path.
+    wchar_t appdata_path[MAX_PATH];
+    DWORD appdata_len = GetEnvironmentVariableW(L"APPDATA", appdata_path, MAX_PATH);
+    if (appdata_len > 0 && appdata_len < MAX_PATH) {
+        std::wstring candidate = std::wstring(appdata_path) + L"\\ksh_profile.ksh";
+        if (file_exists_regular(candidate)) {
+            return candidate;
+        }
+    }
+
+    return L"";
+}
+
+bool load_startup_profile(const StartupOptions& options, bool& should_exit_shell) {
+    if (options.disable_profile) {
+        return true;
+    }
+
+    std::wstring profile_path;
+    if (options.profile_override_set) {
+        profile_path = trim_copy(options.profile_override_path);
+        if (profile_path.empty()) {
+            return true;
+        }
+    } else {
+        profile_path = get_default_startup_profile_path();
+        if (profile_path.empty()) {
+            return true;
+        }
+    }
+
+    if (!file_exists_regular(profile_path)) {
+        if (options.profile_override_set) {
+            std::wcerr << L"ksh: cannot open startup profile: " << profile_path << L"\n";
+        }
+        return true;
+    }
+
+    std::vector<std::wstring> empty_args;
+    if (!execute_script_file(profile_path, empty_args, should_exit_shell)) {
+        std::wcerr << L"ksh: startup profile reported an error: " << profile_path << L"\n";
+    }
+
+    return true;
+}
+
+// Startup section: command-line option parsing and shell bootstrap.
+bool parse_startup_arguments(int argc, wchar_t* argv[], StartupOptions& options, int& first_positional_index, bool& show_help, bool& show_version) {
+    first_positional_index = argc;
+
+    for (int i = 1; i < argc; ++i) {
+        std::wstring arg = argv[i];
+
+        if (arg == L"--") {
+            first_positional_index = i + 1;
+            return true;
+        }
+
+        if (arg == L"-c") {
+            if (i + 1 >= argc) {
+                std::wcerr << L"ksh: -c requires a command string\n";
+                return false;
+            }
+            options.command_string_set = true;
+            options.command_string = argv[++i];
+            first_positional_index = i + 1;
+            return true;
+        }
+
+        if (arg == L"--script-test") {
+            if (i + 1 >= argc) {
+                std::wcerr << L"ksh: --script-test requires a script path\n";
+                return false;
+            }
+            options.script_test_set = true;
+            options.script_test_path = argv[++i];
+            options.disable_profile = true;
+            first_positional_index = i + 1;
+            return true;
+        }
+
+        if (arg == L"-h" || arg == L"--help") {
+            show_help = true;
+            continue;
+        }
+
+        if (arg == L"--version") {
+            show_version = true;
+            continue;
+        }
+
+        if (arg == L"--no-profile") {
+            options.disable_profile = true;
+            continue;
+        }
+
+        if (arg == L"--profile") {
+            if (i + 1 >= argc) {
+                std::wcerr << L"ksh: --profile requires a file path\n";
+                return false;
+            }
+            options.profile_override_set = true;
+            options.profile_override_path = argv[++i];
+            continue;
+        }
+
+        if (arg.rfind(L"--profile=", 0) == 0) {
+            options.profile_override_set = true;
+            options.profile_override_path = arg.substr(10);
+            continue;
+        }
+
+        first_positional_index = i;
+        return true;
+    }
+
+    return true;
+}
+
+/******************************************************************************
+** End of ksh_startup.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_parser.cpp
+******************************************************************************/
+
 
 std::wstring to_lower_copy(const std::wstring& value) {
     return to_lower_copy(std::wstring_view(value));
@@ -1937,15 +4256,5614 @@ bool starts_with_case_insensitive(std::wstring_view value, std::wstring_view pre
     return true;
 }
 
-std::wstring get_status_value(const std::wstring& default_value) {
-    std::map<std::wstring, std::wstring>::const_iterator status_it = ksh_env.variables.find(L"?");
-    if (status_it != ksh_env.variables.end()) {
-        return status_it->second;
+bool ends_with_case_insensitive(const std::wstring& value, const std::wstring& suffix) {
+    if (suffix.size() > value.size()) {
+        return false;
     }
-    return default_value;
+
+    const size_t offset = value.size() - suffix.size();
+    for (size_t i = 0; i < suffix.size(); ++i) {
+        if (std::towlower(value[offset + i]) != std::towlower(suffix[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
-bool contains_whitespace(const std::wstring& value) {
+std::wstring trim_copy(const std::wstring& value) {
+    return trim_copy(std::wstring_view(value));
+}
+
+std::wstring trim_copy(std::wstring_view value) {
+    const std::wstring_view whitespace = L" \t\r\n";
+    const size_t start = value.find_first_not_of(whitespace);
+    if (start == std::wstring::npos) {
+        return L"";
+    }
+    const size_t end = value.find_last_not_of(whitespace);
+    return std::wstring(value.substr(start, end - start + 1));
+}
+
+std::wstring decode_multibyte(const std::string& input, UINT code_page) {
+    if (input.empty()) {
+        return L"";
+    }
+
+    if (input.size() > static_cast<size_t>(INT_MAX)) {
+        return L"";
+    }
+
+    const int input_len = static_cast<int>(input.size());
+    DWORD flags = (code_page == CP_UTF8) ? MB_ERR_INVALID_CHARS : 0;
+
+    int wide_len = MultiByteToWideChar(code_page, flags, input.data(), input_len, nullptr, 0);
+    if (wide_len <= 0 && flags != 0) {
+        wide_len = MultiByteToWideChar(code_page, 0, input.data(), input_len, nullptr, 0);
+    }
+    if (wide_len <= 0) {
+        return L"";
+    }
+
+    std::wstring output(static_cast<size_t>(wide_len), L'\0');
+    if (!MultiByteToWideChar(code_page, 0, input.data(), input_len, &output[0], wide_len)) {
+        return L"";
+    }
+    return output;
+}
+
+bool try_parse_int_strict(const std::wstring& raw, int& parsed_value) {
+    if (raw.empty()) {
+        return false;
+    }
+
+    wchar_t* end_ptr = nullptr;
+    errno = 0;
+    long parsed = std::wcstol(raw.c_str(), &end_ptr, 10);
+    if (errno != 0 || end_ptr == raw.c_str() || (end_ptr != nullptr && *end_ptr != L'\0')) {
+        return false;
+    }
+    if (parsed < static_cast<long>(INT_MIN) || parsed > static_cast<long>(INT_MAX)) {
+        return false;
+    }
+
+    parsed_value = static_cast<int>(parsed);
+    return true;
+}
+
+bool try_parse_unsigned_long_strict(const std::wstring& raw, unsigned long& parsed_value) {
+    if (raw.empty()) {
+        return false;
+    }
+
+    wchar_t* end_ptr = nullptr;
+    errno = 0;
+    unsigned long parsed = std::wcstoul(raw.c_str(), &end_ptr, 10);
+    if (errno != 0 || end_ptr == raw.c_str() || (end_ptr != nullptr && *end_ptr != L'\0')) {
+        return false;
+    }
+
+    parsed_value = parsed;
+    return true;
+}
+
+bool try_parse_positive_int_strict(const std::wstring& raw, int& parsed_value) {
+    if (!try_parse_int_strict(raw, parsed_value)) {
+        return false;
+    }
+    return parsed_value > 0;
+}
+
+bool parse_positive_int(const std::wstring& text, int& value) {
+    if (!try_parse_positive_int_strict(text, value)) {
+        return false;
+    }
+    return value > 0;
+}
+
+bool try_parse_strict_double(const std::wstring& token, double& value) {
+    if (token.empty()) {
+        return false;
+    }
+
+    wchar_t* end_ptr = nullptr;
+    value = std::wcstod(token.c_str(), &end_ptr);
+    return end_ptr != token.c_str() && end_ptr != nullptr && *end_ptr == L'\0';
+}
+
+bool is_valid_shell_identifier(const std::wstring& name) {
+    if (name.empty()) {
+        return false;
+    }
+    if (name[0] == L'.') {
+        if (name.size() < 2) return false;
+        return std::all_of(name.begin() + 1, name.end(), [](wchar_t ch) {
+            return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.';
+        });
+    }
+    if (!(std::iswalpha(name[0]) || name[0] == L'_')) {
+        return false;
+    }
+    return std::all_of(name.begin(), name.end(), [](wchar_t ch) {
+        return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.';
+    });
+}
+
+bool validate_shell_lexical_state(const std::wstring& input, std::wstring& error_message) {
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+
+    for (wchar_t ch : input) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch == L'\\' && !in_single_quotes) {
+            escaped = true;
+            continue;
+        }
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+        } else if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+        }
+    }
+
+    if (in_single_quotes || in_double_quotes) {
+        error_message = L"ksh: syntax error: unterminated quote";
+        return false;
+    }
+    if (escaped) {
+        const std::wstring trimmed = trim_copy(input);
+        const size_t command_end = trimmed.find_first_of(L" \t");
+        const std::wstring command = trimmed.substr(0, command_end);
+        if ((command == L"cd" || command == L"cp" || command == L"mv" || command == L"ls") &&
+            trimmed.size() > command.size() && trimmed.back() == L'\\') {
+            return true;
+        }
+        error_message = L"ksh: syntax error: trailing escape";
+        return false;
+    }
+    return true;
+}
+
+bool has_unquoted_shell_metacharacters(const std::wstring& input) {
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+    int paren_depth = 0;
+
+    for (wchar_t ch : input) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            escaped = true;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            continue;
+        }
+
+        if (!in_single_quotes && !in_double_quotes) {
+            if (ch == L'(') {
+                paren_depth++;
+            } else if (ch == L')') {
+                if (paren_depth > 0) paren_depth--;
+            } else if (paren_depth == 0 && (ch == L'>' || ch == L'<' || ch == L'&' || ch == L'|' || ch == L';')) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+std::wstring remove_quotes_and_escapes_from_token(const std::wstring& token) {
+    std::wstring result;
+    bool in_double_quotes = false;
+    bool in_single_quotes = false;
+
+    for (size_t i = 0; i < token.size(); ++i) {
+        wchar_t ch = token[i];
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            if (i + 1 >= token.size()) {
+                result += ch;
+                continue;
+            }
+
+            wchar_t next = token[i + 1];
+            if (!in_double_quotes) {
+                if (std::iswspace(next) || next == L'\\' || next == L'"' || next == L'\'' || next == L'$' ||
+                    next == L'`' || next == L'|' || next == L'&' || next == L';' || next == L'<' ||
+                    next == L'>' || next == L'(' || next == L')') {
+                    result += next;
+                    i++;
+                    continue;
+                }
+
+                result += ch;
+                continue;
+            }
+
+            if (next == L'\\' || next == L'"' || next == L'$' || next == L'`' || next == L'\n') {
+                result += next;
+                i++;
+                continue;
+            }
+
+            result += ch;
+            continue;
+        }
+
+        result += ch;
+    }
+
+    return result;
+}
+
+std::vector<std::wstring> remove_quotes_and_escapes_from_tokens(const std::vector<std::wstring>& tokens) {
+    std::vector<std::wstring> stripped;
+    stripped.reserve(tokens.size());
+    for (const std::wstring& token : tokens) {
+        stripped.push_back(remove_quotes_and_escapes_from_token(token));
+    }
+    return stripped;
+}
+
+bool has_glob_metacharacters(const std::wstring& value) {
+    if (value.find_first_of(L"*?[") != std::wstring::npos) {
+        return true;
+    }
+    return value.find(L"+(") != std::wstring::npos ||
+           value.find(L"@(") != std::wstring::npos ||
+           value.find(L"!(") != std::wstring::npos;
+}
+
+bool has_unquoted_glob_metacharacters(const std::wstring& token) {
+    bool in_double_quotes = false;
+    bool in_single_quotes = false;
+    bool escaped = false;
+
+    for (size_t i = 0; i < token.size(); ++i) {
+        wchar_t ch = token[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            escaped = true;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            continue;
+        }
+
+        if (!in_double_quotes && !in_single_quotes) {
+            if (ch == L'*' || ch == L'?' || ch == L'[') {
+                return true;
+            }
+            if (ch == L'+' || ch == L'@' || ch == L'!') {
+                if (i + 1 < token.size() && token[i + 1] == L'(') {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool contains_unquoted_wildcards(const std::wstring& token) {
+    return has_unquoted_glob_metacharacters(token);
+}
+
+bool match_glob_character_class(const std::wstring& pattern, size_t class_start, wchar_t candidate, size_t& consumed_length, bool case_sensitive) {
+    consumed_length = 0;
+    if (class_start >= pattern.size() || pattern[class_start] != L'[') {
+        return false;
+    }
+
+    size_t i = class_start + 1;
+    bool negate = false;
+    if (i < pattern.size() && (pattern[i] == L'!' || pattern[i] == L'^')) {
+        negate = true;
+        i++;
+    }
+
+    bool matched = false;
+    bool saw_item = false;
+    while (i < pattern.size() && pattern[i] != L']') {
+        wchar_t left = pattern[i];
+        if ((i + 2) < pattern.size() && pattern[i + 1] == L'-' && pattern[i + 2] != L']') {
+            wchar_t right = pattern[i + 2];
+            if (case_sensitive) {
+                if (left <= candidate && candidate <= right) {
+                    matched = true;
+                }
+            } else {
+                wchar_t lower_candidate = static_cast<wchar_t>(std::towlower(candidate));
+                wchar_t lower_left = static_cast<wchar_t>(std::towlower(left));
+                wchar_t lower_right = static_cast<wchar_t>(std::towlower(right));
+                if (lower_left <= lower_candidate && lower_candidate <= lower_right) {
+                    matched = true;
+                }
+            }
+            i += 3;
+            saw_item = true;
+            continue;
+        }
+
+        if (case_sensitive ? (left == candidate) : (std::towlower(left) == std::towlower(candidate))) {
+            matched = true;
+        }
+        i++;
+        saw_item = true;
+    }
+
+    if (i >= pattern.size() || pattern[i] != L']' || !saw_item) {
+        return false;
+    }
+
+    consumed_length = (i - class_start) + 1;
+    return negate ? !matched : matched;
+}
+
+bool parse_extended_glob(const std::wstring& pattern, size_t ext_start, size_t& ext_end, std::vector<std::wstring>& sub_patterns) {
+    if (ext_start + 2 >= pattern.size() || pattern[ext_start + 1] != L'(') {
+        return false;
+    }
+
+    size_t i = ext_start + 2;
+    int paren_level = 1;
+    std::wstring current;
+    std::vector<std::wstring> parts;
+
+    bool in_double_quotes = false;
+    bool in_single_quotes = false;
+    bool escaped = false;
+
+    while (i < pattern.size()) {
+        wchar_t ch = pattern[i];
+
+        if (escaped) {
+            current += L'\\';
+            current += ch;
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            current += ch;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            current += ch;
+            i++;
+            continue;
+        }
+
+        if (!in_double_quotes && !in_single_quotes) {
+            if (ch == L'(') {
+                paren_level++;
+            } else if (ch == L')') {
+                paren_level--;
+                if (paren_level == 0) {
+                    parts.push_back(current);
+                    ext_end = i;
+                    sub_patterns = parts;
+                    return true;
+                }
+            } else if (ch == L'|' && paren_level == 1) {
+                parts.push_back(current);
+                current.clear();
+                i++;
+                continue;
+            }
+        }
+
+        current += ch;
+        i++;
+    }
+
+    return false;
+}
+
+bool match_glob_pattern_recursive(
+    const std::wstring& pattern,
+    size_t pattern_index,
+    const std::wstring& candidate,
+    size_t candidate_index,
+    bool case_sensitive,
+    unsigned long long& step_budget) {
+    if (step_budget == 0) {
+        return false;
+    }
+    step_budget--;
+
+    while (pattern_index < pattern.size()) {
+        wchar_t p = pattern[pattern_index];
+
+        bool is_ext_glob = false;
+        if (pattern_index + 1 < pattern.size() && pattern[pattern_index + 1] == L'(') {
+            if (p == L'+' || p == L'*' || p == L'?' || p == L'@' || p == L'!') {
+                is_ext_glob = true;
+            }
+        }
+
+        if (is_ext_glob) {
+            size_t ext_end = 0;
+            std::vector<std::wstring> sub_patterns;
+            if (parse_extended_glob(pattern, pattern_index, ext_end, sub_patterns)) {
+                std::wstring remaining_pattern = pattern.substr(ext_end + 1);
+                wchar_t op = p;
+
+                if (op == L'?') {
+                    if (match_glob_pattern_recursive(remaining_pattern, 0, candidate, candidate_index, case_sensitive, step_budget)) {
+                        return true;
+                    }
+                    for (const auto& sub : sub_patterns) {
+                        std::wstring temp = sub + remaining_pattern;
+                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                if (op == L'@') {
+                    for (const auto& sub : sub_patterns) {
+                        std::wstring temp = sub + remaining_pattern;
+                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                if (op == L'*') {
+                    if (match_glob_pattern_recursive(remaining_pattern, 0, candidate, candidate_index, case_sensitive, step_budget)) {
+                        return true;
+                    }
+                    std::wstring ext_glob_part = pattern.substr(pattern_index, ext_end - pattern_index + 1);
+                    for (const auto& sub : sub_patterns) {
+                        std::wstring temp = sub + ext_glob_part + remaining_pattern;
+                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                if (op == L'+') {
+                    std::wstring star_glob_part = L"*" + pattern.substr(pattern_index + 1, ext_end - pattern_index);
+                    for (const auto& sub : sub_patterns) {
+                        std::wstring temp = sub + star_glob_part + remaining_pattern;
+                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                if (op == L'!') {
+                    size_t max_L = candidate.size() - candidate_index;
+                    for (size_t L = 0; L <= max_L; ++L) {
+                        std::wstring candidate_prefix = candidate.substr(candidate_index, L);
+                        bool matches_any = false;
+                        for (const auto& sub : sub_patterns) {
+                            unsigned long long local_budget = step_budget;
+                            if (match_glob_pattern_recursive(sub, 0, candidate_prefix, 0, case_sensitive, local_budget)) {
+                                matches_any = true;
+                                break;
+                            }
+                        }
+
+                        if (!matches_any) {
+                            if (match_glob_pattern_recursive(remaining_pattern, 0, candidate, candidate_index + L, case_sensitive, step_budget)) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+            }
+        }
+
+        if (p == L'*') {
+            while (pattern_index < pattern.size() && pattern[pattern_index] == L'*') {
+                pattern_index++;
+            }
+            if (pattern_index == pattern.size()) {
+                return true;
+            }
+            while (candidate_index <= candidate.size()) {
+                if (match_glob_pattern_recursive(pattern, pattern_index, candidate, candidate_index, case_sensitive, step_budget)) {
+                    return true;
+                }
+                if (candidate_index == candidate.size()) {
+                    break;
+                }
+                candidate_index++;
+            }
+            return false;
+        }
+
+        if (candidate_index >= candidate.size()) {
+            return false;
+        }
+
+        if (p == L'?') {
+            pattern_index++;
+            candidate_index++;
+            continue;
+        }
+
+        if (p == L'[') {
+            size_t consumed = 0;
+            if (!match_glob_character_class(pattern, pattern_index, candidate[candidate_index], consumed, case_sensitive)) {
+                return false;
+            }
+            pattern_index += consumed;
+            candidate_index++;
+            continue;
+        }
+
+        if (case_sensitive ? (p != candidate[candidate_index]) : (std::towlower(p) != std::towlower(candidate[candidate_index]))) {
+            return false;
+        }
+        pattern_index++;
+        candidate_index++;
+    }
+
+    return candidate_index == candidate.size();
+}
+
+bool match_glob_pattern(const std::wstring& pattern, const std::wstring& candidate, bool case_sensitive) {
+    if (!candidate.empty() && candidate[0] == L'.' && (pattern.empty() || pattern[0] != L'.')) {
+        return false;
+    }
+
+    unsigned long long step_budget = kMaxPatternMatchSteps;
+    return match_glob_pattern_recursive(pattern, 0, candidate, 0, case_sensitive, step_budget);
+}
+
+std::wstring expand_ansi_c_quoting(const std::wstring& input, size_t& i) {
+    std::wstring result;
+    i += 2;
+    while (i < input.length()) {
+        wchar_t c = input[i];
+        if (c == L'\'') {
+            i++;
+            break;
+        }
+        if (c == L'\\') {
+            i++;
+            if (i >= input.length()) {
+                result += L'\\';
+                break;
+            }
+            wchar_t escape_char = input[i];
+            if (escape_char == L'a') { result += L'\a'; i++; }
+            else if (escape_char == L'b') { result += L'\b'; i++; }
+            else if (escape_char == L'e' || escape_char == L'E') { result += L'\x1B'; i++; }
+            else if (escape_char == L'f') { result += L'\f'; i++; }
+            else if (escape_char == L'n') { result += L'\n'; i++; }
+            else if (escape_char == L'r') { result += L'\r'; i++; }
+            else if (escape_char == L't') { result += L'\t'; i++; }
+            else if (escape_char == L'v') { result += L'\v'; i++; }
+            else if (escape_char == L'\\') { result += L'\\'; i++; }
+            else if (escape_char == L'\'') { result += L'\''; i++; }
+            else if (escape_char == L'"') { result += L'"'; i++; }
+            else if (escape_char == L'?') { result += L'?'; i++; }
+            else if (escape_char == L'x') {
+                i++;
+                std::wstring hex_str;
+                for (int count = 0; count < 2 && i < input.length(); ++count) {
+                    if (std::iswxdigit(input[i])) {
+                        hex_str.push_back(input[i]);
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                if (!hex_str.empty()) {
+                    unsigned long val = 0;
+                    for (wchar_t digit : hex_str) {
+                        val *= 16;
+                        if (digit >= L'0' && digit <= L'9') val += (digit - L'0');
+                        else if (digit >= L'a' && digit <= L'f') val += (digit - L'a' + 10);
+                        else if (digit >= L'A' && digit <= L'F') val += (digit - L'A' + 10);
+                    }
+                    result += static_cast<wchar_t>(val);
+                } else {
+                    result += L'x';
+                }
+            } else if (escape_char == L'u') {
+                i++;
+                std::wstring hex_str;
+                for (int count = 0; count < 4 && i < input.length(); ++count) {
+                    if (std::iswxdigit(input[i])) {
+                        hex_str.push_back(input[i]);
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                if (!hex_str.empty()) {
+                    unsigned long val = 0;
+                    for (wchar_t digit : hex_str) {
+                        val *= 16;
+                        if (digit >= L'0' && digit <= L'9') val += (digit - L'0');
+                        else if (digit >= L'a' && digit <= L'f') val += (digit - L'a' + 10);
+                        else if (digit >= L'A' && digit <= L'F') val += (digit - L'A' + 10);
+                    }
+                    result += static_cast<wchar_t>(val);
+                } else {
+                    result += L'u';
+                }
+            } else if (escape_char == L'U') {
+                i++;
+                std::wstring hex_str;
+                for (int count = 0; count < 8 && i < input.length(); ++count) {
+                    if (std::iswxdigit(input[i])) {
+                        hex_str.push_back(input[i]);
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                if (!hex_str.empty()) {
+                    unsigned long val = 0;
+                    for (wchar_t digit : hex_str) {
+                        val *= 16;
+                        if (digit >= L'0' && digit <= L'9') val += (digit - L'0');
+                        else if (digit >= L'a' && digit <= L'f') val += (digit - L'a' + 10);
+                        else if (digit >= L'A' && digit <= L'F') val += (digit - L'A' + 10);
+                    }
+                    result += static_cast<wchar_t>(val);
+                } else {
+                    result += L'U';
+                }
+            } else if (escape_char == L'c') {
+                i++;
+                if (i < input.length()) {
+                    wchar_t ctrl_char = input[i];
+                    result += static_cast<wchar_t>(ctrl_char & 0x1F);
+                    i++;
+                } else {
+                    result += L'c';
+                }
+            } else if (escape_char >= L'0' && escape_char <= L'7') {
+                std::wstring oct_str;
+                for (int count = 0; count < 3 && i < input.length(); ++count) {
+                    if (input[i] >= L'0' && input[i] <= L'7') {
+                        oct_str.push_back(input[i]);
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                unsigned long val = 0;
+                for (wchar_t digit : oct_str) {
+                    val = val * 8 + (digit - L'0');
+                }
+                result += static_cast<wchar_t>(val);
+            } else {
+                result += escape_char;
+                i++;
+            }
+        } else {
+            result += c;
+            i++;
+        }
+    }
+    return result;
+}
+
+std::wstring escape_for_double_quotes(const std::wstring& str) {
+    std::wstring result;
+    result += L'"';
+    for (wchar_t ch : str) {
+        if (ch == L'\\' || ch == L'"' || ch == L'$' || ch == L'`' || ch == L'\n') {
+            result += L'\\';
+        }
+        result += ch;
+    }
+    result += L'"';
+    return result;
+}
+
+std::vector<std::wstring> ksh_tokenize(const std::wstring& input) {
+    std::vector<std::wstring> tokens;
+    std::wstring current;
+    bool in_quotes = false;
+    bool in_single_quotes = false;
+    bool in_array_def = false;
+    bool escaped = false;
+
+    for (size_t i = 0; i < input.length(); ) {
+        wchar_t c = input[i];
+
+        if (c == k_array_at_quoted_separator) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+            i++;
+            continue;
+        }
+
+        if (escaped) {
+            current += c;
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (c == L'\\' && !in_single_quotes) {
+            current += c;
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (c == L'$' && i + 1 < input.length() && input[i + 1] == L'\'' && !in_quotes && !in_single_quotes && !in_array_def) {
+            current += expand_ansi_c_quoting(input, i);
+            continue;
+        }
+
+        if (c == L'"' && !in_array_def && !in_single_quotes) {
+            in_quotes = !in_quotes;
+            i++;
+        } else if (c == L'\'' && !in_array_def && !in_quotes) {
+            in_single_quotes = !in_single_quotes;
+            i++;
+        } else if (c == L'(' && i > 0 && input[i-1] == L'=') {
+            in_array_def = true;
+            current += c;
+            i++;
+        } else if (c == L')' && in_array_def) {
+            in_array_def = false;
+            current += c;
+            i++;
+        } else if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+            i++;
+        } else {
+            current += c;
+            i++;
+        }
+    }
+    if (!current.empty()) {
+        tokens.push_back(current);
+    }
+    return tokens;
+}
+
+std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input) {
+    std::vector<std::wstring> tokens;
+    std::wstring current;
+    bool in_quotes = false;
+    bool in_single_quotes = false;
+    bool in_array_def = false;
+    bool escaped = false;
+
+    for (size_t i = 0; i < input.length(); ) {
+        wchar_t c = input[i];
+
+        if (c == k_array_at_quoted_separator) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+            i++;
+            continue;
+        }
+
+        if (escaped) {
+            current += c;
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (c == L'\\' && !in_single_quotes) {
+            current += c;
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (c == L'$' && i + 1 < input.length() && input[i + 1] == L'\'' && !in_quotes && !in_single_quotes && !in_array_def) {
+            current += escape_for_double_quotes(expand_ansi_c_quoting(input, i));
+            continue;
+        }
+
+        if (c == L'"' && !in_array_def && !in_single_quotes) {
+            in_quotes = !in_quotes;
+            current += c;
+            i++;
+            continue;
+        }
+
+        if (c == L'\'' && !in_array_def && !in_quotes) {
+            in_single_quotes = !in_single_quotes;
+            current += c;
+            i++;
+            continue;
+        }
+
+        if (c == L'(' && i > 0 && input[i - 1] == L'=') {
+            in_array_def = true;
+            current += c;
+            i++;
+            continue;
+        }
+
+        if (c == L')' && in_array_def) {
+            in_array_def = false;
+            current += c;
+            i++;
+            continue;
+        }
+
+        if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+            i++;
+            continue;
+        }
+
+        current += c;
+        i++;
+    }
+
+    if (!current.empty()) {
+        tokens.push_back(current);
+    }
+
+    return tokens;
+}
+
+std::wstring join_tokens_as_command_line(const std::vector<std::wstring>& tokens) {
+    std::wstring command;
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (!command.empty()) {
+            command += L" ";
+        }
+        command += quote_command_argument(tokens[i]);
+    }
+    return command;
+}
+
+std::wstring join_tokens_with_spaces(const std::vector<std::wstring>& tokens, size_t start_index) {
+    size_t estimated_size = 0;
+    if (start_index < tokens.size()) {
+        for (size_t i = start_index; i < tokens.size(); ++i) {
+            estimated_size += tokens[i].size();
+            if (i + 1 < tokens.size()) {
+                estimated_size += 1;
+            }
+        }
+    }
+
+    std::wstring joined;
+    joined.reserve(estimated_size);
+    for (size_t i = start_index; i < tokens.size(); ++i) {
+        if (!joined.empty()) {
+            joined += L" ";
+        }
+        joined += tokens[i];
+    }
+    return joined;
+}
+
+std::wstring quote_for_single_quoted_shell_literal(const std::wstring& value) {
+    std::wstring quoted = L"'";
+    for (wchar_t ch : value) {
+        if (ch == L'\'') {
+            quoted += L"'\\''";
+            continue;
+        }
+        quoted.push_back(ch);
+    }
+    quoted += L"'";
+    return quoted;
+}
+
+
+/******************************************************************************
+** End of ksh_parser.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_expansion.cpp
+******************************************************************************/
+
+
+double evaluate_math_function(const std::wstring& function_name, const std::vector<double>& args) {
+    std::wstring name = to_lower_copy(function_name);
+
+    if (name == L"abs" && args.size() == 1) return std::fabs(args[0]);
+    if (name == L"sqrt" && args.size() == 1) return std::sqrt(args[0]);
+    if (name == L"pow" && args.size() == 2) return std::pow(args[0], args[1]);
+    if (name == L"min" && args.size() == 2) return (args[0] < args[1]) ? args[0] : args[1];
+    if (name == L"max" && args.size() == 2) return (args[0] > args[1]) ? args[0] : args[1];
+    if (name == L"sin" && args.size() == 1) return std::sin(args[0]);
+    if (name == L"cos" && args.size() == 1) return std::cos(args[0]);
+    if (name == L"tan" && args.size() == 1) return std::tan(args[0]);
+    if (name == L"asin" && args.size() == 1) return std::asin(args[0]);
+    if (name == L"acos" && args.size() == 1) return std::acos(args[0]);
+    if (name == L"atan" && args.size() == 1) return std::atan(args[0]);
+    if (name == L"log" && args.size() == 1) return std::log(args[0]);
+    if (name == L"log10" && args.size() == 1) return std::log10(args[0]);
+    if (name == L"exp" && args.size() == 1) return std::exp(args[0]);
+    if (name == L"floor" && args.size() == 1) return std::floor(args[0]);
+    if (name == L"ceil" && args.size() == 1) return std::ceil(args[0]);
+    if (name == L"round" && args.size() == 1) return std::round(args[0]);
+
+    throw std::runtime_error("unsupported function");
+}
+
+static std::wstring get_variable_value_simple(const std::wstring& name) {
+    std::wstring resolved = resolve_variable_name(name);
+    std::wstring base_name;
+    std::wstring index_expr;
+    bool has_index = false;
+    if (parse_array_reference_expression(resolved, base_name, index_expr, has_index)) {
+        auto arr_it = ksh_env.arrays.find(base_name);
+        if (arr_it != ksh_env.arrays.end()) {
+            if (!has_index) {
+                auto val_it = arr_it->second.find(L"0");
+                return (val_it != arr_it->second.end()) ? val_it->second : L"0";
+            }
+            bool is_assoc = get_flag_value(ksh_env.associative_flags, base_name);
+            std::wstring key = index_expr;
+            if (!is_assoc) {
+                size_t idx = 0;
+                if (parse_non_negative_index(index_expr, idx)) {
+                    key = std::to_wstring(idx);
+                }
+            }
+            auto val_it = arr_it->second.find(key);
+            return (val_it != arr_it->second.end()) ? val_it->second : L"0";
+        }
+    }
+    auto it = ksh_env.variables.find(resolved);
+    if (it != ksh_env.variables.end()) {
+        return it->second;
+    }
+    return L"0";
+}
+
+class ArithmeticParser {
+public:
+    explicit ArithmeticParser(const std::wstring& expression) : expr(expression), pos(0), depth(0), has_float_operands(false) {}
+
+    bool is_float() const { return has_float_operands; }
+
+    static long long to_safe_int64(double v) {
+        if (!std::isfinite(v)) return 0;
+        if (v >= static_cast<double>(LLONG_MAX)) return LLONG_MAX;
+        if (v <= static_cast<double>(LLONG_MIN)) return LLONG_MIN;
+        return static_cast<long long>(v);
+    }
+
+    double parse() {
+        double value = parse_expression();
+        skip_spaces();
+        if (pos != expr.size()) {
+            throw std::runtime_error("unexpected trailing characters");
+        }
+        return value;
+    }
+
+private:
+    const std::wstring& expr;
+    size_t pos;
+    int depth;
+    bool has_float_operands;
+
+    void check_depth() {
+        if (depth >= kMaxArithmeticParseDepth) {
+            throw std::runtime_error("arithmetic expression nesting too deep");
+        }
+    }
+
+    void skip_spaces() {
+        while (pos < expr.size() && std::iswspace(expr[pos])) {
+            pos++;
+        }
+    }
+
+    bool consume(wchar_t token) {
+        skip_spaces();
+        if (pos < expr.size() && expr[pos] == token) {
+            pos++;
+            return true;
+        }
+        return false;
+    }
+
+    bool consume(const wchar_t* token) {
+        skip_spaces();
+        const size_t length = wcslen(token);
+        if (expr.compare(pos, length, token) == 0) {
+            pos += length;
+            return true;
+        }
+        return false;
+    }
+
+    double parse_expression() {
+        check_depth();
+        depth++;
+
+        size_t saved_pos = pos;
+        skip_spaces();
+        if (pos < expr.size() && (std::iswalpha(expr[pos]) || expr[pos] == L'_')) {
+            std::wstring var = parse_identifier();
+            skip_spaces();
+            bool parsed_subscript = true;
+            std::wstring subscript_expr;
+            if (pos < expr.size() && expr[pos] == L'[') {
+                pos++;
+                int bracket_depth = 1;
+                while (pos < expr.size() && bracket_depth > 0) {
+                    if (expr[pos] == L'[') {
+                        bracket_depth++;
+                    } else if (expr[pos] == L']') {
+                        bracket_depth--;
+                        if (bracket_depth == 0) {
+                            pos++;
+                            break;
+                        }
+                    }
+                    subscript_expr.push_back(expr[pos]);
+                    pos++;
+                }
+                if (bracket_depth > 0) {
+                    parsed_subscript = false;
+                }
+            }
+
+            if (parsed_subscript) {
+                skip_spaces();
+                bool is_plus_eq = (pos + 1 < expr.size() && expr[pos] == L'+' && expr[pos + 1] == L'=');
+                bool is_minus_eq = (pos + 1 < expr.size() && expr[pos] == L'-' && expr[pos + 1] == L'=');
+                bool is_eq = (pos < expr.size() && expr[pos] == L'=' && (pos + 1 >= expr.size() || expr[pos + 1] != L'='));
+
+                if (is_eq || is_plus_eq || is_minus_eq) {
+                    if (is_eq) pos++;
+                    else pos += 2;
+
+                    double rhs = parse_expression();
+
+                    std::wstring lhs_target = var;
+                    if (!subscript_expr.empty()) {
+                        ArithmeticParser sub_parser(subscript_expr);
+                        double idx_val = sub_parser.parse();
+                        std::wstring idx_str;
+                        if (idx_val == std::floor(idx_val)) {
+                            idx_str = std::to_wstring(static_cast<long long>(idx_val));
+                        } else {
+                            idx_str = std::to_wstring(idx_val);
+                            size_t dot_or_comma = idx_str.find_first_of(L".,");
+                            if (dot_or_comma != std::wstring::npos) {
+                                while (!idx_str.empty() && idx_str.back() == L'0') {
+                                    idx_str.pop_back();
+                                }
+                                if (!idx_str.empty() && (idx_str.back() == L'.' || idx_str.back() == L',')) {
+                                    idx_str.pop_back();
+                                }
+                            }
+                        }
+                        lhs_target += L"[" + idx_str + L"]";
+                    }
+
+                    double lhs_val = 0.0;
+                    if (is_plus_eq || is_minus_eq) {
+                        std::wstring current_str = get_variable_value_simple(lhs_target);
+                        try {
+                            lhs_val = std::stod(current_str);
+                        } catch (...) {
+                            lhs_val = 0.0;
+                        }
+                    }
+
+                    double final_val = rhs;
+                    if (is_plus_eq) final_val = lhs_val + rhs;
+                    else if (is_minus_eq) final_val = lhs_val - rhs;
+
+                    std::wstring val_str;
+                    if (final_val == std::floor(final_val)) {
+                        val_str = std::to_wstring(static_cast<long long>(final_val));
+                    } else {
+                        val_str = std::to_wstring(final_val);
+                        size_t dot_or_comma = val_str.find_first_of(L".,");
+                        if (dot_or_comma != std::wstring::npos) {
+                            while (!val_str.empty() && val_str.back() == L'0') {
+                                val_str.pop_back();
+                            }
+                            if (!val_str.empty() && (val_str.back() == L'.' || val_str.back() == L',')) {
+                                val_str.pop_back();
+                            }
+                        }
+                    }
+
+                    std::wstring err;
+                    assign_parameter_value(lhs_target, val_str, false, false, err, false);
+                    depth--;
+                    return final_val;
+                }
+            }
+        }
+
+        pos = saved_pos;
+        double value = parse_ternary();
+        depth--;
+        return value;
+    }
+
+    double parse_ternary() {
+        check_depth();
+        depth++;
+        double condition = parse_logical_or();
+        if (!consume(L'?')) {
+            depth--;
+            return condition;
+        }
+        const double when_true = parse_expression();
+        if (!consume(L':')) {
+            depth--;
+            throw std::runtime_error("missing ':' in ternary expression");
+        }
+        const double when_false = parse_ternary();
+        depth--;
+        return condition != 0.0 ? when_true : when_false;
+    }
+
+    double parse_logical_or() {
+        double value = parse_logical_and();
+        while (consume(L"||")) {
+            const double right = parse_logical_and();
+            value = (value != 0.0 || right != 0.0) ? 1.0 : 0.0;
+        }
+        return value;
+    }
+
+    double parse_logical_and() {
+        double value = parse_bitwise_or();
+        while (consume(L"&&")) {
+            const double right = parse_bitwise_or();
+            value = (value != 0.0 && right != 0.0) ? 1.0 : 0.0;
+        }
+        return value;
+    }
+
+    double parse_bitwise_or() {
+        double value = parse_bitwise_xor();
+        while (true) {
+            skip_spaces();
+            if (expr.compare(pos, 2, L"||") == 0 || !consume(L'|')) break;
+            value = static_cast<double>(to_safe_int64(value) | to_safe_int64(parse_bitwise_xor()));
+        }
+        return value;
+    }
+
+    double parse_bitwise_xor() {
+        double value = parse_bitwise_and();
+        while (consume(L'^')) value = static_cast<double>(to_safe_int64(value) ^ to_safe_int64(parse_bitwise_and()));
+        return value;
+    }
+
+    double parse_bitwise_and() {
+        double value = parse_equality();
+        while (true) {
+            skip_spaces();
+            if (expr.compare(pos, 2, L"&&") == 0 || !consume(L'&')) break;
+            value = static_cast<double>(to_safe_int64(value) & to_safe_int64(parse_equality()));
+        }
+        return value;
+    }
+
+    double parse_equality() {
+        double value = parse_relational();
+        while (true) {
+            if (consume(L"==")) value = value == parse_relational() ? 1.0 : 0.0;
+            else if (consume(L"!=")) value = value != parse_relational() ? 1.0 : 0.0;
+            else break;
+        }
+        return value;
+    }
+
+    double parse_relational() {
+        double value = parse_shift();
+        while (true) {
+            if (consume(L"<=")) value = value <= parse_shift() ? 1.0 : 0.0;
+            else if (consume(L">=")) value = value >= parse_shift() ? 1.0 : 0.0;
+            else if (consume(L'<')) value = value < parse_shift() ? 1.0 : 0.0;
+            else if (consume(L'>')) value = value > parse_shift() ? 1.0 : 0.0;
+            else break;
+        }
+        return value;
+    }
+
+    double parse_shift() {
+        double value = parse_additive();
+        while (true) {
+            if (consume(L"<<")) {
+                double rhs = parse_additive();
+                long long lhs_i = to_safe_int64(value);
+                long long shift_cnt = to_safe_int64(rhs);
+                if (shift_cnt < 0 || shift_cnt >= 64) {
+                    value = 0.0;
+                } else {
+                    value = static_cast<double>(static_cast<unsigned long long>(lhs_i) << shift_cnt);
+                }
+            } else if (consume(L">>")) {
+                double rhs = parse_additive();
+                long long lhs_i = to_safe_int64(value);
+                long long shift_cnt = to_safe_int64(rhs);
+                if (shift_cnt < 0) {
+                    value = 0.0;
+                } else if (shift_cnt >= 64) {
+                    value = (lhs_i < 0) ? -1.0 : 0.0;
+                } else {
+                    value = static_cast<double>(lhs_i >> shift_cnt);
+                }
+            } else {
+                break;
+            }
+        }
+        return value;
+    }
+
+    double parse_additive() {
+        double value = parse_term();
+        while (true) {
+            if (consume(L'+')) value += parse_term();
+            else if (consume(L'-')) value -= parse_term();
+            else break;
+        }
+        return value;
+    }
+
+    double parse_term() {
+        double value = parse_power();
+        while (true) {
+            if (consume(L'*')) {
+                value *= parse_power();
+            } else if (consume(L'/')) {
+                double right = parse_power();
+                if (right == 0.0) {
+                    throw std::runtime_error("division by zero");
+                }
+                if (!has_float_operands && std::floor(value) == value && std::floor(right) == right) {
+                    long long i_val = to_safe_int64(value);
+                    long long i_right = to_safe_int64(right);
+                    value = static_cast<double>(i_val / i_right);
+                } else {
+                    has_float_operands = true;
+                    value /= right;
+                }
+            } else if (consume(L'%')) {
+                double right = parse_power();
+                if (right == 0.0) {
+                    throw std::runtime_error("modulo by zero");
+                }
+                value = std::fmod(value, right);
+            } else {
+                break;
+            }
+        }
+        return value;
+    }
+
+    double parse_power() {
+        double left = parse_unary();
+        if (consume(L"**")) {
+            check_depth();
+            depth++;
+            double right = parse_power();
+            depth--;
+            return std::pow(left, right);
+        }
+        return left;
+    }
+
+    double parse_unary() {
+        check_depth();
+        depth++;
+        double result;
+        if (consume(L'+')) {
+            result = parse_unary();
+        } else if (consume(L'-')) {
+            result = -parse_unary();
+        } else {
+            result = parse_primary();
+        }
+        depth--;
+        return result;
+    }
+
+    std::wstring parse_identifier() {
+        skip_spaces();
+        std::wstring identifier;
+        while (pos < expr.size() && (std::iswalnum(expr[pos]) || expr[pos] == L'_')) {
+            identifier.push_back(expr[pos]);
+            pos++;
+        }
+        return identifier;
+    }
+
+    double parse_number() {
+        skip_spaces();
+        size_t start = pos;
+        size_t digit_start = pos;
+        while (pos < expr.size() && std::iswdigit(expr[pos])) {
+            pos++;
+        }
+
+        if (pos < expr.size() && expr[pos] == L'#') {
+            std::wstring base_str = expr.substr(digit_start, pos - digit_start);
+            if (base_str.empty()) {
+                throw std::runtime_error("missing base for arithmetic conversion");
+            }
+            int base = 0;
+            if (!try_parse_int_strict(base_str, base)) {
+                throw std::runtime_error("invalid arithmetic base");
+            }
+            if (base < 2 || base > 64) {
+                throw std::runtime_error("invalid arithmetic base (must be 2-64)");
+            }
+
+            pos++;
+            double value = 0;
+            bool read_any = false;
+            while (pos < expr.size()) {
+                wchar_t ch = expr[pos];
+                int digit_val = -1;
+                if (ch >= L'0' && ch <= L'9') {
+                    digit_val = ch - L'0';
+                } else if (ch >= L'a' && ch <= L'z') {
+                    digit_val = (base <= 36) ? (ch - L'a' + 10) : (ch - L'a' + 10);
+                } else if (ch >= L'A' && ch <= L'Z') {
+                    digit_val = (base <= 36) ? (ch - L'A' + 10) : (ch - L'A' + 36);
+                } else if (ch == L'_') {
+                    digit_val = 62;
+                } else if (ch == L'@') {
+                    digit_val = 63;
+                }
+
+                if (digit_val >= 0 && digit_val < base) {
+                    value = value * base + digit_val;
+                    pos++;
+                    read_any = true;
+                } else {
+                    break;
+                }
+            }
+
+            if (!read_any) {
+                throw std::runtime_error("invalid character for base arithmetic");
+            }
+            return value;
+        }
+
+        pos = start;
+        bool seen_dot = false;
+        while (pos < expr.size()) {
+            wchar_t ch = expr[pos];
+            if (std::iswdigit(ch)) {
+                pos++;
+                continue;
+            }
+            if (ch == L'.' && !seen_dot) {
+                seen_dot = true;
+                pos++;
+                continue;
+            }
+            break;
+        }
+        if (start == pos) {
+            throw std::runtime_error("number expected");
+        }
+        if (seen_dot) {
+            has_float_operands = true;
+        }
+        return std::stod(expr.substr(start, pos - start));
+    }
+
+    double parse_primary() {
+        skip_spaces();
+        if (consume(L'(')) {
+            double inner = parse_expression();
+            if (!consume(L')')) {
+                throw std::runtime_error("missing closing parenthesis");
+            }
+            return inner;
+        }
+
+        if (pos < expr.size() && (std::iswalpha(expr[pos]) || expr[pos] == L'_')) {
+            std::wstring identifier = parse_identifier();
+            std::wstring lowered = to_lower_copy(identifier);
+            if (lowered == L"pi") {
+                has_float_operands = true;
+                return std::acos(-1.0);
+            }
+            if (lowered == L"e") {
+                has_float_operands = true;
+                return std::exp(1.0);
+            }
+
+            if (consume(L'(')) {
+                std::vector<double> args;
+                skip_spaces();
+                if (!consume(L')')) {
+                    while (true) {
+                        args.push_back(parse_expression());
+                        if (consume(L')')) {
+                            break;
+                        }
+                        if (!consume(L',')) {
+                            throw std::runtime_error("comma expected");
+                        }
+                    }
+                }
+                has_float_operands = true;
+                return evaluate_math_function(identifier, args);
+            }
+
+            bool is_set = false;
+            std::wstring val = get_variable_value_with_hooks(identifier, is_set);
+            if (is_set) {
+                if (val.find(L'.') != std::wstring::npos) {
+                    has_float_operands = true;
+                }
+                return std::stod(val);
+            }
+            return 0.0;
+        }
+
+        return parse_number();
+    }
+};
+
+std::wstring evaluate_arithmetic(const std::wstring& expr) {
+    try {
+        ArithmeticParser parser(expr);
+        double value = parser.parse();
+        if (!std::isfinite(value)) {
+            return L"0";
+        }
+
+        if (!parser.is_float()) {
+            return std::to_wstring(ArithmeticParser::to_safe_int64(value));
+        }
+
+        double nearest = std::round(value);
+        if (std::fabs(value - nearest) < 1e-9) {
+            return std::to_wstring(static_cast<long long>(nearest));
+        }
+
+        wchar_t buffer[64];
+        _snwprintf_s(buffer, _countof(buffer), _TRUNCATE, L"%.10f", value);
+        std::wstring result(buffer);
+        while (!result.empty() && result.back() == L'0') {
+            result.pop_back();
+        }
+        if (!result.empty() && (result.back() == L'.' || result.back() == L',')) {
+            result.pop_back();
+        }
+        return result.empty() ? L"0" : result;
+    } catch (...) {
+        return L"0";
+    }
+}
+
+double evaluate_arithmetic_double(const std::wstring& expr) {
+    ArithmeticParser parser(expr);
+    return parser.parse();
+}
+
+std::wstring trim_trailing_line_endings(const std::wstring& value) {
+    size_t end = value.size();
+    while (end > 0 && (value[end - 1] == L'\n' || value[end - 1] == L'\r')) {
+        end--;
+    }
+    return value.substr(0, end);
+}
+
+std::wstring run_command_and_capture_stdout(const std::wstring& command, DWORD& exit_code) {
+    exit_code = 1;
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = nullptr;
+    sa.bInheritHandle = TRUE;
+
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+        return L"";
+    }
+
+    if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        return L"";
+    }
+
+    std::wstring command_line;
+    if (!build_cmd_shell_command_line(command, command_line)) {
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        return L"";
+    }
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    ZeroMemory(&pi, sizeof(pi));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    HANDLE inherited_stdin = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE inherited_stderr = GetStdHandle(STD_ERROR_HANDLE);
+    HANDLE dup_stdin = nullptr;
+    HANDLE dup_stderr = nullptr;
+
+    if (inherited_stdin != nullptr && inherited_stdin != INVALID_HANDLE_VALUE) {
+        if (!DuplicateHandle(GetCurrentProcess(), inherited_stdin, GetCurrentProcess(), &dup_stdin, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+            CloseHandle(read_pipe);
+            CloseHandle(write_pipe);
+            return L"";
+        }
+        inherited_stdin = dup_stdin;
+    }
+
+    if (inherited_stderr != nullptr && inherited_stderr != INVALID_HANDLE_VALUE) {
+        if (!DuplicateHandle(GetCurrentProcess(), inherited_stderr, GetCurrentProcess(), &dup_stderr, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+            if (dup_stdin != nullptr) {
+                CloseHandle(dup_stdin);
+            }
+            CloseHandle(read_pipe);
+            CloseHandle(write_pipe);
+            return L"";
+        }
+        inherited_stderr = dup_stderr;
+    }
+
+    si.hStdInput = inherited_stdin;
+    si.hStdOutput = write_pipe;
+    si.hStdError = inherited_stderr;
+
+    std::vector<HANDLE> inherited_handles = { si.hStdInput, si.hStdOutput, si.hStdError };
+    BOOL created = create_process_with_handle_list(command_line, si, inherited_handles, CREATE_NO_WINDOW, pi) ? TRUE : FALSE;
+
+    CloseHandle(write_pipe);
+    if (dup_stdin != nullptr) {
+        CloseHandle(dup_stdin);
+    }
+    if (dup_stderr != nullptr) {
+        CloseHandle(dup_stderr);
+    }
+
+    if (!created) {
+        CloseHandle(read_pipe);
+        return L"";
+    }
+
+    std::string stdout_bytes;
+    char buffer[4096];
+    DWORD bytes_read = 0;
+    bool output_limit_hit = false;
+    while (ReadFile(read_pipe, buffer, static_cast<DWORD>(sizeof(buffer)), &bytes_read, nullptr) && bytes_read > 0) {
+        if (stdout_bytes.size() + bytes_read > kMaxCommandSubstitutionOutputBytes) {
+            output_limit_hit = true;
+            TerminateProcess(pi.hProcess, 1);
+            break;
+        }
+        stdout_bytes.append(buffer, buffer + bytes_read);
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    register_child_process_times(pi.hProcess);
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+
+    if (output_limit_hit) {
+        std::wcerr << L"ksh: command substitution output exceeded limit\n";
+        exit_code = 1;
+        g_expansion_error = true;
+        ksh_env.variables[L"?"] = L"1";
+    }
+
+    CloseHandle(read_pipe);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    UINT cp = GetConsoleOutputCP();
+    if (cp == 0) {
+        cp = CP_OEMCP;
+    }
+
+    std::wstring text = decode_multibyte(stdout_bytes, CP_UTF8);
+    if (text.empty() && !stdout_bytes.empty()) {
+        text = decode_multibyte(stdout_bytes, cp);
+    }
+    if (text.empty() && !stdout_bytes.empty()) {
+        text = decode_multibyte(stdout_bytes, CP_ACP);
+    }
+
+    return trim_trailing_line_endings(text);
+}
+
+bool parse_command_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index) {
+    content.clear();
+    next_index = start_index;
+
+    int depth = 1;
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+
+    size_t i = start_index;
+    while (i < input.size()) {
+        wchar_t ch = input[i];
+
+        if (escaped) {
+            content += ch;
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            content += ch;
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            content += ch;
+            i++;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            content += ch;
+            i++;
+            continue;
+        }
+
+        if (!in_single_quotes && !in_double_quotes) {
+            if (ch == L'$' && (i + 1) < input.size() && input[i + 1] == L'(' && !((i + 2) < input.size() && input[i + 2] == L'(')) {
+                depth++;
+                if (depth > kMaxSubstitutionParseDepth) {
+                    return false;
+                }
+                content += L"$(";
+                i += 2;
+                continue;
+            }
+
+            if (ch == L'(') {
+                depth++;
+                if (depth > kMaxSubstitutionParseDepth) {
+                    return false;
+                }
+                content += ch;
+                i++;
+                continue;
+            }
+
+            if (ch == L')') {
+                depth--;
+                if (depth == 0) {
+                    next_index = i + 1;
+                    return true;
+                }
+                content += ch;
+                i++;
+                continue;
+            }
+        }
+
+        content += ch;
+        i++;
+    }
+
+    return false;
+}
+
+bool parse_arithmetic_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index) {
+    content.clear();
+    next_index = start_index;
+
+    int paren_depth = 0;
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+
+    size_t i = start_index;
+    while (i < input.size()) {
+        wchar_t ch = input[i];
+
+        if (escaped) {
+            content += ch;
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            content += ch;
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            content += ch;
+            i++;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            content += ch;
+            i++;
+            continue;
+        }
+
+        if (!in_single_quotes && !in_double_quotes) {
+            if (ch == L'(') {
+                paren_depth++;
+                if (paren_depth > kMaxSubstitutionParseDepth) {
+                    return false;
+                }
+                content += ch;
+                i++;
+                continue;
+            }
+
+            if (ch == L')') {
+                if (paren_depth > 0) {
+                    paren_depth--;
+                    content += ch;
+                    i++;
+                    continue;
+                }
+
+                if ((i + 1) < input.size() && input[i + 1] == L')') {
+                    next_index = i + 2;
+                    return true;
+                }
+            }
+        }
+
+        content += ch;
+        i++;
+    }
+
+    return false;
+}
+
+bool can_capture_builtin_command_substitution(const std::vector<std::wstring>& tokens) {
+    if (tokens.empty()) {
+        return false;
+    }
+
+    static const std::vector<std::wstring> capture_safe_builtins = {
+        L":",
+        L"echo",
+        L"getconf",
+        L"help",
+        L"math",
+        L"pathchk",
+        L"print",
+        L"printf",
+        L"pwd",
+        L"times",
+    };
+
+    if (std::find(capture_safe_builtins.begin(), capture_safe_builtins.end(), tokens[0]) == capture_safe_builtins.end()) {
+        return false;
+    }
+
+    if (g_aliases.find(tokens[0]) != g_aliases.end()) {
+        return false;
+    }
+    if (g_shell_functions.find(tokens[0]) != g_shell_functions.end()) {
+        return false;
+    }
+
+    return true;
+}
+
+bool is_snapshot_safe_external_segment(const std::wstring& segment_text) {
+    const std::wstring trimmed = trim_copy(segment_text);
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(trimmed);
+    if (tokens.empty()) {
+        return false;
+    }
+
+    RedirectionSpec redir;
+    std::wstring redirection_error;
+    if (!parse_redirections(tokens, redir, redirection_error)) {
+        return false;
+    }
+
+    if (tokens.empty()) {
+        return false;
+    }
+
+    const std::wstring residual = join_tokens_with_spaces(tokens);
+    if (has_unquoted_shell_metacharacters(residual)) {
+        return false;
+    }
+
+    const std::wstring& first = tokens[0];
+    size_t eq_pos = first.find(L'=');
+    if (eq_pos != std::wstring::npos && eq_pos > 0) {
+        std::wstring lhs = first.substr(0, eq_pos);
+        if (is_valid_shell_identifier(lhs)) {
+            return false;
+        }
+    }
+
+    std::wstring detail;
+    CommandResolutionKind kind = resolve_command_kind(first, detail);
+    return kind == CommandResolutionKind::External;
+}
+
+bool command_requires_environment_snapshot(const std::wstring& command) {
+    const std::wstring trimmed = trim_copy(command);
+    if (trimmed.empty()) {
+        return true;
+    }
+
+    if (!has_unquoted_shell_metacharacters(trimmed)) {
+        return !is_snapshot_safe_external_segment(trimmed);
+    }
+
+    std::vector<std::wstring> pipeline_segments = split_pipeline_segments(trimmed);
+    if (pipeline_segments.size() <= 1) {
+        return true;
+    }
+
+    for (const std::wstring& segment : pipeline_segments) {
+        if (!is_snapshot_safe_external_segment(segment)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::wstring execute_command_substitution(const std::wstring& command, bool use_capture_sink) {
+    const bool perf_trace = is_performance_telemetry_enabled();
+    const ULONGLONG substitution_start = GetTickCount64();
+
+    const bool require_state_snapshot = !use_capture_sink && command_requires_environment_snapshot(command);
+    ScopedSubshellDepthGuard subshell_depth_guard;
+    std::optional<ShellStateSnapshot> saved_snapshot;
+    ScopedSnapshotRestoreGuard snapshot_guard(saved_snapshot, L"0");
+
+    std::wstring sub_output;
+
+    if (use_capture_sink) {
+        struct CaptureSinkGuard {
+            std::wstring*& slot;
+            std::wstring* previous;
+            CaptureSinkGuard(std::wstring*& slot_ref, std::wstring* current) : slot(slot_ref), previous(slot_ref) {
+                slot = current;
+            }
+            ~CaptureSinkGuard() {
+                slot = previous;
+            }
+        } capture_guard(g_builtin_capture_output, &sub_output);
+
+        bool should_exit = false;
+        execute_command_line(command, should_exit);
+    } else {
+        HANDLE read_pipe = INVALID_HANDLE_VALUE;
+        HANDLE write_pipe = INVALID_HANDLE_VALUE;
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = nullptr;
+        sa.bInheritHandle = TRUE;
+
+        if (CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+            if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
+                CloseHandle(read_pipe);
+                CloseHandle(write_pipe);
+            } else {
+                HANDLE old_subshell_stdout = g_subshell_stdout;
+                g_subshell_stdout = write_pipe;
+                std::string bytes;
+                bool output_limit_hit = false;
+
+                bool reader_started = false;
+                std::thread reader_thread;
+                try {
+                    reader_thread = std::thread([&]() {
+                        char buffer[4096];
+                        DWORD bytesRead = 0;
+                        while (ReadFile(read_pipe, buffer, sizeof(buffer), &bytesRead, NULL) && bytesRead > 0) {
+                            if (output_limit_hit) {
+                                continue;
+                            }
+
+                            const size_t current_size = bytes.size();
+                            if (current_size + bytesRead > kMaxCommandSubstitutionOutputBytes) {
+                                const size_t remaining = kMaxCommandSubstitutionOutputBytes - current_size;
+                                if (remaining > 0) {
+                                    bytes.append(buffer, remaining);
+                                }
+                                output_limit_hit = true;
+                                continue;
+                            }
+
+                            bytes.append(buffer, bytesRead);
+                        }
+                    });
+                    reader_started = true;
+                } catch (...) {
+                    g_subshell_stdout = old_subshell_stdout;
+                    CloseHandle(write_pipe);
+                    CloseHandle(read_pipe);
+                }
+
+                if (reader_started) {
+                    try {
+                        if (require_state_snapshot) {
+                            saved_snapshot.emplace(capture_shell_state_snapshot());
+                        }
+
+                        bool should_exit = false;
+                        execute_command_line(command, should_exit);
+                    } catch (...) {
+                        if (write_pipe != INVALID_HANDLE_VALUE) {
+                            CloseHandle(write_pipe);
+                            write_pipe = INVALID_HANDLE_VALUE;
+                        }
+                        g_subshell_stdout = old_subshell_stdout;
+                        if (reader_thread.joinable()) {
+                            reader_thread.join();
+                        }
+                        if (read_pipe != INVALID_HANDLE_VALUE) {
+                            CloseHandle(read_pipe);
+                            read_pipe = INVALID_HANDLE_VALUE;
+                        }
+                        throw;
+                    }
+
+                    if (write_pipe != INVALID_HANDLE_VALUE) {
+                        CloseHandle(write_pipe);
+                        write_pipe = INVALID_HANDLE_VALUE;
+                    }
+                    g_subshell_stdout = old_subshell_stdout;
+
+                    if (reader_thread.joinable()) {
+                        reader_thread.join();
+                    }
+                    if (read_pipe != INVALID_HANDLE_VALUE) {
+                        CloseHandle(read_pipe);
+                        read_pipe = INVALID_HANDLE_VALUE;
+                    }
+                }
+
+                if (reader_started && output_limit_hit) {
+                    std::wcerr << L"ksh: command substitution output exceeded limit\n";
+                    g_expansion_error = true;
+                    ksh_env.variables[L"?"] = L"1";
+                } else if (reader_started && !bytes.empty()) {
+                    int wlen = MultiByteToWideChar(CP_UTF8, 0, bytes.data(), (int)bytes.size(), NULL, 0);
+                    if (wlen > 0) {
+                        std::vector<wchar_t> wbuf(wlen);
+                        MultiByteToWideChar(CP_UTF8, 0, bytes.data(), (int)bytes.size(), wbuf.data(), wlen);
+                        sub_output = std::wstring(wbuf.data(), wlen);
+                    } else {
+                        wlen = MultiByteToWideChar(CP_ACP, 0, bytes.data(), (int)bytes.size(), NULL, 0);
+                        if (wlen > 0) {
+                            std::vector<wchar_t> wbuf(wlen);
+                            MultiByteToWideChar(CP_ACP, 0, bytes.data(), (int)bytes.size(), wbuf.data(), wlen);
+                            sub_output = std::wstring(wbuf.data(), wlen);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const bool used_snapshot_restore = saved_snapshot.has_value();
+    restore_shell_state_snapshot_if_present(saved_snapshot, L"0");
+    snapshot_guard.dismiss();
+
+    while (!sub_output.empty() && (sub_output.back() == L'\n' || sub_output.back() == L'\r')) {
+        sub_output.pop_back();
+    }
+
+    const ULONGLONG elapsed_ms = GetTickCount64() - substitution_start;
+    record_command_substitution_path_perf(use_capture_sink, used_snapshot_restore, elapsed_ms);
+    if (perf_trace) {
+        std::wstring detail;
+        if (use_capture_sink) {
+            detail = L"path=fast_capture count=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_fast_count) +
+                L" total_ms=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_fast_ms);
+        } else if (used_snapshot_restore) {
+            detail = L"path=snapshot_restore count=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_snapshot_count) +
+                L" total_ms=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_snapshot_ms);
+        } else {
+            detail = L"path=direct_no_snapshot count=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_direct_count) +
+                L" total_ms=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_direct_ms);
+        }
+        log_performance_trace(L"substitution.command", elapsed_ms, detail);
+    }
+
+    return sub_output;
+}
+
+std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_index, size_t& next_index, bool in_double_quotes) {
+    auto is_assignable_parameter_name = [](const std::wstring& name) -> bool {
+        if (name.empty()) {
+            return false;
+        }
+        if (!(std::iswalpha(name[0]) || name[0] == L'_')) {
+            return false;
+        }
+        return std::all_of(name.begin(), name.end(), [](wchar_t ch) {
+            return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.';
+        });
+    };
+
+    auto is_valid_variable_name = [](const std::wstring& name) -> bool {
+        if (name.empty()) {
+            return false;
+        }
+        if (name[0] == L'.') {
+            if (name.size() < 2) return false;
+            return std::all_of(name.begin() + 1, name.end(), [](wchar_t ch) {
+                return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.' || ch == L'/';
+            });
+        }
+        if (!(std::iswalpha(name[0]) || name[0] == L'_')) {
+            return false;
+        }
+        return std::all_of(name.begin(), name.end(), [](wchar_t ch) {
+            return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.' || ch == L'/';
+        });
+    };
+
+    auto parse_array_reference = [&](const std::wstring& text, std::wstring& array_name, std::wstring& index_expr, bool& has_index) -> bool {
+        array_name.clear();
+        index_expr.clear();
+        has_index = false;
+
+        size_t open = text.find(L'[');
+        if (open == std::wstring::npos) {
+            array_name = text;
+            return is_valid_variable_name(array_name);
+        }
+
+        if (open == 0 || text.back() != L']') {
+            return false;
+        }
+
+        array_name = text.substr(0, open);
+        if (!is_valid_variable_name(array_name)) {
+            return false;
+        }
+
+        index_expr = text.substr(open + 1, text.size() - open - 2);
+        if (index_expr.empty()) {
+            return false;
+        }
+
+        has_index = true;
+        return true;
+    };
+
+    auto parse_non_negative_index_local = [](const std::wstring& text, size_t& out_index) -> bool {
+        if (text.empty()) {
+            return false;
+        }
+
+        try {
+            size_t consumed = 0;
+            unsigned long long parsed = std::stoull(text, &consumed);
+            if (consumed != text.size()) {
+                return false;
+            }
+            out_index = static_cast<size_t>(parsed);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
+
+    auto join_array_values = [](const std::vector<std::wstring>& values, wchar_t separator) -> std::wstring {
+        std::wstring joined;
+        for (size_t i = 0; i < values.size(); ++i) {
+            joined += values[i];
+            if (i + 1 < values.size()) {
+                joined.push_back(separator);
+            }
+        }
+        return joined;
+    };
+
+    auto try_get_parameter_value = [&](const std::wstring& name, std::wstring& out_value, bool& is_set) {
+        out_value.clear();
+        is_set = false;
+
+        const std::vector<std::wstring>& script_args = current_script_args();
+        const std::wstring script_name = current_script_name();
+
+        if (name == L"#") {
+            out_value = std::to_wstring(script_args.size());
+            is_set = true;
+            return;
+        }
+
+        if (name == L"@") {
+            if (in_double_quotes) {
+                out_value = join_array_values(script_args, k_array_at_quoted_separator);
+            } else {
+                out_value = join_script_args(script_args);
+            }
+            is_set = true;
+            return;
+        }
+
+        if (name == L"*") {
+            wchar_t separator = L' ';
+            std::map<std::wstring, std::wstring>::const_iterator ifs_it = ksh_env.variables.find(L"IFS");
+            if (ifs_it != ksh_env.variables.end()) {
+                if (ifs_it->second.empty()) {
+                    separator = L'\0';
+                } else {
+                    separator = ifs_it->second[0];
+                }
+            }
+
+            if (separator == L'\0') {
+                out_value.clear();
+                for (const std::wstring& arg : script_args) {
+                    out_value += arg;
+                }
+            } else {
+                out_value = join_array_values(script_args, separator);
+            }
+            is_set = true;
+            return;
+        }
+
+        if (name == L"$") {
+            out_value = std::to_wstring(GetCurrentProcessId());
+            is_set = true;
+            return;
+        }
+
+        if (!name.empty() && std::all_of(name.begin(), name.end(), [](wchar_t ch) { return std::iswdigit(ch) != 0; })) {
+            unsigned long arg_index = 0;
+            if (!try_parse_unsigned_long_strict(name, arg_index)) {
+                return;
+            }
+            if (arg_index == 0) {
+                out_value = script_name;
+                is_set = true;
+                return;
+            }
+            if (arg_index <= script_args.size()) {
+                out_value = script_args[static_cast<size_t>(arg_index - 1)];
+                is_set = true;
+                return;
+            }
+            return;
+        }
+
+        std::wstring array_name;
+        std::wstring index_expr;
+        bool has_index = false;
+        bool is_key_expansion = false;
+        std::wstring name_to_use = name;
+        if (name.size() > 1 && name.front() == L'!') {
+            is_key_expansion = true;
+            name_to_use = name.substr(1);
+        }
+
+        bool handled_nameref_key = false;
+        std::wstring array_name_tmp;
+        std::wstring index_expr_tmp;
+        bool has_index_tmp = false;
+        if (parse_array_reference(name_to_use, array_name_tmp, index_expr_tmp, has_index_tmp)) {
+            if (is_key_expansion && !has_index_tmp) {
+                if (get_flag_value(ksh_env.nameref_flags, array_name_tmp)) {
+                    std::map<std::wstring, std::wstring>::const_iterator val_it = ksh_env.variables.find(array_name_tmp);
+                    if (val_it != ksh_env.variables.end()) {
+                        out_value = val_it->second;
+                        is_set = true;
+                        handled_nameref_key = true;
+                    }
+                }
+            }
+        }
+
+        if (!handled_nameref_key) {
+            name_to_use = resolve_variable_name(name_to_use);
+            if (parse_array_reference(name_to_use, array_name, index_expr, has_index)) {
+                std::map<std::wstring, std::map<std::wstring, std::wstring>>::const_iterator arr_it = ksh_env.arrays.find(array_name);
+                if (arr_it != ksh_env.arrays.end()) {
+                    is_set = true;
+
+                    if (is_key_expansion) {
+                        if (has_index && (index_expr == L"@" || index_expr == L"*")) {
+                            std::vector<std::wstring> keys;
+                            for (const auto& pair : arr_it->second) {
+                                keys.push_back(pair.first);
+                            }
+                            if (index_expr == L"@") {
+                                out_value = in_double_quotes
+                                    ? join_array_values(keys, k_array_at_quoted_separator)
+                                    : join_array_values(keys, L' ');
+                            } else {
+                                out_value = join_array_values(keys, L' ');
+                            }
+                        } else {
+                            out_value = array_name;
+                        }
+                        return;
+                    }
+
+                    if (!has_index) {
+                        std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(L"0");
+                        out_value = (val_it != arr_it->second.end()) ? val_it->second : L"";
+                        return;
+                    }
+
+                    if (index_expr == L"@") {
+                        std::vector<std::wstring> values = get_array_values_vector(array_name);
+                        out_value = in_double_quotes
+                            ? join_array_values(values, k_array_at_quoted_separator)
+                            : join_array_values(values, L' ');
+                        return;
+                    }
+
+                    if (index_expr == L"*") {
+                        std::vector<std::wstring> values = get_array_values_vector(array_name);
+                        out_value = join_array_values(values, L' ');
+                        return;
+                    }
+
+                    bool is_assoc = false;
+                    std::map<std::wstring, bool>::const_iterator assoc_it = ksh_env.associative_flags.find(array_name);
+                    if (assoc_it != ksh_env.associative_flags.end()) {
+                        is_assoc = assoc_it->second;
+                    }
+
+                    if (is_assoc) {
+                        std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(index_expr);
+                        if (val_it != arr_it->second.end()) {
+                            out_value = val_it->second;
+                        } else {
+                            out_value.clear();
+                        }
+                    } else {
+                        size_t idx = 0;
+                        if (parse_non_negative_index_local(index_expr, idx)) {
+                            std::wstring key = std::to_wstring(idx);
+                            std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(key);
+                            if (val_it != arr_it->second.end()) {
+                                out_value = val_it->second;
+                            } else {
+                                out_value.clear();
+                            }
+                        } else {
+                            is_set = false;
+                            out_value.clear();
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+
+        std::wstring hook_val = get_variable_value_with_hooks(name_to_use, is_set);
+        if (is_set) {
+            out_value = hook_val;
+            return;
+        }
+
+        wchar_t small_buf[256];
+        DWORD ret = GetEnvironmentVariableW(name_to_use.c_str(), small_buf, _countof(small_buf));
+        if (ret > 0 && ret < _countof(small_buf)) {
+            out_value.assign(small_buf, ret);
+            is_set = true;
+        } else if (ret >= _countof(small_buf)) {
+            std::vector<wchar_t> dyn_buf(ret + 1);
+            DWORD dyn_ret = GetEnvironmentVariableW(name_to_use.c_str(), dyn_buf.data(), static_cast<DWORD>(dyn_buf.size()));
+            if (dyn_ret > 0 && dyn_ret < dyn_buf.size()) {
+                out_value.assign(dyn_buf.data(), dyn_ret);
+                is_set = true;
+            }
+        } else if (GetLastError() == ERROR_SUCCESS) {
+            out_value.clear();
+            is_set = true;
+        }
+    };
+
+    auto parse_braced_parameter_word = [](const std::wstring& text, size_t start_index, std::wstring& word, size_t& after_closing_brace) -> bool {
+        word.clear();
+        after_closing_brace = start_index;
+
+        int brace_depth = 0;
+        bool in_single_quotes = false;
+        bool in_double_quotes = false;
+        bool escaped = false;
+
+        size_t i = start_index;
+        while (i < text.size()) {
+            wchar_t ch = text[i];
+
+            if (escaped) {
+                word += ch;
+                escaped = false;
+                i++;
+                continue;
+            }
+
+            if (ch == L'\\' && !in_single_quotes) {
+                word += ch;
+                escaped = true;
+                i++;
+                continue;
+            }
+
+            if (ch == L'\'' && !in_double_quotes) {
+                in_single_quotes = !in_single_quotes;
+                word += ch;
+                i++;
+                continue;
+            }
+
+            if (ch == L'"' && !in_single_quotes) {
+                in_double_quotes = !in_double_quotes;
+                word += ch;
+                i++;
+                continue;
+            }
+
+            if (!in_single_quotes && !in_double_quotes) {
+                if (ch == L'{') {
+                    brace_depth++;
+                    word += ch;
+                    i++;
+                    continue;
+                }
+
+                if (ch == L'}') {
+                    if (brace_depth == 0) {
+                        after_closing_brace = i + 1;
+                        return true;
+                    }
+                    brace_depth--;
+                    word += ch;
+                    i++;
+                    continue;
+                }
+            }
+
+            word += ch;
+            i++;
+        }
+
+        return false;
+    };
+
+    auto match_parameter_pattern = [](const std::wstring& pattern, const std::wstring& candidate) -> bool {
+        const bool case_sensitive = pattern_match_case_sensitive();
+        unsigned long long step_budget = kMaxPatternMatchSteps;
+        return match_glob_pattern_recursive(pattern, 0, candidate, 0, case_sensitive, step_budget);
+    };
+
+    auto apply_parameter_pattern_removal = [&](const std::wstring& value, const std::wstring& raw_pattern, bool prefix_mode, bool longest_match) -> std::wstring {
+        std::wstring expanded_pattern = expand_substitutions_left_to_right(raw_pattern);
+        if (g_expansion_error) {
+            return L"";
+        }
+
+        if (expanded_pattern.empty()) {
+            return value;
+        }
+
+        if (prefix_mode) {
+            if (longest_match) {
+                for (size_t len = value.size() + 1; len > 0; --len) {
+                    size_t prefix_len = len - 1;
+                    if (match_parameter_pattern(expanded_pattern, value.substr(0, prefix_len))) {
+                        return value.substr(prefix_len);
+                    }
+                }
+            } else {
+                for (size_t prefix_len = 0; prefix_len <= value.size(); ++prefix_len) {
+                    if (match_parameter_pattern(expanded_pattern, value.substr(0, prefix_len))) {
+                        return value.substr(prefix_len);
+                    }
+                }
+            }
+            return value;
+        }
+
+        if (longest_match) {
+            for (size_t start = 0; start <= value.size(); ++start) {
+                if (match_parameter_pattern(expanded_pattern, value.substr(start))) {
+                    return value.substr(0, start);
+                }
+            }
+        } else {
+            for (size_t start = value.size() + 1; start > 0; --start) {
+                size_t suffix_start = start - 1;
+                if (match_parameter_pattern(expanded_pattern, value.substr(suffix_start))) {
+                    return value.substr(0, suffix_start);
+                }
+            }
+        }
+
+        return value;
+    };
+
+    auto apply_parameter_substitution = [&](const std::wstring& value, const std::wstring& raw_pattern, const std::wstring& raw_replacement, bool replace_all) -> std::wstring {
+        std::wstring expanded_pattern = expand_substitutions_left_to_right(raw_pattern);
+        if (g_expansion_error) {
+            return L"";
+        }
+
+        std::wstring replacement = expand_substitutions_left_to_right(raw_replacement);
+        if (g_expansion_error) {
+            return L"";
+        }
+
+        if (expanded_pattern.empty()) {
+            return value;
+        }
+
+        auto find_match = [&](size_t start_index, size_t& match_start, size_t& match_length) -> bool {
+            for (size_t begin = start_index; begin <= value.size(); ++begin) {
+                for (size_t end = begin; end <= value.size(); ++end) {
+                    if (match_parameter_pattern(expanded_pattern, value.substr(begin, end - begin))) {
+                        match_start = begin;
+                        match_length = end - begin;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        std::wstring result;
+        size_t cursor = 0;
+        bool replaced = false;
+        while (cursor <= value.size()) {
+            size_t match_start = 0;
+            size_t match_length = 0;
+            if (!find_match(cursor, match_start, match_length)) {
+                result += value.substr(cursor);
+                break;
+            }
+
+            replaced = true;
+            result += value.substr(cursor, match_start - cursor);
+            result += replacement;
+
+            if (match_length == 0) {
+                if (match_start < value.size()) {
+                    result.push_back(value[match_start]);
+                }
+                cursor = match_start + 1;
+            } else {
+                cursor = match_start + match_length;
+            }
+
+            if (!replace_all) {
+                result += value.substr(cursor);
+                break;
+            }
+        }
+
+        return replaced ? result : value;
+    };
+
+    next_index = dollar_index + 1;
+
+    auto fail_bad_substitution = [&]() -> std::wstring {
+        std::wcerr << L"ksh: bad substitution: missing }\n";
+        ksh_env.variables[L"?"] = L"1";
+        g_expansion_error = true;
+        return L"";
+    };
+
+    if (next_index >= input.length()) {
+        return L"$";
+    }
+
+    wchar_t marker = input[next_index];
+    if (marker == L'#') {
+        next_index++;
+        std::wstring value;
+        bool is_set = false;
+        try_get_parameter_value(L"#", value, is_set);
+        return value;
+    }
+    if (marker == L'@') {
+        next_index++;
+        std::wstring value;
+        bool is_set = false;
+        try_get_parameter_value(L"@", value, is_set);
+        return value;
+    }
+    if (marker == L'*') {
+        next_index++;
+        std::wstring value;
+        bool is_set = false;
+        try_get_parameter_value(L"*", value, is_set);
+        return value;
+    }
+    if (marker == L'$') {
+        next_index++;
+        std::wstring value;
+        bool is_set = false;
+        try_get_parameter_value(L"$", value, is_set);
+        return value;
+    }
+    if (marker == L'?') {
+        next_index++;
+        std::wstring value;
+        bool is_set = false;
+        try_get_parameter_value(L"?", value, is_set);
+        if (is_set) {
+            return value;
+        }
+        return L"0";
+    }
+    if (std::iswdigit(marker)) {
+        std::wstring index_text;
+        while (next_index < input.length() && std::iswdigit(input[next_index])) {
+            index_text += input[next_index];
+            next_index++;
+        }
+        std::wstring value;
+        bool is_set = false;
+        try_get_parameter_value(index_text, value, is_set);
+        if (is_set) {
+            return value;
+        }
+        return L"";
+    }
+
+    bool braced = false;
+    bool closing_brace_consumed = false;
+    bool length_operator = false;
+    std::wstring var_name;
+    if (marker == L'{') {
+        braced = true;
+        next_index++;
+
+        if (next_index < input.length() && input[next_index] == L'#') {
+            length_operator = true;
+            next_index++;
+        }
+
+        if (next_index < input.length() && input[next_index] == L'!') {
+            var_name += L'!';
+            next_index++;
+        }
+    }
+
+    if (next_index < input.length() && (input[next_index] == L'@' || input[next_index] == L'#' || input[next_index] == L'*')) {
+        var_name += input[next_index];
+        next_index++;
+    } else if (next_index < input.length() && input[next_index] == L'.') {
+        var_name += input[next_index];
+        next_index++;
+    }
+
+    while (next_index < input.length() && (std::iswalnum(input[next_index]) || input[next_index] == L'_' || input[next_index] == L'.')) {
+        var_name += input[next_index];
+        next_index++;
+    }
+
+    if (braced && next_index < input.length() && input[next_index] == L'[') {
+        size_t bracket_end = input.find(L']', next_index + 1);
+        if (bracket_end == std::wstring::npos) {
+            return fail_bad_substitution();
+        }
+
+        var_name += input.substr(next_index, bracket_end - next_index + 1);
+        next_index = bracket_end + 1;
+    }
+
+    if (length_operator) {
+        std::wstring resolved_value;
+        bool resolved_is_set = false;
+
+        if (var_name.empty()) {
+            return fail_bad_substitution();
+        }
+
+        std::wstring resolved_var_name = resolve_variable_name(var_name);
+
+        std::wstring array_name;
+        std::wstring index_expr;
+        bool has_index = false;
+        if (parse_array_reference(resolved_var_name, array_name, index_expr, has_index)) {
+            std::map<std::wstring, std::map<std::wstring, std::wstring>>::const_iterator arr_it = ksh_env.arrays.find(array_name);
+            if (arr_it != ksh_env.arrays.end()) {
+                if (has_index && (index_expr == L"@" || index_expr == L"*")) {
+                    resolved_value = std::to_wstring(arr_it->second.size());
+                    resolved_is_set = true;
+                } else if (has_index) {
+                    bool is_assoc = false;
+                    std::map<std::wstring, bool>::const_iterator assoc_it = ksh_env.associative_flags.find(array_name);
+                    if (assoc_it != ksh_env.associative_flags.end()) {
+                        is_assoc = assoc_it->second;
+                    }
+
+                    if (is_assoc) {
+                        std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(index_expr);
+                        if (val_it != arr_it->second.end()) {
+                            resolved_value = std::to_wstring(val_it->second.size());
+                        } else {
+                            resolved_value = L"0";
+                        }
+                        resolved_is_set = true;
+                    } else {
+                        size_t idx = 0;
+                        if (parse_non_negative_index_local(index_expr, idx)) {
+                            std::wstring key = std::to_wstring(idx);
+                            std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(key);
+                            if (val_it != arr_it->second.end()) {
+                                resolved_value = std::to_wstring(val_it->second.size());
+                            } else {
+                                resolved_value = L"0";
+                            }
+                            resolved_is_set = true;
+                        } else {
+                            resolved_value = L"0";
+                            resolved_is_set = true;
+                        }
+                    }
+                } else {
+                    std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(L"0");
+                    resolved_value = (val_it != arr_it->second.end()) ? std::to_wstring(val_it->second.size()) : L"0";
+                    resolved_is_set = true;
+                }
+            }
+        }
+
+        if (!resolved_is_set) {
+            try_get_parameter_value(resolved_var_name, resolved_value, resolved_is_set);
+            if (resolved_is_set) {
+                resolved_value = std::to_wstring(resolved_value.size());
+            }
+        }
+
+        if (!resolved_is_set) {
+            resolved_value = L"0";
+        }
+
+        if (braced) {
+            if (next_index >= input.length() || input[next_index] != L'}') {
+                return fail_bad_substitution();
+            }
+            next_index++;
+            closing_brace_consumed = true;
+        }
+
+        return resolved_value;
+    }
+
+    if (braced && next_index < input.length() && input[next_index] == L':' && (next_index + 1) < input.length()) {
+        wchar_t op = input[next_index + 1];
+        if (op != L'-' && op != L'=' && op != L'+' && op != L'?') {
+            size_t after_offset = next_index + 1;
+            size_t colon_or_brace = after_offset;
+            int inner_brace_depth = 0;
+            while (colon_or_brace < input.length()) {
+                if (input[colon_or_brace] == L'{') inner_brace_depth++;
+                if (input[colon_or_brace] == L'}') {
+                    if (inner_brace_depth == 0) break;
+                    inner_brace_depth--;
+                }
+                if (input[colon_or_brace] == L':' && inner_brace_depth == 0) {
+                    break;
+                }
+                colon_or_brace++;
+            }
+
+            if (colon_or_brace == input.length()) {
+                return fail_bad_substitution();
+            }
+
+            std::wstring offset_str = input.substr(after_offset, colon_or_brace - after_offset);
+            std::wstring length_str;
+            bool has_length = false;
+
+            if (input[colon_or_brace] == L':') {
+                has_length = true;
+                size_t length_start = colon_or_brace + 1;
+                size_t closing_brace = length_start;
+                int inner_brace_depth2 = 0;
+                while (closing_brace < input.length()) {
+                    if (input[closing_brace] == L'{') inner_brace_depth2++;
+                    if (input[closing_brace] == L'}') {
+                        if (inner_brace_depth2 == 0) break;
+                        inner_brace_depth2--;
+                    }
+                    closing_brace++;
+                }
+                if (closing_brace == input.length()) {
+                    return fail_bad_substitution();
+                }
+                length_str = input.substr(length_start, closing_brace - length_start);
+                next_index = closing_brace + 1;
+            } else {
+                next_index = colon_or_brace + 1;
+            }
+
+            closing_brace_consumed = true;
+
+            std::wstring expanded_offset = expand_substitutions_left_to_right(offset_str);
+            if (g_expansion_error) return L"";
+            std::wstring evaluated_offset = evaluate_arithmetic(expanded_offset);
+            int offset = 0;
+            if (!try_parse_int_strict(evaluated_offset, offset)) {
+                std::wcerr << L"ksh: bad substitution: invalid offset\n";
+                ksh_env.variables[L"?"] = L"1";
+                g_expansion_error = true;
+                return L"";
+            }
+
+            int length = -1;
+            if (has_length) {
+                std::wstring expanded_length = expand_substitutions_left_to_right(length_str);
+                if (g_expansion_error) return L"";
+                std::wstring evaluated_length = evaluate_arithmetic(expanded_length);
+                if (!try_parse_int_strict(evaluated_length, length)) {
+                    std::wcerr << L"ksh: bad substitution: invalid length\n";
+                    ksh_env.variables[L"?"] = L"1";
+                    g_expansion_error = true;
+                    return L"";
+                }
+            }
+
+            std::wstring existing_value;
+            bool is_set = false;
+            try_get_parameter_value(var_name, existing_value, is_set);
+            if (!is_set) {
+                if (g_nounset_enabled) {
+                    std::wcerr << L"ksh: " << var_name << L": parameter not set\n";
+                    ksh_env.variables[L"?"] = L"1";
+                    g_expansion_error = true;
+                }
+                return L"";
+            }
+
+            int val_len = static_cast<int>(existing_value.length());
+            if (offset < 0) {
+                offset = val_len + offset;
+                if (offset < 0) offset = 0;
+            }
+            if (offset > val_len) {
+                return L"";
+            }
+
+            if (length < 0) {
+                return existing_value.substr(offset);
+            } else {
+                if (offset + length > val_len) {
+                    length = val_len - offset;
+                }
+                return existing_value.substr(offset, length);
+            }
+        }
+        if (op == L'-' || op == L'=' || op == L'+' || op == L'?') {
+            std::wstring parameter_word;
+            size_t after_word = next_index + 2;
+            if (!parse_braced_parameter_word(input, next_index + 2, parameter_word, after_word)) {
+                return fail_bad_substitution();
+            }
+
+            next_index = after_word;
+            closing_brace_consumed = true;
+
+            std::wstring existing_value;
+            bool is_set = false;
+            try_get_parameter_value(var_name, existing_value, is_set);
+            bool is_null_or_unset = (!is_set || existing_value.empty());
+
+            if (op == L'-') {
+                if (is_null_or_unset) {
+                    return expand_substitutions_left_to_right(parameter_word);
+                }
+                return existing_value;
+            }
+
+            if (op == L'=') {
+                if (!is_null_or_unset) {
+                    return existing_value;
+                }
+
+                std::wstring assigned_value = expand_substitutions_left_to_right(parameter_word);
+                if (g_expansion_error) {
+                    return L"";
+                }
+
+                if (!is_assignable_parameter_name(var_name)) {
+                    std::wcerr << L"ksh: bad substitution for := operator\n";
+                    ksh_env.variables[L"?"] = L"1";
+                    g_expansion_error = true;
+                    return L"";
+                }
+
+                ksh_env.variables[var_name] = assigned_value;
+                SetEnvironmentVariableW(var_name.c_str(), assigned_value.c_str());
+                return assigned_value;
+            }
+
+            if (op == L'+') {
+                if (is_null_or_unset) {
+                    return L"";
+                }
+                return expand_substitutions_left_to_right(parameter_word);
+            }
+
+            if (is_null_or_unset) {
+                std::wstring message = expand_substitutions_left_to_right(parameter_word);
+                if (message.empty()) {
+                    message = L"parameter '" + var_name + L"' is unset or empty";
+                }
+                std::wcerr << L"ksh: " << message << L"\n";
+                ksh_env.variables[L"?"] = L"1";
+                g_expansion_error = true;
+                return L"";
+            }
+
+            return existing_value;
+        }
+    }
+
+    if (braced && next_index < input.length() && (input[next_index] == L'#' || input[next_index] == L'%')) {
+        const bool prefix_mode = input[next_index] == L'#';
+        bool longest_match = false;
+        size_t pattern_start = next_index + 1;
+        if (pattern_start < input.length() && input[pattern_start] == input[next_index]) {
+            longest_match = true;
+            pattern_start++;
+        }
+
+        std::wstring pattern_word;
+        size_t after_word = pattern_start;
+        if (!parse_braced_parameter_word(input, pattern_start, pattern_word, after_word)) {
+            return fail_bad_substitution();
+        }
+
+        next_index = after_word;
+        closing_brace_consumed = true;
+
+        std::wstring existing_value;
+        bool is_set = false;
+        try_get_parameter_value(var_name, existing_value, is_set);
+        if (!is_set) {
+            return L"";
+        }
+
+        return apply_parameter_pattern_removal(existing_value, pattern_word, prefix_mode, longest_match);
+    }
+
+    if (braced && next_index < input.length() && input[next_index] == L'/') {
+        bool replace_all = false;
+        size_t pattern_start = next_index + 1;
+        if (pattern_start < input.length() && input[pattern_start] == L'/') {
+            replace_all = true;
+            pattern_start++;
+        }
+
+        std::wstring pattern_word;
+        std::wstring replacement_word;
+        size_t i = pattern_start;
+        int brace_depth = 0;
+        bool in_single_quotes = false;
+        bool inner_in_double_quotes = false;
+        bool escaped = false;
+        bool saw_separator = false;
+
+        while (i < input.length()) {
+            wchar_t ch = input[i];
+
+            if (escaped) {
+                (saw_separator ? replacement_word : pattern_word) += ch;
+                escaped = false;
+                i++;
+                continue;
+            }
+
+            if (ch == L'\\' && !in_single_quotes) {
+                (saw_separator ? replacement_word : pattern_word) += ch;
+                escaped = true;
+                i++;
+                continue;
+            }
+
+            if (ch == L'\'' && !inner_in_double_quotes) {
+                in_single_quotes = !in_single_quotes;
+                (saw_separator ? replacement_word : pattern_word) += ch;
+                i++;
+                continue;
+            }
+
+            if (ch == L'"' && !in_single_quotes) {
+                inner_in_double_quotes = !inner_in_double_quotes;
+                (saw_separator ? replacement_word : pattern_word) += ch;
+                i++;
+                continue;
+            }
+
+            if (!in_single_quotes && !inner_in_double_quotes) {
+                if (ch == L'{') {
+                    brace_depth++;
+                    (saw_separator ? replacement_word : pattern_word) += ch;
+                    i++;
+                    continue;
+                }
+
+                if (ch == L'}') {
+                    if (brace_depth == 0) {
+                        next_index = i + 1;
+                        closing_brace_consumed = true;
+
+                        std::wstring existing_value;
+                        bool is_set = false;
+                        try_get_parameter_value(var_name, existing_value, is_set);
+                        if (!is_set) {
+                            return L"";
+                        }
+
+                        return apply_parameter_substitution(existing_value, pattern_word, replacement_word, replace_all);
+                    }
+
+                    brace_depth--;
+                    (saw_separator ? replacement_word : pattern_word) += ch;
+                    i++;
+                    continue;
+                }
+
+                if (ch == L'/' && brace_depth == 0 && !saw_separator) {
+                    saw_separator = true;
+                    i++;
+                    continue;
+                }
+            }
+
+            (saw_separator ? replacement_word : pattern_word) += ch;
+            i++;
+        }
+
+        return fail_bad_substitution();
+    }
+
+    if (braced && !closing_brace_consumed) {
+        if (next_index >= input.length() || input[next_index] != L'}') {
+            return fail_bad_substitution();
+        }
+        next_index++;
+        closing_brace_consumed = true;
+    }
+
+    if (var_name.empty()) {
+        if (braced) {
+            std::wcerr << L"ksh: bad substitution\n";
+            ksh_env.variables[L"?"] = L"1";
+            g_expansion_error = true;
+            return L"";
+        }
+        return L"$";
+    }
+
+    std::wstring resolved_value;
+    bool resolved_is_set = false;
+    try_get_parameter_value(var_name, resolved_value, resolved_is_set);
+    if (resolved_is_set) {
+        return resolved_value;
+    }
+    if (g_nounset_enabled) {
+        std::wcerr << L"ksh: " << var_name << L": parameter not set\n";
+        ksh_env.variables[L"?"] = L"1";
+        g_expansion_error = true;
+    }
+    return L"";
+}
+
+std::wstring expand_substitutions_left_to_right(const std::wstring& input) {
+    ScopedExpansionDepth depth_guard;
+    if (!depth_guard.active()) {
+        std::wcerr << L"ksh: expansion nesting depth exceeded limit\n";
+        ksh_env.variables[L"?"] = L"1";
+        g_expansion_error = true;
+        return L"";
+    }
+
+    std::wstring result;
+    size_t i = 0;
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+
+    while (i < input.length()) {
+        wchar_t ch = input[i];
+
+        if (escaped) {
+            result += ch;
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            result += ch;
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            result += ch;
+            i++;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            result += ch;
+            i++;
+            continue;
+        }
+
+        if (ch != L'$' || in_single_quotes) {
+            result += ch;
+            i++;
+            continue;
+        }
+
+        if ((i + 1) < input.length() && input[i + 1] == L'(') {
+            if ((i + 2) < input.length() && input[i + 2] == L'(') {
+                std::wstring arith_content;
+                size_t next_index = i + 3;
+                if (!parse_arithmetic_substitution_content(input, i + 3, arith_content, next_index)) {
+                    result += L"$((";
+                    i += 3;
+                    continue;
+                }
+
+                std::wstring expanded_arith = expand_substitutions_left_to_right(arith_content);
+                result += evaluate_arithmetic(expanded_arith);
+                i = next_index;
+                continue;
+            }
+
+            std::wstring cmd_content;
+            size_t next_index = i + 2;
+            if (!parse_command_substitution_content(input, i + 2, cmd_content, next_index)) {
+                result += L"$(";
+                i += 2;
+                continue;
+            }
+
+            std::wstring expanded_command = expand_substitutions_left_to_right(cmd_content);
+            std::vector<std::wstring> substitution_tokens = ksh_tokenize_preserve_quotes(expanded_command);
+            const bool use_capture_sink = can_capture_builtin_command_substitution(substitution_tokens);
+            std::wstring sub_output = execute_command_substitution(expanded_command, use_capture_sink);
+
+            result += sub_output;
+            i = next_index;
+            continue;
+        }
+
+        size_t next_index = i + 1;
+        result += expand_variable_reference(input, i, next_index, in_double_quotes);
+        if (next_index <= i) {
+            next_index = i + 1;
+        }
+        i = next_index;
+    }
+
+    return result;
+}
+
+std::wstring evaluate_command_substitutions(const std::wstring& input) {
+    ScopedExpansionDepth depth_guard;
+    if (!depth_guard.active()) {
+        g_expansion_error = true;
+        std::wcerr << L"ksh: maximum expansion nesting depth exceeded\n";
+        return L"";
+    }
+
+    std::wstring output;
+    size_t i = 0;
+
+    while (i < input.size()) {
+        if (input[i] == L'$' && (i + 1) < input.size() && input[i + 1] == L'(' && !((i + 2) < input.size() && input[i + 2] == L'(')) {
+            std::wstring cmd_content;
+            size_t next_index = i + 2;
+            if (!parse_command_substitution_content(input, i + 2, cmd_content, next_index)) {
+                output += L"$(";
+                i += 2;
+                continue;
+            }
+
+            std::wstring nested = evaluate_command_substitutions(cmd_content);
+            if (g_expansion_error) {
+                return L"";
+            }
+            std::vector<std::wstring> substitution_tokens = ksh_tokenize_preserve_quotes(nested);
+            const bool use_capture_sink = can_capture_builtin_command_substitution(substitution_tokens);
+            std::wstring sub_output = execute_command_substitution(nested, use_capture_sink);
+
+            output += sub_output;
+            i = next_index;
+            continue;
+        }
+
+        output += input[i];
+        i++;
+    }
+
+    return output;
+}
+
+std::wstring join_fields_with_internal_separator(const std::vector<std::wstring>& fields) {
+    std::wstring joined;
+    for (size_t i = 0; i < fields.size(); ++i) {
+        if (i > 0) {
+            joined.push_back(k_array_at_quoted_separator);
+        }
+        joined += fields[i];
+    }
+    return joined;
+}
+
+std::wstring effective_ifs_value() {
+    std::map<std::wstring, std::wstring>::const_iterator it = ksh_env.variables.find(L"IFS");
+    if (it != ksh_env.variables.end()) {
+        return it->second;
+    }
+    return L" \t\n";
+}
+
+std::vector<std::wstring> split_fields_by_ifs(const std::wstring& input) {
+    std::vector<std::wstring> fields;
+    std::wstring current;
+    const std::wstring ifs = effective_ifs_value();
+
+    bool in_quotes = false;
+    bool in_single_quotes = false;
+    bool in_array_def = false;
+    bool escaped = false;
+    bool ended_with_internal_separator = false;
+
+    auto is_ifs_delimiter = [&](wchar_t ch) {
+        return ifs.find(ch) != std::wstring::npos;
+    };
+
+    for (size_t i = 0; i < input.length(); ++i) {
+        wchar_t c = input[i];
+
+        if (c == k_array_at_quoted_separator) {
+            fields.push_back(current);
+            current.clear();
+            ended_with_internal_separator = true;
+            continue;
+        }
+
+        ended_with_internal_separator = false;
+
+        if (escaped) {
+            current += c;
+            escaped = false;
+            continue;
+        }
+
+        if (c == L'\\' && !in_single_quotes) {
+            current += c;
+            escaped = true;
+            continue;
+        }
+
+        if (c == L'"' && !in_array_def && !in_single_quotes) {
+            in_quotes = !in_quotes;
+            current += c;
+            continue;
+        }
+
+        if (c == L'\'' && !in_array_def && !in_quotes) {
+            in_single_quotes = !in_single_quotes;
+            current += c;
+            continue;
+        }
+
+        if (c == L'(' && i > 0 && input[i - 1] == L'=') {
+            in_array_def = true;
+            current += c;
+            continue;
+        }
+
+        if (c == L')' && in_array_def) {
+            in_array_def = false;
+            current += c;
+            continue;
+        }
+
+        if (!in_quotes && !in_single_quotes && !in_array_def && is_ifs_delimiter(c)) {
+            if (!current.empty()) {
+                fields.push_back(current);
+                current.clear();
+            }
+            continue;
+        }
+
+        current += c;
+    }
+
+    if (!current.empty() || ended_with_internal_separator) {
+        fields.push_back(current);
+    }
+
+    return fields;
+}
+
+std::wstring expand_tilde(const std::wstring& input) {
+    if (input.empty() || input[0] != L'~') {
+        return input;
+    }
+    
+    size_t slash_pos = input.find_first_of(L"/\\");
+    std::wstring username = (slash_pos == std::wstring::npos) ? input.substr(1) : input.substr(1, slash_pos - 1);
+    std::wstring rest = (slash_pos == std::wstring::npos) ? L"" : input.substr(slash_pos);
+    
+    std::wstring home_dir;
+    if (username.empty()) {
+        wchar_t user_profile[MAX_PATH];
+        if (GetEnvironmentVariableW(L"USERPROFILE", user_profile, MAX_PATH) > 0) {
+            home_dir = user_profile;
+        } else if (GetEnvironmentVariableW(L"HOME", user_profile, MAX_PATH) > 0) {
+            home_dir = user_profile;
+        } else {
+            home_dir = L"C:\\";
+        }
+    } else {
+        std::wstring target = L"C:\\Users\\" + username;
+        DWORD attr = GetFileAttributesW(target.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            home_dir = target;
+        } else {
+            return input;
+        }
+    }
+    return home_dir + rest;
+}
+
+std::vector<std::wstring> expand_tilde_for_tokens(const std::vector<std::wstring>& tokens) {
+    std::vector<std::wstring> res;
+    res.reserve(tokens.size());
+    for (const std::wstring& t : tokens) {
+        res.push_back(expand_tilde(t));
+    }
+    return res;
+}
+
+std::wstring join_path_for_glob(const std::wstring& base, const std::wstring& name) {
+    if (base.empty()) {
+        return name;
+    }
+    if (base == L".") {
+        return L".\\" + name;
+    }
+    if (base.back() == L'\\' || base.back() == L'/') {
+        return base + name;
+    }
+    return base + L"\\" + name;
+}
+
+std::wstring normalize_relative_glob_result(const std::wstring& value) {
+    if (value.rfind(L".\\", 0) == 0) {
+        return value.substr(2);
+    }
+    return value;
+}
+
+void expand_glob_token(const std::wstring& pattern, std::vector<std::wstring>& matches) {
+    matches.clear();
+
+    std::wstring normalized = pattern;
+    std::replace(normalized.begin(), normalized.end(), L'/', L'\\');
+
+    std::vector<std::wstring> segments;
+    std::wstring current_segment;
+    for (wchar_t ch : normalized) {
+        if (is_path_separator(ch)) {
+            if (!current_segment.empty()) {
+                segments.push_back(current_segment);
+                current_segment.clear();
+            }
+            continue;
+        }
+        current_segment += ch;
+    }
+    if (!current_segment.empty()) {
+        segments.push_back(current_segment);
+    }
+
+    if (segments.empty()) {
+        return;
+    }
+
+    bool absolute_drive = normalized.size() >= 2 && std::iswalpha(normalized[0]) && normalized[1] == L':';
+    bool rooted = !normalized.empty() && is_path_separator(normalized[0]);
+
+    std::vector<std::wstring> candidates;
+    if (absolute_drive) {
+        std::wstring base;
+        base += normalized[0];
+        base += L':';
+        base += L'\\';
+        candidates.push_back(base);
+    } else if (rooted) {
+        candidates.push_back(L"\\");
+    } else {
+        candidates.push_back(L".");
+    }
+
+    for (size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
+        const std::wstring& segment = segments[segment_index];
+        const bool needs_glob = has_glob_metacharacters(segment);
+        const bool is_last = segment_index + 1 == segments.size();
+
+        std::vector<std::wstring> next_candidates;
+        for (const std::wstring& base : candidates) {
+            if (!needs_glob) {
+                std::wstring next_path = join_path_for_glob(base, segment);
+                DWORD attrs = GetFileAttributesW(next_path.c_str());
+                if (attrs == INVALID_FILE_ATTRIBUTES) {
+                    continue;
+                }
+                if (!is_last && ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0)) {
+                    continue;
+                }
+                next_candidates.push_back(next_path);
+                continue;
+            }
+
+            std::wstring probe = join_path_for_glob(base, L"*");
+            WIN32_FIND_DATAW find_data;
+            HANDLE handle = FindFirstFileW(probe.c_str(), &find_data);
+            if (handle == INVALID_HANDLE_VALUE) {
+                continue;
+            }
+
+            do {
+                std::wstring name = find_data.cFileName;
+                if (name == L"." || name == L"..") {
+                    continue;
+                }
+                if (!match_glob_pattern(segment, name)) {
+                    continue;
+                }
+                if (!is_last && ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)) {
+                    continue;
+                }
+
+                next_candidates.push_back(join_path_for_glob(base, name));
+            } while (FindNextFileW(handle, &find_data));
+
+            FindClose(handle);
+        }
+
+        candidates.swap(next_candidates);
+        if (candidates.empty()) {
+            return;
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const std::wstring& left, const std::wstring& right) {
+        return _wcsicmp(left.c_str(), right.c_str()) < 0;
+    });
+
+    for (const std::wstring& candidate : candidates) {
+        matches.push_back(normalize_relative_glob_result(candidate));
+    }
+}
+
+std::vector<std::wstring> expand_globs_for_tokens(const std::vector<std::wstring>& tokens, const std::vector<std::wstring>& preserved_tokens) {
+    std::vector<std::wstring> expanded;
+    expanded.reserve(tokens.size());
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const std::wstring& token = tokens[i];
+        const std::wstring& preserved = (i < preserved_tokens.size()) ? preserved_tokens[i] : token;
+
+        if (!has_unquoted_glob_metacharacters(preserved) || !has_glob_metacharacters(token)) {
+            expanded.push_back(token);
+            continue;
+        }
+
+        std::vector<std::wstring> matches;
+        expand_glob_token(token, matches);
+        if (matches.empty()) {
+            // Keep unmatched wildcard tokens literal for compatibility.
+            expanded.push_back(token);
+            continue;
+        }
+
+        expanded.insert(expanded.end(), std::make_move_iterator(matches.begin()), std::make_move_iterator(matches.end()));
+    }
+
+    return expanded;
+}
+
+std::wstring ksh_expand(const std::wstring& input) {
+    g_expansion_error = false;
+    std::wstring tilde_expanded = expand_tilde(input);
+    std::wstring expanded = expand_substitutions_left_to_right(tilde_expanded);
+    if (g_expansion_error) {
+        return L"";
+    }
+
+    std::vector<std::wstring> fields = split_fields_by_ifs(expanded);
+    fields = expand_globs_for_tokens(fields, fields);
+    std::vector<std::wstring> stripped = remove_quotes_and_escapes_from_tokens(fields);
+    return join_fields_with_internal_separator(stripped);
+}
+
+/******************************************************************************
+** End of ksh_expansion.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_jobs.cpp
+******************************************************************************/
+
+
+void register_child_process_times(HANDLE hProcess) {
+    if (hProcess == nullptr || hProcess == INVALID_HANDLE_VALUE) return;
+    FILETIME creationTime, exitTime, kernelTime, userTime;
+    if (GetProcessTimes(hProcess, &creationTime, &exitTime, &kernelTime, &userTime)) {
+        ULARGE_INTEGER uUser, uKernel;
+        uUser.LowPart = userTime.dwLowDateTime;
+        uUser.HighPart = userTime.dwHighDateTime;
+        uKernel.LowPart = kernelTime.dwLowDateTime;
+        uKernel.HighPart = kernelTime.dwHighDateTime;
+        g_child_user_time += uUser.QuadPart;
+        g_child_kernel_time += uKernel.QuadPart;
+    }
+}
+
+void update_background_jobs(bool print_completions) {
+    auto ensure_job_handle_views = [](BackgroundJob& job) {
+        if (job.process_handles.empty() && job.process_handle != nullptr) {
+            job.process_handles.push_back(job.process_handle);
+        }
+        if (job.pids.empty() && job.pid != 0) {
+            job.pids.push_back(job.pid);
+        }
+        if (!job.process_handles.empty()) {
+            job.process_handle = job.process_handles.back();
+        }
+        if (!job.pids.empty()) {
+            job.pid = job.pids.back();
+        }
+    };
+
+    for (BackgroundJob& job : g_background_jobs) {
+        if (job.completed) {
+            continue;
+        }
+
+        ensure_job_handle_views(job);
+
+        if (job.process_handles.empty()) {
+            job.completed = true;
+            job.exit_code = 1;
+            job.completion_reported = true;
+            continue;
+        }
+
+        bool all_complete = true;
+        DWORD last_code = 0;
+        for (size_t i = 0; i < job.process_handles.size(); ++i) {
+            HANDLE handle = job.process_handles[i];
+            if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+                last_code = 1;
+                continue;
+            }
+
+            DWORD code = STILL_ACTIVE;
+            bool is_pipeline_thread = false;
+            {
+                std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
+                is_pipeline_thread = (g_pipeline_thread_handles.find(handle) != g_pipeline_thread_handles.end());
+            }
+            if (is_pipeline_thread) {
+                if (!GetExitCodeThread(handle, &code)) code = 1;
+            } else if (!GetExitCodeProcess(handle, &code)) {
+                code = 1;
+            }
+
+            if (i + 1 == job.process_handles.size()) {
+                last_code = code;
+            }
+
+            if (code == STILL_ACTIVE) {
+                all_complete = false;
+            }
+        }
+
+        if (all_complete) {
+            for (HANDLE handle : job.process_handles) {
+                register_child_process_times(handle);
+            }
+            job.completed = true;
+            job.exit_code = (last_code == STILL_ACTIVE) ? 1 : last_code;
+            if (print_completions && !job.completion_reported) {
+                std::wcout << format_background_job_line(job) << L"\n";
+            }
+            job.completion_reported = true;
+            close_background_job_handles(job);
+        }
+    }
+}
+
+BackgroundJob* find_background_job(int job_id) {
+    for (BackgroundJob& job : g_background_jobs) {
+        if (job.id == job_id) {
+            return &job;
+        }
+    }
+    return nullptr;
+}
+
+BackgroundJob* find_default_background_job_for_resume_or_foreground() {
+    for (size_t i = g_background_jobs.size(); i > 0; --i) {
+        BackgroundJob& job = g_background_jobs[i - 1];
+        if (!job.completed) {
+            return &job;
+        }
+    }
+    return nullptr;
+}
+
+bool resolve_job_reference(const std::wstring& raw, int& job_id) {
+    if (raw.empty()) {
+        return false;
+    }
+
+    if (raw == L"%+" || raw == L"%%") {
+        if (g_background_jobs.empty()) {
+            return false;
+        }
+        job_id = g_background_jobs.back().id;
+        return true;
+    }
+
+    if (raw == L"%-") {
+        if (g_background_jobs.size() < 2) {
+            return false;
+        }
+        job_id = g_background_jobs[g_background_jobs.size() - 2].id;
+        return true;
+    }
+
+    std::wstring value = raw;
+    if (!value.empty() && value[0] == L'%') {
+        value = value.substr(1);
+    }
+    if (value.empty()) {
+        return false;
+    }
+
+    int parsed = 0;
+    if (!try_parse_positive_int_strict(value, parsed)) {
+        return false;
+    }
+    job_id = parsed;
+    return true;
+}
+
+std::wstring format_background_job_line(const BackgroundJob& job) {
+    std::wstring line = L"[" + std::to_wstring(job.id) + L"] ";
+    if (job.completed) {
+        line += L"Done (exit=" + std::to_wstring(job.exit_code) + L") ";
+    } else {
+        line += L"Running pid=" + std::to_wstring(job.pid) + L" ";
+    }
+    line += job.command;
+    return line;
+}
+
+void close_background_job_handles(BackgroundJob& job) {
+    std::vector<HANDLE> closed;
+    closed.reserve(job.process_handles.size() + 1);
+
+    auto close_once = [&](HANDLE handle) {
+        if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+            return;
+        }
+        if (std::find(closed.begin(), closed.end(), handle) != closed.end()) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
+            g_pipeline_thread_handles.erase(handle);
+        }
+        CloseHandle(handle);
+        closed.push_back(handle);
+    };
+
+    for (HANDLE handle : job.process_handles) {
+        close_once(handle);
+    }
+    close_once(job.process_handle);
+
+    for (const std::wstring& path : job.temp_file_paths) {
+        if (!path.empty()) {
+            DeleteFileW(path.c_str());
+        }
+    }
+    job.temp_file_paths.clear();
+
+    job.process_handle = nullptr;
+    job.process_handles.clear();
+}
+
+bool wait_for_background_job(BackgroundJob& job, DWORD& exit_code) {
+    update_background_jobs(false);
+
+    if (job.completed) {
+        close_background_job_handles(job);
+        exit_code = job.exit_code;
+        return true;
+    }
+
+    if (job.process_handles.empty() && job.process_handle != nullptr) {
+        job.process_handles.push_back(job.process_handle);
+    }
+
+    if (job.process_handles.empty()) {
+        exit_code = 1;
+        job.completed = true;
+        job.exit_code = 1;
+        return false;
+    }
+
+    DWORD last_code = 1;
+    bool ok = true;
+    for (size_t i = 0; i < job.process_handles.size(); ++i) {
+        HANDLE handle = job.process_handles[i];
+        if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+            ok = false;
+            if (i + 1 == job.process_handles.size()) {
+                last_code = 1;
+            }
+            continue;
+        }
+
+        WaitForSingleObject(handle, INFINITE);
+        register_child_process_times(handle);
+        DWORD code = 1;
+        if (!GetExitCodeProcess(handle, &code)) {
+            code = 1;
+            ok = false;
+        }
+
+        if (i + 1 == job.process_handles.size()) {
+            last_code = code;
+        }
+    }
+
+    job.completed = true;
+    job.exit_code = last_code;
+    job.completion_reported = true;
+    close_background_job_handles(job);
+    exit_code = last_code;
+    return ok;
+}
+
+void remove_background_job(int job_id) {
+    for (size_t i = 0; i < g_background_jobs.size(); ++i) {
+        if (g_background_jobs[i].id == job_id) {
+            close_background_job_handles(g_background_jobs[i]);
+            g_background_jobs.erase(g_background_jobs.begin() + static_cast<long long>(i));
+            return;
+        }
+    }
+}
+
+void cleanup_all_background_jobs() {
+    for (BackgroundJob& job : g_background_jobs) {
+        close_background_job_handles(job);
+    }
+    g_background_jobs.clear();
+}
+
+std::vector<std::wstring> split_pipeline_segments(const std::wstring& input) {
+    std::vector<std::wstring> segments;
+    std::wstring current;
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+    int paren_depth = 0;
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        wchar_t ch = input[i];
+
+        if (escaped) {
+            current += ch;
+            escaped = false;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            current += ch;
+            escaped = true;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            current += ch;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            current += ch;
+            continue;
+        }
+
+        if (!in_single_quotes && !in_double_quotes) {
+            if (ch == L'(') {
+                paren_depth++;
+            } else if (ch == L')') {
+                if (paren_depth > 0) paren_depth--;
+            }
+        }
+
+        if (ch == L'|' && !in_single_quotes && !in_double_quotes && paren_depth == 0) {
+            if ((i + 1) < input.size() && input[i + 1] == L'|') {
+                current += L"||";
+                ++i;
+                continue;
+            }
+
+            segments.push_back(trim_copy(current));
+            current.clear();
+            continue;
+        }
+
+        current += ch;
+    }
+
+    segments.push_back(trim_copy(current));
+    return segments;
+}
+
+bool create_process_with_handle_list(
+    const std::wstring& command_line,
+    const STARTUPINFOW& startup,
+    const std::vector<HANDLE>& handles_to_inherit,
+    DWORD creation_flags,
+    PROCESS_INFORMATION& process_info) {
+    std::vector<wchar_t> mutable_cmd(command_line.begin(), command_line.end());
+    mutable_cmd.push_back(L'\0');
+
+    if (handles_to_inherit.empty()) {
+        STARTUPINFOW si = startup;
+        return CreateProcessW(
+            nullptr,
+            mutable_cmd.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            creation_flags,
+            nullptr,
+            nullptr,
+            &si,
+            &process_info) != FALSE;
+    }
+
+    std::vector<HANDLE> filtered_handles;
+    filtered_handles.reserve(handles_to_inherit.size());
+    for (HANDLE handle : handles_to_inherit) {
+        if (handle != nullptr && handle != INVALID_HANDLE_VALUE &&
+            std::find(filtered_handles.begin(), filtered_handles.end(), handle) == filtered_handles.end()) {
+            filtered_handles.push_back(handle);
+        }
+    }
+
+    if (filtered_handles.empty()) {
+        STARTUPINFOW si = startup;
+        return CreateProcessW(
+            nullptr,
+            mutable_cmd.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            creation_flags,
+            nullptr,
+            nullptr,
+            &si,
+            &process_info) != FALSE;
+    }
+
+    SIZE_T attribute_list_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_list_size);
+    std::vector<unsigned char> attribute_list_buffer(attribute_list_size);
+
+    STARTUPINFOEXW startup_ex;
+    ZeroMemory(&startup_ex, sizeof(startup_ex));
+    startup_ex.StartupInfo = startup;
+    startup_ex.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attribute_list_buffer.data());
+
+    if (!InitializeProcThreadAttributeList(startup_ex.lpAttributeList, 1, 0, &attribute_list_size)) {
+        return false;
+    }
+
+    std::vector<HANDLE> launch_handles;
+    launch_handles.reserve(filtered_handles.size());
+    for (HANDLE handle : filtered_handles) {
+        HANDLE duplicate = nullptr;
+        if (!DuplicateHandle(
+                GetCurrentProcess(),
+                handle,
+                GetCurrentProcess(),
+                &duplicate,
+                0,
+                TRUE,
+                DUPLICATE_SAME_ACCESS)) {
+            DeleteProcThreadAttributeList(startup_ex.lpAttributeList);
+            for (HANDLE launch_handle : launch_handles) {
+                CloseHandle(launch_handle);
+            }
+            return false;
+        }
+        launch_handles.push_back(duplicate);
+    }
+
+    auto remap_standard_handle = [&](HANDLE handle) -> HANDLE {
+        for (size_t index = 0; index < filtered_handles.size(); ++index) {
+            if (filtered_handles[index] == handle) {
+                return launch_handles[index];
+            }
+        }
+        return handle;
+    };
+    startup_ex.StartupInfo.hStdInput = remap_standard_handle(startup_ex.StartupInfo.hStdInput);
+    startup_ex.StartupInfo.hStdOutput = remap_standard_handle(startup_ex.StartupInfo.hStdOutput);
+    startup_ex.StartupInfo.hStdError = remap_standard_handle(startup_ex.StartupInfo.hStdError);
+    startup_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+    startup_ex.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+
+    bool updated = UpdateProcThreadAttribute(
+        startup_ex.lpAttributeList,
+        0,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        launch_handles.data(),
+        launch_handles.size() * sizeof(HANDLE),
+        nullptr,
+        nullptr) != FALSE;
+
+    if (!updated) {
+        DeleteProcThreadAttributeList(startup_ex.lpAttributeList);
+        for (HANDLE handle : launch_handles) {
+            CloseHandle(handle);
+        }
+        return false;
+    }
+
+    bool created = CreateProcessW(
+        nullptr,
+        mutable_cmd.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        creation_flags | EXTENDED_STARTUPINFO_PRESENT,
+        nullptr,
+        nullptr,
+        &startup_ex.StartupInfo,
+        &process_info) != FALSE;
+
+    DeleteProcThreadAttributeList(startup_ex.lpAttributeList);
+    for (HANDLE handle : launch_handles) {
+        CloseHandle(handle);
+    }
+    return created;
+}
+
+DWORD WINAPI run_inprocess_pipeline_stage(LPVOID raw_context) {
+    std::unique_ptr<InProcessPipelineStage> context(static_cast<InProcessPipelineStage*>(raw_context));
+    g_current_env = &context->environment;
+    g_current_custom_types = &context->custom_types;
+    g_current_script_context_stack = &context->script_context_stack;
+    g_current_shell_functions = &context->shell_functions;
+    g_current_function_scope_stack = &context->function_scope_stack;
+    g_current_aliases = &context->aliases;
+    g_trap_handlers = context->trap_handlers;
+    g_pipeline_stdin = context->input;
+    g_pipeline_stdout = context->output;
+    g_pipeline_stderr = context->error;
+    g_inprocess_pipeline_stage = true;
+    bool should_exit = false;
+    const bool ok = execute_command_line(context->command, should_exit);
+    DWORD exit_code = 1;
+    std::map<std::wstring, std::wstring>::const_iterator status_it = ksh_env.variables.find(L"?");
+    if (status_it != ksh_env.variables.end()) {
+        int parsed_status = 1;
+        if (try_parse_int_strict(status_it->second, parsed_status)) {
+            exit_code = static_cast<DWORD>(parsed_status);
+        }
+    } else if (ok) {
+        exit_code = 0;
+    }
+    if (context->input != INVALID_HANDLE_VALUE) CloseHandle(context->input);
+    if (context->output != INVALID_HANDLE_VALUE) CloseHandle(context->output);
+    if (context->error != INVALID_HANDLE_VALUE) CloseHandle(context->error);
+    g_pipeline_stdin = INVALID_HANDLE_VALUE;
+    g_pipeline_stdout = INVALID_HANDLE_VALUE;
+    g_pipeline_stderr = INVALID_HANDLE_VALUE;
+    g_inprocess_pipeline_stage = false;
+    return exit_code;
+}
+
+bool launch_pipeline_stage_process(
+    const std::wstring& segment,
+    HANDLE segment_stdin,
+    HANDLE segment_stdout,
+    HANDLE segment_stderr,
+    PROCESS_INFORMATION& pi,
+    std::wstring& temp_file_path_out,
+    bool allow_inprocess) {
+    STARTUPINFOW si;
+    ZeroMemory(&si, sizeof(si));
+    ZeroMemory(&pi, sizeof(pi));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = segment_stdin;
+    si.hStdOutput = segment_stdout;
+    si.hStdError = segment_stderr;
+    temp_file_path_out.clear();
+
+    bool needs_shell = has_unquoted_shell_metacharacters(segment);
+    if (!needs_shell) {
+        std::wstring trimmed = trim_copy(segment);
+        std::wstring first_token;
+        size_t first_space = trimmed.find_first_of(L" \t\r\n");
+        if (first_space != std::wstring::npos) {
+            first_token = std::wstring(trimmed.substr(0, first_space));
+        } else {
+            first_token = std::wstring(trimmed);
+        }
+        const std::vector<std::wstring>& builtins = builtin_commands();
+        bool is_builtin = (std::find(builtins.begin(), builtins.end(), first_token) != builtins.end());
+        bool is_function = (g_shell_functions.find(first_token) != g_shell_functions.end());
+        if (is_builtin || is_function) {
+            needs_shell = true;
+        }
+    }
+
+    if (allow_inprocess && needs_shell) {
+        auto duplicate_for_thread = [](HANDLE source, HANDLE& duplicate) {
+            duplicate = INVALID_HANDLE_VALUE;
+            return DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE;
+        };
+        std::unique_ptr<InProcessPipelineStage> context(new InProcessPipelineStage());
+        context->command = segment;
+        context->environment = ksh_env;
+        context->custom_types = g_custom_types;
+        context->script_context_stack = g_script_context_stack;
+        context->shell_functions = g_shell_functions;
+        context->function_scope_stack = g_function_scope_stack;
+        context->aliases = g_aliases;
+        context->trap_handlers = g_trap_handlers;
+        if (!duplicate_for_thread(segment_stdin, context->input) ||
+            !duplicate_for_thread(segment_stdout, context->output) ||
+            !duplicate_for_thread(segment_stderr, context->error)) {
+            if (context->input != INVALID_HANDLE_VALUE) CloseHandle(context->input);
+            if (context->output != INVALID_HANDLE_VALUE) CloseHandle(context->output);
+            if (context->error != INVALID_HANDLE_VALUE) CloseHandle(context->error);
+            SetLastError(ERROR_DUPLICATE_TAG);
+            return false;
+        }
+        InProcessPipelineStage* stage_ptr = context.release();
+        HANDLE thread = CreateThread(nullptr, 0, run_inprocess_pipeline_stage, stage_ptr, 0, &pi.dwProcessId);
+        if (thread != nullptr) {
+            pi.hProcess = thread;
+            {
+                std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
+                g_pipeline_thread_handles.insert(thread);
+            }
+            return true;
+        }
+        delete stage_ptr;
+    }
+    if (!needs_shell) {
+        std::vector<HANDLE> stage_handles = { segment_stdin, segment_stdout, segment_stderr };
+        if (create_process_with_handle_list(segment, si, stage_handles, 0, pi)) {
+            return true;
+        }
+    }
+
+    wchar_t exe_path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        return false;
+    }
+
+    std::wstring command_to_run;
+    size_t reserve_size = segment.size() + 1024;
+    for (const auto& pair : g_shell_functions) {
+        reserve_size += pair.first.size() + 32;
+        for (const auto& line : pair.second.body_lines) {
+            reserve_size += line.size() + 1;
+        }
+    }
+    for (const auto& pair : ksh_env.variables) {
+        reserve_size += pair.first.size() + pair.second.size() + 16;
+    }
+    for (const auto& arr_pair : ksh_env.arrays) {
+        reserve_size += arr_pair.first.size() + 32;
+        for (const auto& elem : arr_pair.second) {
+            reserve_size += arr_pair.first.size() + elem.first.size() + elem.second.size() + 16;
+        }
+    }
+    for (const auto& pair : g_aliases) {
+        reserve_size += pair.first.size() + pair.second.size() + 16;
+    }
+    command_to_run.reserve(reserve_size);
+
+    for (const auto& pair : ksh_env.variables) {
+        const std::wstring& name = pair.first;
+        if (!is_valid_shell_identifier(name)) {
+            continue;
+        }
+        if (name == L"RANDOM" || name == L"SECONDS" || name == L"LINENO" || name == L"PPID") {
+            continue;
+        }
+
+        std::wstring options;
+        if (get_flag_value(ksh_env.integer_flags, name)) options += L"i";
+        if (get_flag_value(ksh_env.uppercase_flags, name)) options += L"u";
+        if (get_flag_value(ksh_env.lowercase_flags, name)) options += L"l";
+        if (get_flag_value(ksh_env.readonly_flags, name)) options += L"r";
+        if (get_flag_value(ksh_env.exported, name)) options += L"x";
+
+        command_to_run += name + L"=" + quote_for_single_quoted_shell_literal(pair.second) + L";\n";
+        if (!options.empty()) {
+            command_to_run += L"typeset -" + options + L" " + name + L";\n";
+        }
+    }
+
+    for (const auto& arr_pair : ksh_env.arrays) {
+        const std::wstring& name = arr_pair.first;
+        if (!is_valid_shell_identifier(name)) {
+            continue;
+        }
+
+        bool is_assoc = get_flag_value(ksh_env.associative_flags, name);
+        if (is_assoc) {
+            command_to_run += L"typeset -A " + name + L";\n";
+        } else {
+            command_to_run += L"typeset -a " + name + L";\n";
+        }
+
+        for (const auto& elem : arr_pair.second) {
+            command_to_run += name + L"[" + elem.first + L"]=" + quote_for_single_quoted_shell_literal(elem.second) + L";\n";
+        }
+    }
+
+    for (const auto& pair : g_aliases) {
+        command_to_run += L"alias " + pair.first + L"=" + quote_for_single_quoted_shell_literal(pair.second) + L";\n";
+    }
+
+    for (const auto& pair : g_shell_functions) {
+        command_to_run += L"function " + pair.first + L" { ";
+        for (const auto& line : pair.second.body_lines) {
+            command_to_run += line + L"\n";
+        }
+        command_to_run += L" };\n";
+    }
+
+    command_to_run += segment;
+
+    std::wstring cmd_line;
+    if (command_to_run.size() > 4000) {
+        wchar_t temp_path[MAX_PATH];
+        wchar_t temp_file[MAX_PATH];
+        if (GetTempPathW(MAX_PATH, temp_path) != 0 && GetTempFileNameW(temp_path, L"ksh", 0, temp_file) != 0) {
+            HANDLE hFile = CreateFileW(
+                temp_file,
+                GENERIC_WRITE,
+                FILE_SHARE_READ,
+                NULL,
+                CREATE_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                NULL
+            );
+            if (hFile != INVALID_HANDLE_VALUE) {
+                std::string utf8;
+                int utf8_len = WideCharToMultiByte(CP_UTF8, 0, command_to_run.c_str(), (int)command_to_run.size(), NULL, 0, NULL, NULL);
+                if (utf8_len > 0) {
+                    utf8.resize(utf8_len);
+                    WideCharToMultiByte(CP_UTF8, 0, command_to_run.c_str(), (int)command_to_run.size(), &utf8[0], utf8_len, NULL, NULL);
+                }
+                DWORD written = 0;
+                if (WriteFile(hFile, utf8.data(), (DWORD)utf8.size(), &written, NULL)) {
+                    FlushFileBuffers(hFile);
+                    CloseHandle(hFile);
+                    temp_file_path_out = temp_file;
+                    cmd_line = quote_command_argument(exe_path) + L" " + quote_command_argument(temp_file);
+                } else {
+                    CloseHandle(hFile);
+                    DeleteFileW(temp_file);
+                }
+            }
+        }
+    }
+
+    if (temp_file_path_out.empty()) {
+        cmd_line = quote_command_argument(exe_path) + L" -c " + quote_command_argument(command_to_run);
+    }
+
+    std::vector<HANDLE> stage_handles = { segment_stdin, segment_stdout, segment_stderr };
+    return create_process_with_handle_list(cmd_line, si, stage_handles, 0, pi);
+}
+
+bool strip_trailing_unquoted_background_marker(const std::wstring& input, std::wstring& stripped_output) {
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+    size_t last_non_space_index = std::wstring::npos;
+    bool last_non_space_is_background_amp = false;
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        wchar_t ch = input[i];
+
+        if (escaped) {
+            escaped = false;
+        } else if (ch == L'\\' && !in_single_quotes) {
+            escaped = true;
+        } else if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+        } else if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+        }
+
+        if (!std::iswspace(ch)) {
+            last_non_space_index = i;
+            last_non_space_is_background_amp = (!in_single_quotes && !in_double_quotes && !escaped && ch == L'&');
+        }
+    }
+
+    if (last_non_space_index != std::wstring::npos && last_non_space_is_background_amp) {
+        stripped_output = trim_copy(std::wstring_view(input).substr(0, last_non_space_index));
+        return true;
+    }
+
+    stripped_output = input;
+    return false;
+}
+
+bool strip_trailing_unquoted_coprocess_marker(const std::wstring& input, std::wstring& stripped_output) {
+    const std::wstring trimmed = trim_copy(input);
+    if (trimmed.size() < 2 || trimmed[trimmed.size() - 2] != L'|' || trimmed.back() != L'&') {
+        stripped_output = input;
+        return false;
+    }
+
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+    const size_t marker_start = trimmed.size() - 2;
+    for (size_t i = 0; i < marker_start; ++i) {
+        const wchar_t ch = trimmed[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch == L'\\' && !in_single_quotes) {
+            escaped = true;
+        } else if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+        } else if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+        }
+    }
+
+    if (in_single_quotes || in_double_quotes || escaped) {
+        stripped_output = input;
+        return false;
+    }
+
+    stripped_output = trim_copy(trimmed.substr(0, marker_start));
+    return true;
+}
+
+std::wstring format_win32_error_message(DWORD error_code) {
+    if (error_code == 0) {
+        return L"success";
+    }
+
+    wchar_t* buffer = nullptr;
+    const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                        FORMAT_MESSAGE_FROM_SYSTEM |
+                        FORMAT_MESSAGE_IGNORE_INSERTS;
+    const DWORD length = FormatMessageW(
+        flags,
+        nullptr,
+        error_code,
+        0,
+        reinterpret_cast<LPWSTR>(&buffer),
+        0,
+        nullptr);
+
+    if (length == 0 || buffer == nullptr) {
+        return L"unknown error";
+    }
+
+    std::wstring message(buffer, length);
+    LocalFree(buffer);
+    while (!message.empty() && (message.back() == L'\r' || message.back() == L'\n' || message.back() == L' ')) {
+        message.pop_back();
+    }
+    return message;
+}
+
+bool execute_pipeline_segments(
+    const std::vector<std::wstring>& segments,
+    bool run_in_background,
+    DWORD& last_exit_code,
+    HANDLE& background_handle,
+    DWORD& background_pid,
+    std::vector<HANDLE>* background_handles,
+    std::vector<DWORD>* background_pids,
+    std::vector<std::wstring>* temp_files_out) {
+    last_exit_code = 1;
+    background_handle = nullptr;
+    background_pid = 0;
+    if (background_handles != nullptr) {
+        background_handles->clear();
+    }
+    if (background_pids != nullptr) {
+        background_pids->clear();
+    }
+    g_last_pipeline_error_detail.clear();
+    if (segments.size() < 2) {
+        g_last_pipeline_error_detail = L"ksh: pipeline requires at least 2 stages";
+        return false;
+    }
+
+    std::vector<HANDLE> process_handles;
+    std::vector<DWORD> process_pids;
+    std::vector<std::wstring> stage_temp_paths;
+    HANDLE prev_read = nullptr;
+    bool run_last_stage_in_parent = false;
+
+    for (size_t i = 0; i < segments.size(); ++i) {
+        const std::wstring segment = trim_copy(segments[i]);
+        if (segment.empty()) {
+            std::wcerr << L"ksh: invalid null command in pipeline\n";
+            g_last_pipeline_error_detail = L"ksh: invalid null command in pipeline";
+            last_exit_code = 2;
+            if (prev_read != nullptr) {
+                CloseHandle(prev_read);
+            }
+            for (HANDLE h : process_handles) {
+                if (h != nullptr) {
+                    WaitForSingleObject(h, INFINITE);
+                    CloseHandle(h);
+                }
+            }
+            for (const std::wstring& path : stage_temp_paths) {
+                if (!path.empty()) {
+                    DeleteFileW(path.c_str());
+                }
+            }
+            return false;
+        }
+
+        HANDLE segment_stdin = GetStdHandle(STD_INPUT_HANDLE);
+        HANDLE segment_stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE segment_stderr = GetStdHandle(STD_ERROR_HANDLE);
+
+        HANDLE stdin_dup = nullptr;
+        if (prev_read != nullptr) {
+            if (!DuplicateHandle(GetCurrentProcess(), prev_read, GetCurrentProcess(), &stdin_dup, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+                DWORD duplicate_error = GetLastError();
+                g_last_pipeline_error_detail =
+                    L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
+                    L" failed duplicating stdin handle (" + std::to_wstring(duplicate_error) + L": " +
+                    format_win32_error_message(duplicate_error) + L")";
+                last_exit_code = 1;
+                if (prev_read != nullptr) {
+                    CloseHandle(prev_read);
+                }
+                for (HANDLE h : process_handles) {
+                    if (h != nullptr) {
+                        WaitForSingleObject(h, INFINITE);
+                        CloseHandle(h);
+                    }
+                }
+                for (const std::wstring& path : stage_temp_paths) {
+                    if (!path.empty()) {
+                        DeleteFileW(path.c_str());
+                    }
+                }
+                return false;
+            }
+            segment_stdin = stdin_dup;
+        }
+
+        HANDLE next_read = nullptr;
+        HANDLE next_write = nullptr;
+        const bool is_last = (i + 1 == segments.size());
+        if (!is_last) {
+            SECURITY_ATTRIBUTES sa;
+            sa.nLength = sizeof(sa);
+            sa.lpSecurityDescriptor = nullptr;
+            sa.bInheritHandle = TRUE;
+
+            if (!CreatePipe(&next_read, &next_write, &sa, 0)) {
+                DWORD pipe_error = GetLastError();
+                g_last_pipeline_error_detail =
+                    L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
+                    L" failed creating pipe (" + std::to_wstring(pipe_error) + L": " +
+                    format_win32_error_message(pipe_error) + L")";
+                last_exit_code = 1;
+                if (stdin_dup != nullptr) CloseHandle(stdin_dup);
+                if (prev_read != nullptr) CloseHandle(prev_read);
+                for (HANDLE h : process_handles) {
+                    if (h != nullptr) {
+                        WaitForSingleObject(h, INFINITE);
+                        CloseHandle(h);
+                    }
+                }
+                for (const std::wstring& path : stage_temp_paths) {
+                    if (!path.empty()) {
+                        DeleteFileW(path.c_str());
+                    }
+                }
+                return false;
+            }
+
+            if (!SetHandleInformation(next_read, HANDLE_FLAG_INHERIT, 0)) {
+                DWORD inherit_error = GetLastError();
+                g_last_pipeline_error_detail =
+                    L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
+                    L" failed setting pipe inheritance (" + std::to_wstring(inherit_error) + L": " +
+                    format_win32_error_message(inherit_error) + L")";
+                last_exit_code = 1;
+                if (stdin_dup != nullptr) CloseHandle(stdin_dup);
+                if (next_read != nullptr) CloseHandle(next_read);
+                if (next_write != nullptr) CloseHandle(next_write);
+                if (prev_read != nullptr) CloseHandle(prev_read);
+                for (HANDLE h : process_handles) {
+                    if (h != nullptr) {
+                        WaitForSingleObject(h, INFINITE);
+                        CloseHandle(h);
+                    }
+                }
+                for (const std::wstring& path : stage_temp_paths) {
+                    if (!path.empty()) {
+                        DeleteFileW(path.c_str());
+                    }
+                }
+                return false;
+            }
+            segment_stdout = next_write;
+        }
+
+        if (is_last && !run_in_background) {
+            bool needs_shell = has_unquoted_shell_metacharacters(segment);
+            if (!needs_shell) {
+                std::wstring trimmed_stage = trim_copy(segment);
+                std::wstring first_token;
+                size_t first_space = trimmed_stage.find_first_of(L" \t\r\n");
+                if (first_space != std::wstring::npos) {
+                    first_token = std::wstring(trimmed_stage.substr(0, first_space));
+                } else {
+                    first_token = std::wstring(trimmed_stage);
+                }
+                const std::vector<std::wstring>& builtins = builtin_commands();
+                bool is_builtin = (std::find(builtins.begin(), builtins.end(), first_token) != builtins.end());
+                bool is_function = (g_shell_functions.find(first_token) != g_shell_functions.end());
+                if (is_builtin || is_function) {
+                    needs_shell = true;
+                }
+            }
+            if (needs_shell) {
+                run_last_stage_in_parent = true;
+            }
+        }
+
+        if (run_last_stage_in_parent) {
+            HANDLE old_pipe_in = g_pipeline_stdin;
+            HANDLE old_pipe_out = g_pipeline_stdout;
+            HANDLE old_pipe_err = g_pipeline_stderr;
+
+            g_pipeline_stdin = segment_stdin;
+            g_pipeline_stdout = segment_stdout;
+            g_pipeline_stderr = segment_stderr;
+
+            bool should_exit = false;
+            const bool ok = execute_command_line(segment, should_exit);
+            DWORD last_stage_code = ok ? 0 : 1;
+            std::map<std::wstring, std::wstring>::const_iterator status_it = ksh_env.variables.find(L"?");
+            if (status_it != ksh_env.variables.end()) {
+                int parsed_status = ok ? 0 : 1;
+                if (try_parse_int_strict(status_it->second, parsed_status)) {
+                    last_stage_code = static_cast<DWORD>(parsed_status);
+                }
+            }
+
+            g_pipeline_stdin = old_pipe_in;
+            g_pipeline_stdout = old_pipe_out;
+            g_pipeline_stderr = old_pipe_err;
+
+            if (stdin_dup != nullptr) {
+                CloseHandle(stdin_dup);
+                stdin_dup = nullptr;
+            }
+            if (prev_read != nullptr) {
+                CloseHandle(prev_read);
+                prev_read = nullptr;
+            }
+
+            last_exit_code = last_stage_code;
+            break;
+        }
+
+        PROCESS_INFORMATION pi;
+        std::wstring temp_file_path;
+        if (!launch_pipeline_stage_process(segment, segment_stdin, segment_stdout, segment_stderr, pi, temp_file_path, true)) {
+            DWORD launch_error = GetLastError();
+            g_last_pipeline_error_detail =
+                L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
+                L" failed launching command: " + segment +
+                L" (" + std::to_wstring(launch_error) + L": " +
+                format_win32_error_message(launch_error) + L")";
+            last_exit_code = 127;
+            if (stdin_dup != nullptr) CloseHandle(stdin_dup);
+            if (next_read != nullptr) CloseHandle(next_read);
+            if (next_write != nullptr) CloseHandle(next_write);
+            if (prev_read != nullptr) CloseHandle(prev_read);
+            for (HANDLE h : process_handles) {
+                if (h != nullptr) {
+                    WaitForSingleObject(h, INFINITE);
+                    CloseHandle(h);
+                }
+            }
+            if (!temp_file_path.empty()) {
+                DeleteFileW(temp_file_path.c_str());
+            }
+            for (const std::wstring& path : stage_temp_paths) {
+                if (!path.empty()) {
+                    DeleteFileW(path.c_str());
+                }
+            }
+            return false;
+        }
+
+        if (!temp_file_path.empty()) {
+            stage_temp_paths.push_back(temp_file_path);
+        }
+
+        if (pi.hThread != nullptr && pi.hThread != INVALID_HANDLE_VALUE) {
+            CloseHandle(pi.hThread);
+        }
+        process_handles.push_back(pi.hProcess);
+        process_pids.push_back(pi.dwProcessId);
+
+        if (stdin_dup != nullptr) {
+            CloseHandle(stdin_dup);
+        }
+        if (prev_read != nullptr) {
+            CloseHandle(prev_read);
+            prev_read = nullptr;
+        }
+        if (next_write != nullptr) {
+            CloseHandle(next_write);
+        }
+        prev_read = next_read;
+    }
+
+    if (prev_read != nullptr) {
+        CloseHandle(prev_read);
+    }
+
+    if (run_in_background) {
+        if (!process_handles.empty()) {
+            if (background_handles != nullptr) {
+                *background_handles = process_handles;
+            }
+            if (background_pids != nullptr) {
+                *background_pids = process_pids;
+            }
+            background_handle = process_handles.back();
+            background_pid = process_pids.back();
+            last_exit_code = 0;
+            if (temp_files_out != nullptr) {
+                *temp_files_out = std::move(stage_temp_paths);
+            } else {
+                for (const std::wstring& path : stage_temp_paths) {
+                    if (!path.empty()) {
+                        DeleteFileW(path.c_str());
+                    }
+                }
+            }
+            return true;
+        }
+        for (const std::wstring& path : stage_temp_paths) {
+            if (!path.empty()) {
+                DeleteFileW(path.c_str());
+            }
+        }
+        return false;
+    }
+
+    DWORD rightmost_failure = (run_last_stage_in_parent && last_exit_code != 0) ? last_exit_code : 0;
+    for (size_t i = 0; i < process_handles.size(); ++i) {
+        WaitForSingleObject(process_handles[i], INFINITE);
+        DWORD code = 1;
+        bool is_pipe_thread = false;
+        {
+            std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
+            auto it = g_pipeline_thread_handles.find(process_handles[i]);
+            if (it != g_pipeline_thread_handles.end()) {
+                is_pipe_thread = true;
+                g_pipeline_thread_handles.erase(it);
+            }
+        }
+        if (is_pipe_thread) {
+            GetExitCodeThread(process_handles[i], &code);
+        } else {
+            register_child_process_times(process_handles[i]);
+            GetExitCodeProcess(process_handles[i], &code);
+        }
+        if (code != 0) {
+            rightmost_failure = code;
+        }
+        if (!run_last_stage_in_parent && i + 1 == process_handles.size()) {
+            last_exit_code = code;
+        }
+        CloseHandle(process_handles[i]);
+    }
+
+    if (g_pipefail_enabled && rightmost_failure != 0) {
+        last_exit_code = rightmost_failure;
+    }
+
+    for (const std::wstring& path : stage_temp_paths) {
+        if (!path.empty()) {
+            DeleteFileW(path.c_str());
+        }
+    }
+
+    return true;
+}
+
+bool execute_native_or_fallback(const std::wstring& full_command, const RedirectionSpec* redir, DWORD* exit_code_out) {
+    struct ScopedForegroundProcessGuard {
+        ScopedForegroundProcessGuard() {
+            InterlockedExchange(&g_foreground_process_active, 1);
+        }
+        ~ScopedForegroundProcessGuard() {
+            InterlockedExchange(&g_foreground_process_active, 0);
+        }
+    } fg_guard;
+
+    const bool perf_trace = is_performance_telemetry_enabled();
+    const ULONGLONG overall_start = perf_trace ? GetTickCount64() : 0;
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    HANDLE std_in = nullptr;
+    HANDLE std_out = nullptr;
+    HANDLE std_err = nullptr;
+    bool close_in = false;
+    bool close_out = false;
+    bool close_err = false;
+
+    if (!setup_redirection_handles(redir, std_in, std_out, std_err, close_in, close_out, close_err)) {
+        if (exit_code_out != nullptr) {
+            *exit_code_out = 1;
+        }
+        std::wcerr << L"ksh: redirection setup failed\n";
+        return false;
+    }
+
+    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir));
+    if (use_redirected_stdio) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = std_in;
+        si.hStdOutput = std_out;
+        si.hStdError = std_err;
+    }
+
+    std::vector<HANDLE> inherited_handles;
+    if (use_redirected_stdio) {
+        inherited_handles = { std_in, std_out, std_err };
+    }
+    if (create_process_with_handle_list(full_command, si, inherited_handles, 0, pi)) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        register_child_process_times(pi.hProcess);
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        if (exit_code_out != nullptr) {
+            *exit_code_out = code;
+        }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        if (perf_trace) {
+            log_performance_trace(L"process.foreground.native", GetTickCount64() - overall_start, L"exit=" + std::to_wstring(code));
+        }
+        return true;
+    }
+
+    std::wstring cmd_name = get_command_name(full_command);
+    if (!is_windows_internal_command(cmd_name)) {
+        if (exit_code_out != nullptr) {
+            *exit_code_out = 127;
+        }
+        std::wcerr << L"ksh: " << cmd_name << L": command not found\n";
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        return false;
+    }
+
+    std::wstring cmd_call;
+    if (!build_cmd_shell_command_line(full_command, cmd_call)) {
+        if (exit_code_out != nullptr) {
+            *exit_code_out = 1;
+        }
+        std::wcerr << L"ksh: failed to start command\n";
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        return false;
+    }
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+    if (use_redirected_stdio) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = std_in;
+        si.hStdOutput = std_out;
+        si.hStdError = std_err;
+    }
+    if (create_process_with_handle_list(cmd_call, si, inherited_handles, 0, pi)) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        register_child_process_times(pi.hProcess);
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        if (exit_code_out != nullptr) {
+            *exit_code_out = code;
+        }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        if (perf_trace) {
+            log_performance_trace(L"process.foreground.cmd_fallback", GetTickCount64() - overall_start, L"exit=" + std::to_wstring(code));
+        }
+        return true;
+    }
+
+    if (exit_code_out != nullptr) {
+        *exit_code_out = 1;
+    }
+    std::wcerr << L"ksh: failed to start command\n";
+
+    close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+    if (perf_trace) {
+        log_performance_trace(L"process.foreground.failed", GetTickCount64() - overall_start);
+    }
+    return false;
+}
+
+bool launch_process(const std::wstring& full_command, HANDLE& process_handle, DWORD& pid, const RedirectionSpec* redir) {
+    const bool perf_trace = is_performance_telemetry_enabled();
+    const ULONGLONG overall_start = perf_trace ? GetTickCount64() : 0;
+
+    process_handle = nullptr;
+    pid = 0;
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    HANDLE std_in = nullptr;
+    HANDLE std_out = nullptr;
+    HANDLE std_err = nullptr;
+    bool close_in = false;
+    bool close_out = false;
+    bool close_err = false;
+
+    if (!setup_redirection_handles(redir, std_in, std_out, std_err, close_in, close_out, close_err)) {
+        return false;
+    }
+
+    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir));
+    if (use_redirected_stdio) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = std_in;
+        si.hStdOutput = std_out;
+        si.hStdError = std_err;
+    }
+
+    std::vector<HANDLE> inherited_handles;
+    if (use_redirected_stdio) {
+        inherited_handles = { std_in, std_out, std_err };
+    }
+    if (create_process_with_handle_list(full_command, si, inherited_handles, 0, pi)) {
+        process_handle = pi.hProcess;
+        pid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        if (perf_trace) {
+            log_performance_trace(L"process.background.native", GetTickCount64() - overall_start, L"pid=" + std::to_wstring(pid));
+        }
+        return true;
+    }
+
+    std::wstring cmd_name = get_command_name(full_command);
+    if (!is_windows_internal_command(cmd_name)) {
+        std::wcerr << L"ksh: " << cmd_name << L": command not found\n";
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        return false;
+    }
+
+    std::wstring cmd_call;
+    if (!build_cmd_shell_command_line(full_command, cmd_call)) {
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        return false;
+    }
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+    if (use_redirected_stdio) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = std_in;
+        si.hStdOutput = std_out;
+        si.hStdError = std_err;
+    }
+    if (create_process_with_handle_list(cmd_call, si, inherited_handles, 0, pi)) {
+        process_handle = pi.hProcess;
+        pid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+        if (perf_trace) {
+            log_performance_trace(L"process.background.cmd_fallback", GetTickCount64() - overall_start, L"pid=" + std::to_wstring(pid));
+        }
+        return true;
+    }
+
+    close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+    if (perf_trace) {
+        log_performance_trace(L"process.background.failed", GetTickCount64() - overall_start);
+    }
+    return false;
+}
+
+bool close_coprocess(bool terminate_process) {
+    if (!g_coprocess.active) {
+        return true;
+    }
+
+    if (terminate_process && g_coprocess.process != INVALID_HANDLE_VALUE) {
+        TerminateProcess(g_coprocess.process, 1);
+    }
+    if (g_coprocess.process != INVALID_HANDLE_VALUE) {
+        WaitForSingleObject(g_coprocess.process, 5000);
+        CloseHandle(g_coprocess.process);
+    }
+    if (g_coprocess.input_write != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_coprocess.input_write);
+    }
+    if (g_coprocess.output_read != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_coprocess.output_read);
+    }
+    if (!g_coprocess.temp_file_path.empty()) {
+        DeleteFileW(g_coprocess.temp_file_path.c_str());
+    }
+    g_coprocess = CoProcessState();
+    return true;
+}
+
+bool execute_builtin_coproc(const std::vector<std::wstring>& tokens) {
+    if (tokens.size() < 2) {
+        std::wcerr << L"ksh: coproc: usage: coproc command [argument ...]\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
+    }
+
+    close_coprocess(true);
+
+    SECURITY_ATTRIBUTES pipe_attributes;
+    pipe_attributes.nLength = sizeof(pipe_attributes);
+    pipe_attributes.lpSecurityDescriptor = nullptr;
+    pipe_attributes.bInheritHandle = TRUE;
+
+    HANDLE child_stdin = INVALID_HANDLE_VALUE;
+    HANDLE parent_stdin = INVALID_HANDLE_VALUE;
+    HANDLE parent_stdout = INVALID_HANDLE_VALUE;
+    HANDLE child_stdout = INVALID_HANDLE_VALUE;
+    if (!CreatePipe(&child_stdin, &parent_stdin, &pipe_attributes, 0) ||
+        !CreatePipe(&parent_stdout, &child_stdout, &pipe_attributes, 0)) {
+        if (child_stdin != INVALID_HANDLE_VALUE) CloseHandle(child_stdin);
+        if (parent_stdin != INVALID_HANDLE_VALUE) CloseHandle(parent_stdin);
+        if (parent_stdout != INVALID_HANDLE_VALUE) CloseHandle(parent_stdout);
+        if (child_stdout != INVALID_HANDLE_VALUE) CloseHandle(child_stdout);
+        std::wcerr << L"ksh: coproc: unable to create pipes\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
+    }
+
+    if (!SetHandleInformation(parent_stdin, HANDLE_FLAG_INHERIT, 0) ||
+        !SetHandleInformation(parent_stdout, HANDLE_FLAG_INHERIT, 0)) {
+        CloseHandle(child_stdin);
+        CloseHandle(parent_stdin);
+        CloseHandle(parent_stdout);
+        CloseHandle(child_stdout);
+        std::wcerr << L"ksh: coproc: unable to configure pipe inheritance\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
+    }
+
+    wchar_t ksh_path[MAX_PATH];
+    DWORD path_len = GetModuleFileNameW(nullptr, ksh_path, MAX_PATH);
+    if (path_len == 0 || path_len >= MAX_PATH) {
+        CloseHandle(child_stdin);
+        CloseHandle(parent_stdin);
+        CloseHandle(parent_stdout);
+        CloseHandle(child_stdout);
+        std::wcerr << L"ksh: coproc: unable to resolve shell path\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
+    }
+
+    std::vector<std::wstring> command_tokens(tokens.begin() + 1, tokens.end());
+    std::wstring command_to_run;
+    command_to_run.reserve(4096);
+
+    for (const auto& pair : ksh_env.variables) {
+        const std::wstring& name = pair.first;
+        if (!is_valid_shell_identifier(name) || name == L"RANDOM" || name == L"SECONDS" ||
+            name == L"LINENO" || name == L"PPID") {
+            continue;
+        }
+
+        std::wstring options;
+        if (get_flag_value(ksh_env.integer_flags, name)) options += L"i";
+        if (get_flag_value(ksh_env.uppercase_flags, name)) options += L"u";
+        if (get_flag_value(ksh_env.lowercase_flags, name)) options += L"l";
+        if (get_flag_value(ksh_env.readonly_flags, name)) options += L"r";
+        if (get_flag_value(ksh_env.exported, name)) options += L"x";
+
+        command_to_run += name + L"=" + quote_for_single_quoted_shell_literal(pair.second) + L";\n";
+        if (!options.empty()) {
+            command_to_run += L"typeset -" + options + L" " + name + L";\n";
+        }
+    }
+
+    for (const auto& arr_pair : ksh_env.arrays) {
+        const std::wstring& name = arr_pair.first;
+        if (!is_valid_shell_identifier(name)) {
+            continue;
+        }
+
+        if (get_flag_value(ksh_env.associative_flags, name)) {
+            command_to_run += L"typeset -A " + name + L";\n";
+        } else {
+            command_to_run += L"typeset -a " + name + L";\n";
+        }
+        for (const auto& elem : arr_pair.second) {
+            command_to_run += name + L"[" + elem.first + L"]=" +
+                quote_for_single_quoted_shell_literal(elem.second) + L";\n";
+        }
+    }
+
+    for (const auto& pair : g_aliases) {
+        command_to_run += L"alias " + pair.first + L"=" +
+            quote_for_single_quoted_shell_literal(pair.second) + L";\n";
+    }
+
+    for (const auto& pair : g_shell_functions) {
+        command_to_run += L"function " + pair.first + L" { ";
+        for (const auto& line : pair.second.body_lines) {
+            command_to_run += line + L"\n";
+        }
+        command_to_run += L" };\n";
+    }
+
+    command_to_run += join_tokens_as_command_line(command_tokens);
+
+    std::wstring temp_file_path;
+    std::wstring command_line;
+    if (command_to_run.size() > 4000) {
+        wchar_t temp_path[MAX_PATH];
+        wchar_t temp_file[MAX_PATH];
+        if (GetTempPathW(MAX_PATH, temp_path) != 0 &&
+            GetTempFileNameW(temp_path, L"ksh", 0, temp_file) != 0) {
+            HANDLE temp_handle = CreateFileW(
+                temp_file,
+                GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_DELETE,
+                nullptr,
+                CREATE_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr);
+            if (temp_handle != INVALID_HANDLE_VALUE) {
+                const int utf8_length = WideCharToMultiByte(
+                    CP_UTF8,
+                    0,
+                    command_to_run.c_str(),
+                    static_cast<int>(command_to_run.size()),
+                    nullptr,
+                    0,
+                    nullptr,
+                    nullptr);
+                std::string utf8;
+                if (utf8_length > 0) {
+                    utf8.resize(static_cast<size_t>(utf8_length));
+                    WideCharToMultiByte(
+                        CP_UTF8,
+                        0,
+                        command_to_run.c_str(),
+                        static_cast<int>(command_to_run.size()),
+                        &utf8[0],
+                        utf8_length,
+                        nullptr,
+                        nullptr);
+                }
+                DWORD written = 0;
+                if (utf8_length > 0 &&
+                    WriteFile(temp_handle, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr) &&
+                    written == utf8.size() && FlushFileBuffers(temp_handle)) {
+                    temp_file_path = temp_file;
+                    command_line = quote_command_argument(ksh_path) + L" " + quote_command_argument(temp_file_path);
+                }
+                CloseHandle(temp_handle);
+                if (temp_file_path.empty()) {
+                    DeleteFileW(temp_file);
+                }
+            } else {
+                DeleteFileW(temp_file);
+            }
+        }
+
+        if (command_line.empty()) {
+            CloseHandle(child_stdin);
+            CloseHandle(parent_stdin);
+            CloseHandle(parent_stdout);
+            CloseHandle(child_stdout);
+            std::wcerr << L"ksh: coproc: unable to create temporary script\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+    } else {
+        command_line = quote_command_argument(ksh_path) + L" -c " + quote_command_argument(command_to_run);
+    }
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    ZeroMemory(&pi, sizeof(pi));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = child_stdin;
+    si.hStdOutput = child_stdout;
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+    std::vector<HANDLE> inherited_handles = { child_stdin, child_stdout, si.hStdError };
+    if (!create_process_with_handle_list(command_line, si, inherited_handles, 0, pi)) {
+        if (!temp_file_path.empty()) {
+            DeleteFileW(temp_file_path.c_str());
+        }
+        CloseHandle(child_stdin);
+        CloseHandle(parent_stdin);
+        CloseHandle(parent_stdout);
+        CloseHandle(child_stdout);
+        std::wcerr << L"ksh: coproc: unable to launch command\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
+    }
+
+    CloseHandle(child_stdin);
+    CloseHandle(child_stdout);
+    CloseHandle(pi.hThread);
+    g_coprocess.input_write = parent_stdin;
+    g_coprocess.output_read = parent_stdout;
+    g_coprocess.process = pi.hProcess;
+    g_coprocess.pid = pi.dwProcessId;
+    g_coprocess.temp_file_path = std::move(temp_file_path);
+    g_coprocess.active = true;
+    ksh_env.variables[L"COPROC_PID"] = std::to_wstring(pi.dwProcessId);
+    ksh_env.variables[L"COPROC_ACTIVE"] = L"1";
+    ksh_env.variables[L"?"] = L"0";
+    return true;
+}
+
+bool is_windows_internal_command(const std::wstring& cmd) {
+    static const std::vector<std::wstring> internals = {
+        L"dir", L"copy", L"move", L"del", L"erase", L"type", L"ren", L"rename",
+        L"md", L"mkdir", L"rd", L"rmdir", L"cls", L"color", L"date", L"time",
+        L"ver", L"vol", L"path", L"prompt", L"assoc", L"ftype", L"mklink"
+    };
+    std::wstring lower_cmd = to_lower_copy(cmd);
+    return std::find(internals.begin(), internals.end(), lower_cmd) != internals.end();
+}
+
+bool get_system_directory_path(std::wstring& system_directory) {
+    wchar_t buffer[MAX_PATH];
+    UINT length = GetSystemDirectoryW(buffer, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        return false;
+    }
+
+    system_directory = buffer;
+    return true;
+}
+
+bool resolve_cmd_exe_path(std::wstring& cmd_path) {
+    std::wstring system_directory;
+    if (!get_system_directory_path(system_directory)) {
+        return false;
+    }
+
+    cmd_path = system_directory + L"\\cmd.exe";
+    return file_exists_regular(cmd_path);
+}
+
+bool resolve_powershell_exe_path(std::wstring& powershell_path) {
+    std::wstring system_directory;
+    if (!get_system_directory_path(system_directory)) {
+        return false;
+    }
+
+    powershell_path = system_directory + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
+    return file_exists_regular(powershell_path);
+}
+
+bool is_absolute_windows_path(const std::wstring& path) {
+    if (path.size() >= 3 && std::iswalpha(path[0]) && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) {
+        return true;
+    }
+
+    return path.rfind(L"\\\\", 0) == 0;
+}
+
+std::wstring normalize_cd_path(const std::wstring& input_path) {
+    if (input_path.empty()) {
+        return input_path;
+    }
+
+    std::wstring path = input_path;
+    std::replace(path.begin(), path.end(), L'/', L'\\');
+
+    if (is_absolute_windows_path(path)) {
+        return path;
+    }
+
+    if (!path.empty() && path[0] == L'\\') {
+        wchar_t cwd[MAX_PATH];
+        if (GetCurrentDirectoryW(MAX_PATH, cwd) > 0) {
+            std::wstring drive_root = cwd;
+            if (drive_root.size() >= 2 && drive_root[1] == L':') {
+                return drive_root.substr(0, 2) + path;
+            }
+        }
+    }
+
+    return path;
+}
+
+bool resolve_bash_exe_path(std::wstring& bash_path) {
+    const wchar_t* candidates[] = {
+        L"C:\\Program Files\\Git\\bin\\bash.exe",
+        L"C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+        L"C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+        L"C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe"
+    };
+
+    for (const wchar_t* candidate : candidates) {
+        if (file_exists_regular(candidate)) {
+            bash_path = candidate;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool is_powershell_bypass_enabled() {
+    if (g_powershell_bypass_enabled) {
+        return true;
+    }
+    std::wstring val = trim_copy(get_environment_value(L"KSH_POWERSHELL_BYPASS"));
+    if (val.empty()) {
+        return false;
+    }
+    for (wchar_t ch : val) {
+        if (ch == L'1' || ch == L'y' || ch == L'Y' || ch == L't' || ch == L'T') {
+            return true;
+        }
+    }
+    return false;
+}
+
+ScriptInterpreterResolution build_script_interpreter_command(const std::vector<std::wstring>& tokens, std::wstring& command_line) {
+    if (tokens.empty()) {
+        return ScriptInterpreterResolution::NotScript;
+    }
+
+    const std::wstring& script_path = tokens[0];
+    if (script_path.empty() || script_path.find(L'=') != std::wstring::npos) {
+        return ScriptInterpreterResolution::NotScript;
+    }
+
+    auto append_script_arguments = [&]() {
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            command_line += L" ";
+            command_line += quote_command_argument(tokens[i]);
+        }
+    };
+
+    if (ends_with_case_insensitive(script_path, L".ps1")) {
+        std::wstring powershell_path;
+        if (!resolve_powershell_exe_path(powershell_path)) {
+            return ScriptInterpreterResolution::Failed;
+        }
+        command_line = quote_command_argument(powershell_path);
+        command_line += L" -NoProfile ";
+        if (is_powershell_bypass_enabled()) {
+            command_line += L"-ExecutionPolicy Bypass ";
+        }
+        command_line += L"-File ";
+        command_line += quote_command_argument(script_path);
+        append_script_arguments();
+        return ScriptInterpreterResolution::Resolved;
+    } else if (ends_with_case_insensitive(script_path, L".cmd") || ends_with_case_insensitive(script_path, L".bat")) {
+        std::wstring cmd_path;
+        if (!resolve_cmd_exe_path(cmd_path)) {
+            return ScriptInterpreterResolution::Failed;
+        }
+        command_line = quote_command_argument(cmd_path);
+        command_line += L" /d /c ";
+        command_line += quote_command_argument(script_path);
+        append_script_arguments();
+        return ScriptInterpreterResolution::Resolved;
+    } else if (ends_with_case_insensitive(script_path, L".sh")) {
+        std::wstring bash_path;
+        if (!resolve_bash_exe_path(bash_path)) {
+            return ScriptInterpreterResolution::Failed;
+        }
+        command_line = quote_command_argument(bash_path);
+        command_line += L" ";
+        command_line += quote_command_argument(script_path);
+        append_script_arguments();
+        return ScriptInterpreterResolution::Resolved;
+    } else {
+        return ScriptInterpreterResolution::NotScript;
+    }
+}
+
+bool is_ksh_script_path(const std::wstring& path) {
+    return ends_with_case_insensitive(path, L".ksh");
+}
+
+bool build_self_script_command(const std::wstring& script_path, const std::vector<std::wstring>& script_args, std::wstring& command_line) {
+    wchar_t exe_path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        return false;
+    }
+
+    command_line = quote_command_argument(exe_path);
+    command_line += L" ";
+    command_line += quote_command_argument(script_path);
+    for (const std::wstring& arg : script_args) {
+        command_line += L" ";
+        command_line += quote_command_argument(arg);
+    }
+    return true;
+}
+
+bool build_cmd_shell_command_line(const std::wstring& command, std::wstring& command_line) {
+    std::wstring cmd_path;
+    if (!resolve_cmd_exe_path(cmd_path)) {
+        return false;
+    }
+
+    command_line = quote_command_argument(cmd_path) + L" /d /s /c \"" + command + L"\"";
+    return true;
+}
+
+/******************************************************************************
+** End of ksh_jobs.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_terminal.cpp
+******************************************************************************/
+
+
+void enable_ansi_support() {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut != INVALID_HANDLE_VALUE && hOut != nullptr) {
+        DWORD mode = 0;
+        if (GetConsoleMode(hOut, &mode)) {
+            SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+    HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
+    if (hErr != INVALID_HANDLE_VALUE && hErr != nullptr) {
+        DWORD mode = 0;
+        if (GetConsoleMode(hErr, &mode)) {
+            SetConsoleMode(hErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+}
+
+class RedStderrBuffer : public std::wstreambuf {
+public:
+    explicit RedStderrBuffer(std::wstreambuf* target)
+        : target_(target), stderr_handle_(GetStdHandle(STD_ERROR_HANDLE)), is_console_(false) {
+        if (stderr_handle_ != nullptr && stderr_handle_ != INVALID_HANDLE_VALUE) {
+            DWORD mode = 0;
+            if (GetConsoleMode(stderr_handle_, &mode)) {
+                is_console_ = true;
+            }
+        }
+    }
+
+protected:
+    int_type overflow(int_type ch) override {
+        if (traits_type::eq_int_type(ch, traits_type::eof())) {
+            return traits_type::not_eof(ch);
+        }
+
+        const wchar_t wide_ch = traits_type::to_char_type(ch);
+        if (!write_with_color(&wide_ch, 1)) {
+            return traits_type::eof();
+        }
+        return ch;
+    }
+
+    std::streamsize xsputn(const wchar_t* s, std::streamsize n) override {
+        if (n <= 0) {
+            return 0;
+        }
+
+        if (!write_with_color(s, n)) {
+            return 0;
+        }
+        return n;
+    }
+
+    int sync() override {
+        return target_->pubsync();
+    }
+
+private:
+    bool write_with_color(const wchar_t* text, std::streamsize count) {
+        WORD previous_attributes = 0;
+        const bool changed_color = try_set_red(previous_attributes);
+        const std::streamsize written = target_->sputn(text, count);
+        if (changed_color) {
+            SetConsoleTextAttribute(stderr_handle_, previous_attributes);
+        }
+        return written == count;
+    }
+
+    bool try_set_red(WORD& previous_attributes) {
+        if (!is_console_) {
+            return false;
+        }
+
+        if (stderr_handle_ == nullptr || stderr_handle_ == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (!GetConsoleScreenBufferInfo(stderr_handle_, &info)) {
+            return false;
+        }
+
+        previous_attributes = info.wAttributes;
+        if (!SetConsoleTextAttribute(stderr_handle_, FOREGROUND_RED | FOREGROUND_INTENSITY)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    std::wstreambuf* target_;
+    HANDLE stderr_handle_;
+    bool is_console_;
+};
+
+static std::wstreambuf* g_original_wcerr_buffer = nullptr;
+static RedStderrBuffer* g_red_stderr_buffer = nullptr;
+
+void enable_red_error_output() {
+    if (g_red_stderr_buffer != nullptr) {
+        return;
+    }
+
+    g_original_wcerr_buffer = std::wcerr.rdbuf();
+    static RedStderrBuffer red_buffer(g_original_wcerr_buffer);
+    g_red_stderr_buffer = &red_buffer;
+    std::wcerr.rdbuf(g_red_stderr_buffer);
+}
+
+static std::wstring get_system_env_val(const std::wstring& name) {
+    wchar_t buffer[256];
+    DWORD ret = GetEnvironmentVariableW(name.c_str(), buffer, _countof(buffer));
+    if (ret > 0 && ret < _countof(buffer)) {
+        return std::wstring(buffer, ret);
+    }
+    if (ret >= _countof(buffer)) {
+        std::vector<wchar_t> dyn(ret + 1);
+        DWORD dyn_ret = GetEnvironmentVariableW(name.c_str(), dyn.data(), static_cast<DWORD>(dyn.size()));
+        if (dyn_ret > 0 && dyn_ret < dyn.size()) {
+            return std::wstring(dyn.data(), dyn_ret);
+        }
+    }
+    return L"";
+}
+
+static std::wstring get_current_working_directory_for_prompt() {
+    DWORD needed = GetCurrentDirectoryW(0, nullptr);
+    if (needed == 0) {
+        return L".";
+    }
+
+    std::vector<wchar_t> buffer(needed);
+    DWORD written = GetCurrentDirectoryW(needed, buffer.data());
+    if (written == 0 || written >= needed) {
+        return L".";
+    }
+
+    return std::wstring(buffer.data(), written);
+}
+
+static std::wstring get_username_for_prompt() {
+    wchar_t username[256] = { 0 };
+    DWORD username_len = ARRAYSIZE(username);
+    if (GetUserNameW(username, &username_len) && username_len > 0) {
+        size_t actual_len = std::wcslen(username);
+        return std::wstring(username, actual_len);
+    }
+    return L"";
+}
+
+static std::wstring get_domain_for_prompt() {
+    std::wstring domain = get_system_env_val(L"USERDNSDOMAIN");
+    if (!domain.empty()) {
+        return domain;
+    }
+    domain = get_system_env_val(L"USERDOMAIN");
+    if (!domain.empty()) {
+        return domain;
+    }
+    return L"";
+}
+
+static std::wstring get_hostname_for_prompt() {
+    wchar_t hostname[256] = { 0 };
+    DWORD host_len = ARRAYSIZE(hostname);
+    if (GetComputerNameW(hostname, &host_len) && host_len > 0) {
+        return std::wstring(hostname, host_len);
+    }
+    return L"";
+}
+
+bool IsRunningAsAdmin() {
+    SID_IDENTIFIER_AUTHORITY nt_authority = SECURITY_NT_AUTHORITY;
+    PSID admin_group = nullptr;
+
+    if (!AllocateAndInitializeSid(
+            &nt_authority,
+            2,
+            SECURITY_BUILTIN_DOMAIN_RID,
+            DOMAIN_ALIAS_RID_ADMINS,
+            0, 0, 0, 0, 0, 0,
+            &admin_group)) {
+        return false;
+    }
+
+    BOOL is_admin = FALSE;
+    CheckTokenMembership(NULL, admin_group, &is_admin);
+    FreeSid(admin_group);
+
+    return is_admin == TRUE;
+}
+
+std::wstring format_prompt_template(const std::wstring& prompt_template) {
+    const std::wstring username = get_username_for_prompt();
+    const std::wstring domain = get_domain_for_prompt();
+    const std::wstring cwd = get_current_working_directory_for_prompt();
+    const std::wstring hostname = get_hostname_for_prompt();
+    const wchar_t prompt_char = IsRunningAsAdmin() ? L'#' : L'$';
+
+    std::wstring formatted;
+    formatted.reserve(prompt_template.size() + 32);
+
+    for (size_t i = 0; i < prompt_template.size(); ++i) {
+        wchar_t ch = prompt_template[i];
+        if (ch == L'%' && i + 1 < prompt_template.size()) {
+            wchar_t token = prompt_template[i + 1];
+            bool consumed = true;
+            if (token == L'u') {
+                formatted += username;
+            } else if (token == L'd') {
+                formatted += domain;
+            } else if (token == L'w') {
+                formatted += cwd;
+            } else if (token == L'm') {
+                formatted += hostname;
+            } else if (token == L'#') {
+                formatted.push_back(prompt_char);
+            } else if (token == L'%') {
+                formatted.push_back(L'%');
+            } else {
+                consumed = false;
+            }
+
+            if (consumed) {
+                ++i;
+                continue;
+            }
+        }
+
+        formatted.push_back(ch);
+    }
+
+    return formatted;
+}
+
+bool get_current_directory_path(std::wstring& current_directory) {
+    DWORD needed = GetCurrentDirectoryW(0, nullptr);
+    if (needed == 0) {
+        return false;
+    }
+
+    std::vector<wchar_t> buffer(needed);
+    DWORD written = GetCurrentDirectoryW(needed, buffer.data());
+    if (written == 0 || written >= needed) {
+        return false;
+    }
+
+    current_directory.assign(buffer.data(), written);
+    return true;
+}
+
+std::wstring get_interactive_prompt() {
+    std::wstring prompt_template;
+
+    auto scalar_it = ksh_env.variables.find(L"PS1");
+    if (scalar_it != ksh_env.variables.end()) {
+        prompt_template = scalar_it->second;
+    } else {
+        prompt_template = get_system_env_val(L"PS1");
+    }
+
+    if (!prompt_template.empty()) {
+        return format_prompt_template(prompt_template);
+    }
+
+    return IsRunningAsAdmin() ? L"# " : L"$ ";
+}
+
+bool clear_console_screen() {
+    HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (console == nullptr || console == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    CONSOLE_SCREEN_BUFFER_INFO screen_info;
+    if (!GetConsoleScreenBufferInfo(console, &screen_info)) {
+        return false;
+    }
+
+    const DWORD cell_count =
+        static_cast<DWORD>(screen_info.dwSize.X) * static_cast<DWORD>(screen_info.dwSize.Y);
+    COORD top_left = { 0, 0 };
+    DWORD written = 0;
+
+    if (!FillConsoleOutputCharacterW(console, L' ', cell_count, top_left, &written)) {
+        return false;
+    }
+
+    if (!FillConsoleOutputAttribute(console, screen_info.wAttributes, cell_count, top_left, &written)) {
+        return false;
+    }
+
+    if (!SetConsoleCursorPosition(console, top_left)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool contains_whitespace(const std::wstring& value) {
     for (wchar_t ch : value) {
         if (std::iswspace(ch)) {
             return true;
@@ -1954,422 +9872,21 @@ bool contains_whitespace(const std::wstring& value) {
     return false;
 }
 
-struct CompletionCandidate {
-    std::wstring value;
-    int rank = 0;
-};
+static std::wstring longest_common_prefix_case_insensitive(const std::vector<std::wstring>& values) {
+    if (values.empty()) {
+        return L"";
+    }
 
-struct CompletionQuery {
-    std::wstring normalized_prefix;
-    bool quoted = false;
-    wchar_t quote_char = 0;
-    bool path_completion = false;
-    std::wstring path_directory;
-};
-
-struct CompletionCache {
-    std::wstring cwd;
-    std::wstring path_value;
-    ULONGLONG cached_at_ms = 0;
-    std::vector<CompletionCandidate> candidates;
-};
-
-constexpr ULONGLONG kCompletionCacheTtlMs = 1000;
-
-struct BuiltinCommandHelp {
-    const wchar_t* name;
-    const wchar_t* description;
-};
-
-struct BuiltinCommandGroup {
-    const wchar_t* title;
-    std::vector<const wchar_t*> names;
-};
-
-const std::vector<BuiltinCommandHelp>& builtin_command_help_entries() {
-    static const std::vector<BuiltinCommandHelp> entries = {
-        {L"exit", L"Exit the shell."},
-        {L"logout", L"Exit the shell session."},
-        {L"source", L"Run commands from a file in the current shell."},
-        {L".", L"Alias for source."},
-        {L"builtin", L"Invoke a shell builtin directly."},
-        {L"set", L"Set shell options/variables or print current variables (supports set -A name values...)."},
-        {L"unset", L"Unset variables or functions."},
-        {L"export", L"Mark variables for export to child processes."},
-        {L"readonly", L"Mark variables as read-only."},
-        {L"alias", L"Define or show command aliases."},
-        {L"unalias", L"Remove command aliases."},
-        {L"command", L"Run command lookup or execute without function lookup."},
-        {L"whence", L"Report how command names are resolved."},
-        {L"type", L"Describe command type (builtin/function/alias/external)."},
-        {L"hash", L"Show or refresh command resolution results."},
-        {L"eval", L"Evaluate and execute constructed command text."},
-        {L"getopts", L"Parse positional options into shell variables."},
-        {L"typeset", L"Declare or inspect shell variables, including -L/-R/-Z justification."},
-        {L"enum", L"Define an integer enumeration: enum Name=(value ...)."},
-        {L"[[", L"Evaluate a ksh-style conditional expression."},
-        {L"test", L"Evaluate a conditional expression."},
-        {L"[", L"Alias form of test requiring closing ]."},
-        {L"cd", L"Change the current working directory. Accepts Unix-style /path and Windows-style C:\\path."},
-        {L"pwd", L"Print the current working directory."},
-        {L"dirs", L"Print the current directory stack."},
-        {L"pushd", L"Push the current directory onto the stack and change to another directory."},
-        {L"popd", L"Pop the directory stack and change to the saved directory."},
-        {L"print", L"Write arguments to standard output."},
-        {L"echo", L"Write arguments to standard output."},
-        {L"printf", L"Format and write arguments to standard output, including %q shell escaping and %T local time output."},
-        {L"true", L"Return success status 0."},
-        {L"false", L"Return failure status 1."},
-        {L"let", L"Evaluate arithmetic expressions and return success when the final value is non-zero."},
-        {L"return", L"Return from the current function."},
-        {L"clear", L"Clear the terminal screen."},
-        {L"history", L"Show the current command history."},
-        {L"complete", L"Show command completion candidates."},
-        {L"math", L"Evaluate an arithmetic expression."},
-        {L"trap", L"Install, clear, or show trap handlers for EXIT/HUP/INT/BREAK/TERM/CHLD and related signal names."},
-        {L"jobs", L"List background jobs (jobs [-l|-p] [job...])."},
-        {L"fg", L"Bring a background job to the foreground."},
-        {L"bg", L"Continue a background job."},
-        {L"disown", L"Remove background jobs from the job table without terminating them."},
-        {L"kill", L"Send a signal to a process ID or shell job (%job, -p for pid, -j for job)."},
-        {L"wait", L"Wait for one or more jobs to finish."},
-        {L"coproc", L"Run a command as a bidirectional co-process; use read -p and print -p for I/O."},
-        {L"find", L"Search for files in a directory hierarchy."},
-        {L"read", L"Read a line from standard input and assign fields to variables or -A arrays."},
-        {L"exec", L"Replace the shell process with the specified command, or redirect shell handles."},
-        {L"umask", L"Set or print the file mode creation mask."},
-        {L"fc", L"List, edit, and re-execute historical shell commands."},
-        {L"stty", L"Set or print terminal line configuration settings."},
-        {L"times", L"Print accumulated user and system CPU times for shell and children."},
-        {L"sleep", L"Pause for a decimal number of seconds; pending console signals interrupt the wait."},
-        {L"shift", L"Shift positional parameters left by N places (default 1)."},
-        {L":", L"Null command (returns success)."},
-        {L"getconf", L"Query system configuration variables (getconf system_var [pathname] or getconf -a)."},
-        {L"pathchk", L"Check that pathnames are valid and portable (pathchk [-p] [-P] pathname...)."},
-        {L"help", L"Display help information about built-in commands and user-defined functions."},
-        {L"version", L"Display shell version information and OS details."}
-    };
-    return entries;
-}
-
-const BuiltinCommandHelp* find_builtin_command_help(std::wstring_view name) {
-    const std::vector<BuiltinCommandHelp>& entries = builtin_command_help_entries();
-    for (const BuiltinCommandHelp& entry : entries) {
-        if (name == entry.name) {
-            return &entry;
+    std::wstring prefix = values[0];
+    for (size_t i = 1; i < values.size() && !prefix.empty(); ++i) {
+        size_t common = 0;
+        size_t limit = (prefix.size() < values[i].size()) ? prefix.size() : values[i].size();
+        while (common < limit && std::towlower(prefix[common]) == std::towlower(values[i][common])) {
+            common++;
         }
+        prefix = prefix.substr(0, common);
     }
-    return nullptr;
-}
-
-const std::vector<BuiltinCommandGroup>& builtin_command_help_groups() {
-    static const std::vector<BuiltinCommandGroup> groups = {
-        { L"Shell control", { L"exit", L"logout", L"builtin", L"command", L"whence", L"type", L"eval", L"source", L".", L"exec", L"stty" } },
-        { L"Directory navigation", { L"cd", L"pwd", L"dirs", L"pushd", L"popd" } },
-        { L"Variables and expansion", { L"set", L"unset", L"export", L"readonly", L"typeset", L"enum", L"getopts", L"alias", L"unalias", L"hash", L"let", L"return", L"[[", L"test", L"[" } },
-        { L"Jobs and signals", { L"jobs", L"fg", L"bg", L"disown", L"kill", L"wait", L"trap", L"coproc" } },
-        { L"Files and system", { L"find", L"pathchk", L"getconf", L"umask", L"times", L"sleep", L"shift", L":" } },
-        { L"Interactive and diagnostics", { L"print", L"echo", L"printf", L"true", L"false", L"history", L"complete", L"fc", L"clear", L"math", L"read" } }
-    };
-    return groups;
-}
-
-const std::array<const wchar_t*, 13> kHelpControlFlowKeywordLines = {
-    L"\nControl flow keywords:\n",
-    L"  break     Exit the nearest enclosing loop.\n",
-    L"  continue  Skip to the next loop iteration.\n",
-    L"  if / elif / else / fi  Conditional command blocks.\n",
-    L"  for / do / done        Iterate over words or positional parameters.\n",
-    L"  while / do / done     Repeat while a command succeeds.\n",
-    L"  until / do / done     Repeat until a command succeeds.\n",
-    L"  select / do / done    Present a numbered selection menu.\n",
-    L"  case / in / esac      Match a word against shell patterns.\n",
-    L"\nExamples:\n",
-    L"  if test -n \"$x\"; then echo set; else echo unset; fi\n",
-    L"  for x in 1 2 3; do echo \"$x\"; done\n",
-    L"  case \"$x\" in yes) echo true ;; *) echo false ;; esac\n"
-};
-
-const std::array<const wchar_t*, 25> kHelpShellSyntaxLines = {
-    L"\nShell syntax and execution:\n",
-    L"  command1 | command2       Pipe standard output into the next command.\n",
-    L"  command &                 Run a command or pipeline in the background.\n",
-    L"  <(command) / >(command)   Windows named-pipe process substitution.\n",
-    L"  < file, > file, >> file   Redirect standard input or output.\n",
-    L"  2> file, 2>> file         Redirect standard error.\n",
-    L"  2>&1, 1>&2               Duplicate standard output/error streams.\n",
-    L"  command1; command2        Execute top-level commands in sequence.\n",
-    L"  command |                 Continue a pipeline on the next script line.\n",
-    L"  backslash at line end     Continue a logical command on the next line.\n",
-    L"  # comment                Begins a comment outside quotes.\n",
-    L"\nExpansion:\n",
-    L"  $name, ${name}            Expand shell variables.\n",
-    L"  ${array[index]}           Expand indexed or associative array elements.\n",
-    L"  $(command)                Capture command substitution output.\n",
-    L"  $((expression))           Evaluate arithmetic expansion.\n",
-    L"  ${HKLM.Key.Path.Value}    Read a Windows Registry value.\n",
-    L"  ${HKLM.Key/With.Dots.Value} Use / for Registry paths containing dots.\n",
-    L"\nRegistry namespaces:\n",
-    L"  HKLM and HKCU expose dynamic Registry properties.\n",
-    L"  HKLM.Key.Path.Value=TEXT writes existing REG_SZ/REG_EXPAND_SZ values.\n",
-    L"  Existing REG_DWORD and REG_QWORD values accept numeric assignments.\n",
-    L"  Unsupported Registry types are rejected instead of converted silently.\n",
-    L"\nStatus and errors:\n",
-    L"  $? holds the most recent command status; 0 means success.\n"
-};
-
-const std::array<const wchar_t*, 12> kHelpRuntimeBehaviorLines = {
-    L"\nScripts and runtime behavior:\n",
-    L"  ksh script.ksh [args...]   Run a script with positional parameters.\n",
-    L"  ksh -c \"command\" [name [args...]] Execute a command string.\n",
-    L"  ksh --script-test FILE     Run FILE without a startup profile and report PASS/FAIL.\n",
-    L"  source FILE or . FILE      Run a file in the current shell state.\n",
-    L"  Functions use name() { ... } or function name { ... } syntax.\n",
-    L"  Pipeline builtin/function stages use isolated shell state.\n",
-    L"  Exported variables are inherited by external child processes.\n",
-    L"  Startup profile: ~/.kshrc, or the path supplied by --profile.\n",
-    L"  --no-profile disables startup profile loading.\n",
-    L"  Script file limit is 64 MiB; variable/function/alias tables have bounded capacities.\n",
-    L"  Process-substitution connection timeout: ksh_PROC_SUB_CONNECT_TIMEOUT_MS (1000..600000 ms).\n"
-};
-
-const std::array<const wchar_t*, 3> kHelpExternalUtilitiesLines = {
-    L"\nExternal utilities:\n",
-    L"  suspend   Suspend or resume processes by PID.\n",
-    L"  ulimit    Report resource usage or run a child under Windows job limits.\n"
-};
-
-const std::array<const wchar_t*, 4> kHelpPathHandlingLines = {
-    L"\nPath handling:\n",
-    L"  cd accepts both Windows paths and Unix-style rooted paths.\n",
-    L"  Example: cd /src/project\n",
-    L"  Example: cd C:\\src\\project\n"
-};
-
-const std::array<const wchar_t*, 4> kHelpPromptCustomizationLines = {
-    L"\nPrompt customization (.kshrc):\n",
-    L"  If PS1 is not set, default prompt is '$ ' for users and '# ' for admin.\n",
-    L"  Set PS1 in ~/.kshrc to customize order/content.\n",
-    L"  Supported prompt tokens: %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent.\n"
-};
-
-const std::array<const wchar_t*, 2> kHelpPromptCustomizationShortLines = {
-    L"  Example: PS1='%u@%d %w %# '\n",
-    L"  Example: PS1='%w %# '\n"
-};
-
-const std::array<const wchar_t*, 4> kHelpViModeLines = {
-    L"\nLine editing mode:\n",
-    L"  set -o vi   Enable vi-style command mode in interactive input.\n",
-    L"  set +o vi   Return to default insert editing mode.\n",
-    L"  vi keys: Esc enter command mode, i/a/A/I switch to insert, 0/^/_ line-start, h/l move, w/W/b/B/e/E/ge/gE jump, | (or N|) column jump, f/F/t/T find, ; repeat, , reverse-repeat, j/k history, x/D delete. Prefix motions with N (e.g., 3w, 4h, 2k).\n"
-};
-
-const std::array<const wchar_t*, 7> kHelpCdCommandLines = {
-    L"cd\n",
-    L"  Change the current working directory.\n",
-    L"\nPath handling:\n",
-    L"  Accepts Unix-style rooted paths like /src/project.\n",
-    L"  Accepts traditional Windows paths like C:\\src\\project.\n",
-    L"\nExamples:\n",
-    L"  cd /src/project\n"
-};
-
-const std::array<const wchar_t*, 1> kHelpCdCommandLinesTail = {
-    L"  cd C:\\src\\project\n"
-};
-
-const std::array<const wchar_t*, 16> kHelpKillCommandLines = {
-    L"kill\n",
-    L"  Send a signal to a process ID or shell job.\n",
-    L"\nUsage:\n",
-    L"  kill [-l] [-s signal] [-p | -j] pid|%job ...\n",
-    L"\nTarget selection:\n",
-    L"  Bare numeric targets are treated as process IDs.\n",
-    L"  Targets beginning with % are treated as shell jobs.\n",
-    L"  -p forces process-ID interpretation.\n",
-    L"  -j forces shell-job interpretation.\n",
-    L"\nSignals:\n",
-    L"  TERM/HUP attempt graceful close first, then force termination.\n",
-    L"  INT sends CTRL+C, QUIT sends CTRL+BREAK, KILL force-terminates.\n",
-    L"\nExamples:\n",
-    L"  kill 11576\n",
-    L"  kill -p -9 11576\n",
-    L"  kill %1\n"
-};
-
-const std::array<const wchar_t*, 1> kHelpKillCommandLinesTail = {
-    L"  kill -j %1\n"
-};
-
-const std::array<const wchar_t*, 9> kHelpPromptCommandLines = {
-    L"prompt / PS1\n",
-    L"  Customize interactive prompt text from ~/.kshrc using PS1.\n",
-    L"\nBehavior:\n",
-    L"  If PS1 is unset, default prompt remains '$ ' for users and '# ' for admin.\n",
-    L"\nSupported tokens:\n",
-    L"  %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent\n",
-    L"\nExamples:\n",
-    L"  PS1='%u@%d %w %# '\n",
-    L"  PS1='%w %# '\n"
-};
-
-const std::array<const wchar_t*, 1> kHelpPromptCommandLinesTail = {
-    L"  PS1='%# '\n"
-};
-
-const std::array<const wchar_t*, 2> kHelpLoopKeywordLines = {
-    L"  Loop-control keyword recognized inside while, until, for, and select blocks.\n",
-    L"  Use an optional positive integer to target outer loops.\n"
-};
-
-template <size_t N>
-bool write_help_lines(const std::function<bool(const std::wstring&)>& write_output, const std::array<const wchar_t*, N>& lines) {
-    for (const wchar_t* line : lines) {
-        if (!write_output(line)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool write_grouped_builtin_help(const std::function<bool(const std::wstring&)>& write_output, bool leading_blank_line_per_group) {
-    const std::vector<BuiltinCommandGroup>& groups = builtin_command_help_groups();
-    bool first_group = true;
-    for (const BuiltinCommandGroup& group : groups) {
-        if (leading_blank_line_per_group || !first_group) {
-            if (!write_output(L"\n")) {
-                return false;
-            }
-        }
-        first_group = false;
-
-        if (!write_output(std::wstring(group.title) + L":\n")) {
-            return false;
-        }
-
-        for (const wchar_t* name : group.names) {
-            if (const BuiltinCommandHelp* entry = find_builtin_command_help(name)) {
-                if (!write_output(std::wstring(L"  ") + entry->name + L" - " + entry->description + L"\n")) {
-                    return false;
-                }
-            }
-        }
-    }
-    if (!write_output(L"\n")) {
-        return false;
-    }
-    return true;
-}
-
-const std::vector<std::wstring>& builtin_commands() {
-    static std::vector<std::wstring> commands;
-    if (commands.empty()) {
-        const std::vector<BuiltinCommandHelp>& entries = builtin_command_help_entries();
-        commands.reserve(entries.size());
-        for (const BuiltinCommandHelp& entry : entries) {
-            commands.push_back(entry.name);
-        }
-    }
-    return commands;
-}
-
-void write_help_topic_index(const std::function<bool(const std::wstring&)>& write_output) {
-    write_output(L"CrossShellKSH help\n\n");
-    write_output(L"Use one of these forms:\n");
-    write_output(L"  help                         Show this topic index and command groups.\n");
-    write_output(L"  help COMMAND                 Show help for a builtin or shell function.\n");
-    write_output(L"  help TOPIC                   Show a help section.\n");
-    write_output(L"  help all                     Show the complete reference.\n\n");
-    write_output(L"Topics:\n");
-    write_output(L"  commands, builtins           Builtin commands grouped by purpose.\n");
-    write_output(L"  control, flow                if, for, while, until, case, and select.\n");
-    write_output(L"  syntax, expansion            Pipelines, redirection, substitution, and status.\n");
-    write_output(L"  scripts, runtime             Scripts, profiles, functions, and limits.\n");
-    write_output(L"  utilities, external          External helpers such as suspend and ulimit.\n");
-    write_output(L"  paths, cd                    Windows and Unix-style path handling.\n");
-    write_output(L"  prompt, ps1                  Prompt tokens and .kshrc customization.\n");
-    write_output(L"  vi, editing                  Vi-style interactive line editing.\n");
-    write_output(L"  help, overview               Explain help navigation.\n\n");
-    write_output(L"Examples:\n");
-    write_output(L"  help cd                      Help for the cd builtin.\n");
-    write_output(L"  help syntax                  Shell syntax and expansion.\n");
-    write_output(L"  help prompt                  Prompt customization.\n");
-    write_output(L"  ksh --help                   Complete startup reference.\n");
-}
-
-bool write_help_topic(const std::wstring& raw_topic, const std::function<bool(const std::wstring&)>& write_output) {
-    const std::wstring topic = to_lower_copy(raw_topic);
-    if (topic == L"help" || topic == L"overview" || topic == L"index" || topic == L"topics") {
-        write_help_topic_index(write_output);
-        return true;
-    }
-    if (topic == L"commands" || topic == L"builtins" || topic == L"builtin") {
-        write_output(L"Builtin commands:\n\n");
-        return write_grouped_builtin_help(write_output, false);
-    }
-    if (topic == L"control" || topic == L"flow" || topic == L"keywords") {
-        return write_help_lines(write_output, kHelpControlFlowKeywordLines);
-    }
-    if (topic == L"syntax" || topic == L"expansion" || topic == L"redirection" || topic == L"shell") {
-        return write_help_lines(write_output, kHelpShellSyntaxLines);
-    }
-    if (topic == L"scripts" || topic == L"runtime" || topic == L"startup") {
-        return write_help_lines(write_output, kHelpRuntimeBehaviorLines);
-    }
-    if (topic == L"utilities" || topic == L"external") {
-        return write_help_lines(write_output, kHelpExternalUtilitiesLines);
-    }
-    if (topic == L"paths" || topic == L"path" || topic == L"cd") {
-        return write_help_lines(write_output, kHelpPathHandlingLines);
-    }
-    if (topic == L"prompt" || topic == L"ps1") {
-        return write_help_lines(write_output, kHelpPromptCustomizationLines) &&
-            write_help_lines(write_output, kHelpPromptCustomizationShortLines);
-    }
-    if (topic == L"vi" || topic == L"editing" || topic == L"line-editing") {
-        return write_help_lines(write_output, kHelpViModeLines);
-    }
-    return false;
-}
-
-void write_full_help_text(const std::function<bool(const std::wstring&)>& write_output) {
-    auto write = [&](const std::wstring& text) -> bool {
-        return write_output(text);
-    };
-
-    write(L"Usage:\n");
-    write(L"  ksh [options] [script [args...]]\n");
-    write(L"  ksh -c COMMAND [name [args...]]\n");
-    write(L"  ksh --script-test SCRIPT [args...]\n");
-    write(L"  ksh -- [script [args...]]\n");
-    write(L"\nOptions:\n");
-    write(L"  -h, --help       Show this help text and list built-in commands.\n");
-    write(L"  --version        Show version information.\n");
-    write(L"  --no-profile     Skip loading the startup profile.\n");
-    write(L"  --profile FILE   Load the specified startup profile.\n");
-    write(L"  -c COMMAND       Execute COMMAND, then exit with its status.\n");
-    write(L"  --script-test SCRIPT  Run SCRIPT without a startup profile and report PASS or FAIL.\n");
-    write(L"  --               End options; treat remaining arguments as script and arguments.\n");
-
-    write(L"\nBuilt-in commands:\n");
-    if (!write_grouped_builtin_help(write, true)) return;
-    if (!write_help_lines(write, kHelpControlFlowKeywordLines)) return;
-    if (!write_help_lines(write, kHelpShellSyntaxLines)) return;
-    if (!write_help_lines(write, kHelpRuntimeBehaviorLines)) return;
-    if (!write_help_lines(write, kHelpExternalUtilitiesLines)) return;
-    if (!write_help_lines(write, kHelpPathHandlingLines)) return;
-    if (!write_help_lines(write, kHelpPromptCustomizationLines)) return;
-    if (!write_help_lines(write, kHelpPromptCustomizationShortLines)) return;
-    write_help_lines(write, kHelpViModeLines);
-}
-
-void print_help_text() {
-    auto write_stdout = [](const std::wstring& text) -> bool {
-        std::wcout << text;
-        return true;
-    };
-    write_full_help_text(write_stdout);
+    return prefix;
 }
 
 void add_completion_candidate(std::map<std::wstring, CompletionCandidate>& candidates, const std::wstring& candidate, int rank) {
@@ -2403,7 +9920,7 @@ CompletionQuery analyze_completion_query(const std::wstring& raw_prefix) {
     return query;
 }
 
-std::vector<CompletionCandidate> filter_completion_candidates(const std::vector<CompletionCandidate>& candidates, const std::wstring& prefix) {
+static std::vector<CompletionCandidate> filter_completion_candidates(const std::vector<CompletionCandidate>& candidates, const std::wstring& prefix) {
     std::vector<CompletionCandidate> matches;
     for (const CompletionCandidate& candidate : candidates) {
         if (prefix.empty() || starts_with_case_insensitive(candidate.value, prefix)) {
@@ -2427,7 +9944,7 @@ std::vector<CompletionCandidate> filter_completion_candidates(const std::vector<
     return matches;
 }
 
-const std::vector<CompletionCandidate>& collect_cached_command_candidates() {
+static const std::vector<CompletionCandidate>& collect_cached_command_candidates() {
     static CompletionCache cache;
     const ULONGLONG now_ms = GetTickCount64();
 
@@ -2437,7 +9954,7 @@ const std::vector<CompletionCandidate>& collect_cached_command_candidates() {
         cwd_value = cwd_buffer;
     }
 
-    std::wstring path_value = get_system_env_var(L"PATH");
+    std::wstring path_value = get_system_env_val(L"PATH");
 
     if (cache.cwd == cwd_value && cache.path_value == path_value && !cache.candidates.empty() && (now_ms - cache.cached_at_ms) < kCompletionCacheTtlMs) {
         return cache.candidates;
@@ -2543,7 +10060,7 @@ const std::vector<CompletionCandidate>& collect_cached_command_candidates() {
     return cache.candidates;
 }
 
-std::vector<CompletionCandidate> collect_path_completion_candidates(const CompletionQuery& query) {
+static std::vector<CompletionCandidate> collect_path_completion_candidates(const CompletionQuery& query) {
     std::vector<CompletionCandidate> candidates;
     std::wstring directory = query.path_directory;
     if (directory.empty()) {
@@ -2588,7 +10105,7 @@ std::vector<CompletionCandidate> collect_path_completion_candidates(const Comple
     return filter_completion_candidates(candidates, query.normalized_prefix);
 }
 
-std::wstring format_completion_replacement(const CompletionQuery& query, const std::wstring& match) {
+static std::wstring format_completion_replacement(const CompletionQuery& query, const std::wstring& match) {
     bool should_quote = query.quoted || contains_whitespace(match);
     if (!should_quote) {
         return match;
@@ -2598,7 +10115,7 @@ std::wstring format_completion_replacement(const CompletionQuery& query, const s
     return std::wstring(1, quote_char) + match + std::wstring(1, quote_char);
 }
 
-size_t find_completion_token_start(const std::wstring& buffer, size_t cursor) {
+static size_t find_completion_token_start(const std::wstring& buffer, size_t cursor) {
     bool in_single_quotes = false;
     bool in_double_quotes = false;
     bool escaping = false;
@@ -2653,22 +10170,29 @@ std::vector<std::wstring> collect_completion_candidates(const std::wstring& raw_
     return matches;
 }
 
+std::vector<std::wstring> collect_tab_completions(const std::wstring& current_buffer, size_t cursor_pos, size_t& replace_start, size_t& replace_len) {
+    replace_start = find_completion_token_start(current_buffer, cursor_pos);
+    replace_len = cursor_pos - replace_start;
+    std::wstring prefix = current_buffer.substr(replace_start, replace_len);
+    return collect_completion_candidates(prefix);
+}
+
 struct InputLineRenderState {
     bool initialized = false;
     COORD line_start = { 0, 0 };
     size_t rendered_width = 0;
 };
 
-InputLineRenderState& input_line_render_state() {
+static InputLineRenderState& input_line_render_state() {
     static InputLineRenderState state;
     return state;
 }
 
-void reset_input_line_render_state() {
+static void reset_input_line_render_state() {
     input_line_render_state() = InputLineRenderState();
 }
 
-void initialize_input_line_render_state() {
+static void initialize_input_line_render_state() {
     HANDLE output_handle = GetStdHandle(STD_OUTPUT_HANDLE);
     if (output_handle == nullptr || output_handle == INVALID_HANDLE_VALUE) {
         reset_input_line_render_state();
@@ -3217,7 +10741,7 @@ bool read_interactive_line(const std::wstring& prompt, std::wstring& output) {
                         std::wcout << match << L"\n";
                     }
                     std::wcout.flush();
-                    initialize_input_line_render_state(); // re-anchor after candidate list shifts the cursor
+                    initialize_input_line_render_state();
                     render_input_line(prompt, buffer, cursor);
                     continue;
                 }
@@ -3291,949 +10815,520 @@ bool read_interactive_line(const std::wstring& prompt, std::wstring& output) {
     }
 }
 
-bool try_parse_unsigned_long_strict(const std::wstring& raw, unsigned long& parsed_value);
-bool try_parse_positive_int_strict(const std::wstring& raw, int& parsed_value);
-bool is_executing_function_scope();
-bool is_function_return_requested();
-void request_function_return(int status_code);
-void restore_function_scope_variables(FunctionScopeContext& context);
-void snapshot_local_variable_if_needed(const std::wstring& name);
-void set_flag_value(std::map<std::wstring, bool>& flags, const std::wstring& name, bool value);
-void sync_exported_environment_variable(const std::wstring& name);
+/******************************************************************************
+** End of ksh_terminal.cpp
+******************************************************************************/
 
-// History section: event lookup and recall resolution.
-bool resolve_history_recall(const std::wstring& input, std::wstring& resolved) {
-    resolved = input;
-    if (input.empty() || input[0] != L'!') {
+/******************************************************************************
+** Begin file ksh_builtins.cpp
+******************************************************************************/
+
+
+// -----------------------------------------------------------------------------
+// Builtin Help System Catalog & Data
+// -----------------------------------------------------------------------------
+
+struct BuiltinCommandHelp {
+    const wchar_t* name;
+    const wchar_t* description;
+};
+
+struct BuiltinCommandGroup {
+    const wchar_t* title;
+    std::vector<const wchar_t*> names;
+};
+
+const std::vector<BuiltinCommandHelp>& builtin_command_help_entries() {
+    static const std::vector<BuiltinCommandHelp> entries = {
+        {L"exit", L"Exit the shell."},
+        {L"logout", L"Exit the shell session."},
+        {L"source", L"Run commands from a file in the current shell."},
+        {L".", L"Alias for source."},
+        {L"builtin", L"Invoke a shell builtin directly."},
+        {L"set", L"Set shell options/variables or print current variables (supports set -A name values...)."},
+        {L"unset", L"Unset variables or functions."},
+        {L"export", L"Mark variables for export to child processes."},
+        {L"readonly", L"Mark variables as read-only."},
+        {L"alias", L"Define or show command aliases."},
+        {L"unalias", L"Remove command aliases."},
+        {L"command", L"Run command lookup or execute without function lookup."},
+        {L"whence", L"Report how command names are resolved."},
+        {L"type", L"Describe command type (builtin/function/alias/external)."},
+        {L"hash", L"Show or refresh command resolution results."},
+        {L"eval", L"Evaluate and execute constructed command text."},
+        {L"getopts", L"Parse positional options into shell variables."},
+        {L"typeset", L"Declare or inspect shell variables, including -L/-R/-Z justification."},
+        {L"enum", L"Define an integer enumeration: enum Name=(value ...)."},
+        {L"[[", L"Evaluate a ksh-style conditional expression."},
+        {L"test", L"Evaluate a conditional expression."},
+        {L"[", L"Alias form of test requiring closing ]."},
+        {L"cd", L"Change the current working directory. Accepts Unix-style /path and Windows-style C:\\path."},
+        {L"pwd", L"Print the current working directory."},
+        {L"dirs", L"Print the current directory stack."},
+        {L"pushd", L"Push the current directory onto the stack and change to another directory."},
+        {L"popd", L"Pop the directory stack and change to the saved directory."},
+        {L"print", L"Write arguments to standard output."},
+        {L"echo", L"Write arguments to standard output."},
+        {L"printf", L"Format and write arguments to standard output, including %q shell escaping and %T local time output."},
+        {L"true", L"Return success status 0."},
+        {L"false", L"Return failure status 1."},
+        {L"let", L"Evaluate arithmetic expressions and return success when the final value is non-zero."},
+        {L"return", L"Return from the current function."},
+        {L"clear", L"Clear the terminal screen."},
+        {L"history", L"Show the current command history."},
+        {L"complete", L"Show command completion candidates."},
+        {L"math", L"Evaluate an arithmetic expression."},
+        {L"trap", L"Install, clear, or show trap handlers for EXIT/HUP/INT/BREAK/TERM/CHLD and related signal names."},
+        {L"jobs", L"List background jobs (jobs [-l|-p] [job...])."},
+        {L"fg", L"Bring a background job to the foreground."},
+        {L"bg", L"Continue a background job."},
+        {L"disown", L"Remove background jobs from the job table without terminating them."},
+        {L"kill", L"Send a signal to a process ID or shell job (%job, -p for pid, -j for job)."},
+        {L"wait", L"Wait for one or more jobs to finish."},
+        {L"coproc", L"Run a command as a bidirectional co-process; use read -p and print -p for I/O."},
+        {L"find", L"Search for files in a directory hierarchy."},
+        {L"read", L"Read a line from standard input and assign fields to variables or -A arrays."},
+        {L"exec", L"Replace the shell process with the specified command, or redirect shell handles."},
+        {L"umask", L"Set or print the file mode creation mask."},
+        {L"fc", L"List, edit, and re-execute historical shell commands."},
+        {L"stty", L"Set or print terminal line configuration settings."},
+        {L"times", L"Print accumulated user and system CPU times for shell and children."},
+        {L"sleep", L"Pause for a decimal number of seconds; pending console signals interrupt the wait."},
+        {L"shift", L"Shift positional parameters left by N places (default 1)."},
+        {L":", L"Null command (returns success)."},
+        {L"getconf", L"Query system configuration variables (getconf system_var [pathname] or getconf -a)."},
+        {L"pathchk", L"Check that pathnames are valid and portable (pathchk [-p] [-P] pathname...)."},
+        {L"help", L"Display help information about built-in commands and user-defined functions."},
+        {L"version", L"Display shell version information and OS details."}
+    };
+    return entries;
+}
+
+const BuiltinCommandHelp* find_builtin_command_help(std::wstring_view name) {
+    const std::vector<BuiltinCommandHelp>& entries = builtin_command_help_entries();
+    for (const BuiltinCommandHelp& entry : entries) {
+        if (name == entry.name) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+const std::vector<BuiltinCommandGroup>& builtin_command_help_groups() {
+    static const std::vector<BuiltinCommandGroup> groups = {
+        { L"Shell control", { L"exit", L"logout", L"builtin", L"command", L"whence", L"type", L"eval", L"source", L".", L"exec", L"stty" } },
+        { L"Directory navigation", { L"cd", L"pwd", L"dirs", L"pushd", L"popd" } },
+        { L"Variables and expansion", { L"set", L"unset", L"export", L"readonly", L"typeset", L"enum", L"getopts", L"alias", L"unalias", L"hash", L"let", L"return", L"[[", L"test", L"[" } },
+        { L"Jobs and signals", { L"jobs", L"fg", L"bg", L"disown", L"kill", L"wait", L"trap", L"coproc" } },
+        { L"Files and system", { L"find", L"pathchk", L"getconf", L"umask", L"times", L"sleep", L"shift", L":" } },
+        { L"Interactive and diagnostics", { L"print", L"echo", L"printf", L"true", L"false", L"history", L"complete", L"fc", L"clear", L"math", L"read" } }
+    };
+    return groups;
+}
+
+const std::array<const wchar_t*, 13> kHelpControlFlowKeywordLines = {
+    L"\nControl flow keywords:\n",
+    L"  break     Exit the nearest enclosing loop.\n",
+    L"  continue  Skip to the next loop iteration.\n",
+    L"  if / elif / else / fi  Conditional command blocks.\n",
+    L"  for / do / done        Iterate over words or positional parameters.\n",
+    L"  while / do / done     Repeat while a command succeeds.\n",
+    L"  until / do / done     Repeat until a command succeeds.\n",
+    L"  select / do / done    Present a numbered selection menu.\n",
+    L"  case / in / esac      Match a word against shell patterns.\n",
+    L"\nExamples:\n",
+    L"  if test -n \"$x\"; then echo set; else echo unset; fi\n",
+    L"  for x in 1 2 3; do echo \"$x\"; done\n",
+    L"  case \"$x\" in yes) echo true ;; *) echo false ;; esac\n"
+};
+
+const std::array<const wchar_t*, 25> kHelpShellSyntaxLines = {
+    L"\nShell syntax and execution:\n",
+    L"  command1 | command2       Pipe standard output into the next command.\n",
+    L"  command &                 Run a command or pipeline in the background.\n",
+    L"  <(command) / >(command)   Windows named-pipe process substitution.\n",
+    L"  < file, > file, >> file   Redirect standard input or output.\n",
+    L"  2> file, 2>> file         Redirect standard error.\n",
+    L"  2>&1, 1>&2               Duplicate standard output/error streams.\n",
+    L"  command1; command2        Execute top-level commands in sequence.\n",
+    L"  command |                 Continue a pipeline on the next script line.\n",
+    L"  backslash at line end     Continue a logical command on the next line.\n",
+    L"  # comment                Begins a comment outside quotes.\n",
+    L"\nExpansion:\n",
+    L"  $name, ${name}            Expand shell variables.\n",
+    L"  ${array[index]}           Expand indexed or associative array elements.\n",
+    L"  $(command)                Capture command substitution output.\n",
+    L"  $((expression))           Evaluate arithmetic expansion.\n",
+    L"  ${HKLM.Key.Path.Value}    Read a Windows Registry value.\n",
+    L"  ${HKLM.Key/With.Dots.Value} Use / for Registry paths containing dots.\n",
+    L"\nRegistry namespaces:\n",
+    L"  HKLM and HKCU expose dynamic Registry properties.\n",
+    L"  HKLM.Key.Path.Value=TEXT writes existing REG_SZ/REG_EXPAND_SZ values.\n",
+    L"  Existing REG_DWORD and REG_QWORD values accept numeric assignments.\n",
+    L"  Unsupported Registry types are rejected instead of converted silently.\n",
+    L"\nStatus and errors:\n",
+    L"  $? holds the most recent command status; 0 means success.\n"
+};
+
+const std::array<const wchar_t*, 12> kHelpRuntimeBehaviorLines = {
+    L"\nScripts and runtime behavior:\n",
+    L"  ksh script.ksh [args...]   Run a script with positional parameters.\n",
+    L"  ksh -c \"command\" [name [args...]] Execute a command string.\n",
+    L"  ksh --script-test FILE     Run FILE without a startup profile and report PASS/FAIL.\n",
+    L"  source FILE or . FILE      Run a file in the current shell state.\n",
+    L"  Functions use name() { ... } or function name { ... } syntax.\n",
+    L"  Pipeline builtin/function stages use isolated shell state.\n",
+    L"  Exported variables are inherited by external child processes.\n",
+    L"  Startup profile: ~/.kshrc, or the path supplied by --profile.\n",
+    L"  --no-profile disables startup profile loading.\n",
+    L"  Script file limit is 64 MiB; variable/function/alias tables have bounded capacities.\n",
+    L"  Process-substitution connection timeout: ksh_PROC_SUB_CONNECT_TIMEOUT_MS (1000..600000 ms).\n"
+};
+
+const std::array<const wchar_t*, 3> kHelpExternalUtilitiesLines = {
+    L"\nExternal utilities:\n",
+    L"  suspend   Suspend or resume processes by PID.\n",
+    L"  ulimit    Report resource usage or run a child under Windows job limits.\n"
+};
+
+const std::array<const wchar_t*, 4> kHelpPathHandlingLines = {
+    L"\nPath handling:\n",
+    L"  cd accepts both Windows paths and Unix-style rooted paths.\n",
+    L"  Example: cd /src/project\n",
+    L"  Example: cd C:\\src\\project\n"
+};
+
+const std::array<const wchar_t*, 4> kHelpPromptCustomizationLines = {
+    L"\nPrompt customization (.kshrc):\n",
+    L"  If PS1 is not set, default prompt is '$ ' for users and '# ' for admin.\n",
+    L"  Set PS1 in ~/.kshrc to customize order/content.\n",
+    L"  Supported prompt tokens: %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent.\n"
+};
+
+const std::array<const wchar_t*, 2> kHelpPromptCustomizationShortLines = {
+    L"  Example: PS1='%u@%d %w %# '\n",
+    L"  Example: PS1='%w %# '\n"
+};
+
+const std::array<const wchar_t*, 4> kHelpViModeLines = {
+    L"\nLine editing mode:\n",
+    L"  set -o vi   Enable vi-style command mode in interactive input.\n",
+    L"  set +o vi   Return to default insert editing mode.\n",
+    L"  vi keys: Esc enter command mode, i/a/A/I switch to insert, 0/^/_ line-start, h/l move, w/W/b/B/e/E/ge/gE jump, | (or N|) column jump, f/F/t/T find, ; repeat, , reverse-repeat, j/k history, x/D delete. Prefix motions with N (e.g., 3w, 4h, 2k).\n"
+};
+
+const std::array<const wchar_t*, 7> kHelpCdCommandLines = {
+    L"cd\n",
+    L"  Change the current working directory.\n",
+    L"\nPath handling:\n",
+    L"  Accepts Unix-style rooted paths like /src/project.\n",
+    L"  Accepts traditional Windows paths like C:\\src\\project.\n",
+    L"\nExamples:\n",
+    L"  cd /src/project\n"
+};
+
+const std::array<const wchar_t*, 1> kHelpCdCommandLinesTail = {
+    L"  cd C:\\src\\project\n"
+};
+
+const std::array<const wchar_t*, 16> kHelpKillCommandLines = {
+    L"kill\n",
+    L"  Send a signal to a process ID or shell job.\n",
+    L"\nUsage:\n",
+    L"  kill [-l] [-s signal] [-p | -j] pid|%job ...\n",
+    L"\nTarget selection:\n",
+    L"  Bare numeric targets are treated as process IDs.\n",
+    L"  Targets beginning with % are treated as shell jobs.\n",
+    L"  -p forces process-ID interpretation.\n",
+    L"  -j forces shell-job interpretation.\n",
+    L"\nSignals:\n",
+    L"  TERM/HUP attempt graceful close first, then force termination.\n",
+    L"  INT sends CTRL+C, QUIT sends CTRL+BREAK, KILL force-terminates.\n",
+    L"\nExamples:\n",
+    L"  kill 11576\n",
+    L"  kill -p -9 11576\n",
+    L"  kill %1\n"
+};
+
+const std::array<const wchar_t*, 1> kHelpKillCommandLinesTail = {
+    L"  kill -j %1\n"
+};
+
+const std::array<const wchar_t*, 9> kHelpPromptCommandLines = {
+    L"prompt / PS1\n",
+    L"  Customize interactive prompt text from ~/.kshrc using PS1.\n",
+    L"\nBehavior:\n",
+    L"  If PS1 is unset, default prompt remains '$ ' for users and '# ' for admin.\n",
+    L"\nSupported tokens:\n",
+    L"  %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent\n",
+    L"\nExamples:\n",
+    L"  PS1='%u@%d %w %# '\n",
+    L"  PS1='%w %# '\n"
+};
+
+const std::array<const wchar_t*, 1> kHelpPromptCommandLinesTail = {
+    L"  PS1='%# '\n"
+};
+
+const std::array<const wchar_t*, 2> kHelpLoopKeywordLines = {
+    L"  Loop-control keyword recognized inside while, until, for, and select blocks.\n",
+    L"  Use an optional positive integer to target outer loops.\n"
+};
+
+template <size_t N>
+static bool write_help_lines(const std::function<bool(const std::wstring&)>& write_output, const std::array<const wchar_t*, N>& lines) {
+    for (const wchar_t* line : lines) {
+        if (!write_output(line)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool write_grouped_builtin_help(const std::function<bool(const std::wstring&)>& write_output, bool leading_blank_line_per_group) {
+    const std::vector<BuiltinCommandGroup>& groups = builtin_command_help_groups();
+    bool first_group = true;
+    for (const BuiltinCommandGroup& group : groups) {
+        if (leading_blank_line_per_group || !first_group) {
+            if (!write_output(L"\n")) {
+                return false;
+            }
+        }
+        first_group = false;
+
+        if (!write_output(std::wstring(group.title) + L":\n")) {
+            return false;
+        }
+
+        for (const wchar_t* name : group.names) {
+            if (const BuiltinCommandHelp* entry = find_builtin_command_help(name)) {
+                if (!write_output(std::wstring(L"  ") + entry->name + L" - " + entry->description + L"\n")) {
+                    return false;
+                }
+            }
+        }
+    }
+    if (!write_output(L"\n")) {
+        return false;
+    }
+    return true;
+}
+
+const std::vector<std::wstring>& builtin_commands() {
+    static std::vector<std::wstring> commands;
+    if (commands.empty()) {
+        const std::vector<BuiltinCommandHelp>& entries = builtin_command_help_entries();
+        commands.reserve(entries.size());
+        for (const BuiltinCommandHelp& entry : entries) {
+            commands.push_back(entry.name);
+        }
+    }
+    return commands;
+}
+
+static void write_help_topic_index(const std::function<bool(const std::wstring&)>& write_output) {
+    write_output(L"CrossShellKSH help\n\n");
+    write_output(L"Use one of these forms:\n");
+    write_output(L"  help                         Show this topic index and command groups.\n");
+    write_output(L"  help COMMAND                 Show help for a builtin or shell function.\n");
+    write_output(L"  help TOPIC                   Show a help section.\n");
+    write_output(L"  help all                     Show the complete reference.\n\n");
+    write_output(L"Topics:\n");
+    write_output(L"  commands, builtins           Builtin commands grouped by purpose.\n");
+    write_output(L"  control, flow                if, for, while, until, case, and select.\n");
+    write_output(L"  syntax, expansion            Pipelines, redirection, substitution, and status.\n");
+    write_output(L"  scripts, runtime             Scripts, profiles, functions, and limits.\n");
+    write_output(L"  utilities, external          External helpers such as suspend and ulimit.\n");
+    write_output(L"  paths, cd                    Windows and Unix-style path handling.\n");
+    write_output(L"  prompt, ps1                  Prompt tokens and .kshrc customization.\n");
+    write_output(L"  vi, editing                  Vi-style interactive line editing.\n");
+    write_output(L"  help, overview               Explain help navigation.\n\n");
+    write_output(L"Examples:\n");
+    write_output(L"  help cd                      Help for the cd builtin.\n");
+    write_output(L"  help syntax                  Shell syntax and expansion.\n");
+    write_output(L"  help prompt                  Prompt customization.\n");
+    write_output(L"  ksh --help                   Complete startup reference.\n");
+}
+
+bool write_help_topic(const std::wstring& raw_topic, const std::function<bool(const std::wstring&)>& write_output) {
+    const std::wstring topic = to_lower_copy(raw_topic);
+    if (topic == L"help" || topic == L"overview" || topic == L"index" || topic == L"topics") {
+        write_help_topic_index(write_output);
         return true;
     }
+    if (topic == L"commands" || topic == L"builtins" || topic == L"builtin") {
+        write_output(L"Builtin commands:\n\n");
+        return write_grouped_builtin_help(write_output, false);
+    }
+    if (topic == L"control" || topic == L"flow" || topic == L"keywords") {
+        return write_help_lines(write_output, kHelpControlFlowKeywordLines);
+    }
+    if (topic == L"syntax" || topic == L"expansion" || topic == L"redirection" || topic == L"shell") {
+        return write_help_lines(write_output, kHelpShellSyntaxLines);
+    }
+    if (topic == L"scripts" || topic == L"runtime" || topic == L"startup") {
+        return write_help_lines(write_output, kHelpRuntimeBehaviorLines);
+    }
+    if (topic == L"utilities" || topic == L"external") {
+        return write_help_lines(write_output, kHelpExternalUtilitiesLines);
+    }
+    if (topic == L"paths" || topic == L"path" || topic == L"cd") {
+        return write_help_lines(write_output, kHelpPathHandlingLines);
+    }
+    if (topic == L"prompt" || topic == L"ps1") {
+        return write_help_lines(write_output, kHelpPromptCustomizationLines) &&
+            write_help_lines(write_output, kHelpPromptCustomizationShortLines);
+    }
+    if (topic == L"vi" || topic == L"editing" || topic == L"line-editing") {
+        return write_help_lines(write_output, kHelpViModeLines);
+    }
+    return false;
+}
 
-    if (input == L"!!") {
-        if (g_command_history.empty()) {
-            std::wcerr << L"ksh: history empty\n";
-            return false;
-        }
-        resolved = g_command_history.back().command;
+void write_full_help_text(const std::function<bool(const std::wstring&)>& write_output) {
+    auto write = [&](const std::wstring& text) -> bool {
+        return write_output(text);
+    };
+
+    write(L"Usage:\n");
+    write(L"  ksh [options] [script [args...]]\n");
+    write(L"  ksh -c COMMAND [name [args...]]\n");
+    write(L"  ksh --script-test SCRIPT [args...]\n");
+    write(L"  ksh -- [script [args...]]\n");
+    write(L"\nOptions:\n");
+    write(L"  -h, --help       Show this help text and list built-in commands.\n");
+    write(L"  --version        Show version information.\n");
+    write(L"  --no-profile     Skip loading the startup profile.\n");
+    write(L"  --profile FILE   Load the specified startup profile.\n");
+    write(L"  -c COMMAND       Execute COMMAND, then exit with its status.\n");
+    write(L"  --script-test SCRIPT  Run SCRIPT without a startup profile and report PASS or FAIL.\n");
+    write(L"  --               End options; treat remaining arguments as script and arguments.\n");
+
+    write(L"\nBuilt-in commands:\n");
+    if (!write_grouped_builtin_help(write, true)) return;
+    if (!write_help_lines(write, kHelpControlFlowKeywordLines)) return;
+    if (!write_help_lines(write, kHelpShellSyntaxLines)) return;
+    if (!write_help_lines(write, kHelpRuntimeBehaviorLines)) return;
+    if (!write_help_lines(write, kHelpExternalUtilitiesLines)) return;
+    if (!write_help_lines(write, kHelpPathHandlingLines)) return;
+    if (!write_help_lines(write, kHelpPromptCustomizationLines)) return;
+    if (!write_help_lines(write, kHelpPromptCustomizationShortLines)) return;
+    write_help_lines(write, kHelpViModeLines);
+}
+
+void print_help_text() {
+    auto write_stdout = [](const std::wstring& text) -> bool {
+        std::wcout << text;
         return true;
+    };
+    write_full_help_text(write_stdout);
+}
+
+bool execute_builtin_help(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output) {
+    if (tokens.size() > 2) {
+        std::wcerr << L"ksh: help: too many arguments. Usage: help [command]\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
     }
 
-    if (input.size() > 1 && input[1] == L'-') {
-        unsigned long rel = 0;
-        if (!try_parse_unsigned_long_strict(input.substr(2), rel)) {
-            std::wcerr << L"ksh: invalid history reference\n";
-            return false;
-        }
-        if (rel == 0 || rel > g_command_history.size()) {
-            std::wcerr << L"ksh: history event not found\n";
-            return false;
-        }
-        resolved = g_command_history[g_command_history.size() - static_cast<size_t>(rel)].command;
-        return true;
-    }
+    if (tokens.size() == 2) {
+        std::wstring target = tokens[1];
 
-    bool numeric = input.size() > 1;
-    for (size_t i = 1; i < input.size(); ++i) {
-        if (!std::iswdigit(input[i])) {
-            numeric = false;
-            break;
-        }
-    }
-
-    if (numeric) {
-        unsigned long index = 0;
-        if (!try_parse_unsigned_long_strict(input.substr(1), index)) {
-            std::wcerr << L"ksh: invalid history reference\n";
-            return false;
-        }
-        if (index == 0 || index > g_command_history.size()) {
-            std::wcerr << L"ksh: history event not found\n";
-            return false;
-        }
-        resolved = g_command_history[static_cast<size_t>(index - 1)].command;
-        return true;
-    }
-
-    std::wstring prefix = input.substr(1);
-    for (size_t i = g_command_history.size(); i > 0; --i) {
-        if (starts_with_case_insensitive(g_command_history[i - 1].command, prefix)) {
-            resolved = g_command_history[i - 1].command;
+        if (target == L"cd") {
+            if (!write_help_lines(write_output, kHelpCdCommandLines) || !write_help_lines(write_output, kHelpCdCommandLinesTail)) {
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+            ksh_env.variables[L"?"] = L"0";
             return true;
         }
-    }
 
-    std::wcerr << L"ksh: history event not found\n";
-    return false;
-}
-
-std::wstring format_background_job_line(const BackgroundJob& job);
-void close_background_job_handles(BackgroundJob& job);
-
-std::wstring normalize_trap_event_name(const std::wstring& raw) {
-    std::wstring token = trim_copy(raw);
-    if (token.empty()) {
-        return L"";
-    }
-
-    if (token.size() >= 3) {
-        std::wstring prefix;
-        prefix.reserve(3);
-        prefix.push_back(static_cast<wchar_t>(std::towupper(token[0])));
-        prefix.push_back(static_cast<wchar_t>(std::towupper(token[1])));
-        prefix.push_back(static_cast<wchar_t>(std::towupper(token[2])));
-        if (prefix == L"SIG") {
-            token = token.substr(3);
-        }
-    }
-
-    std::wstring upper;
-    upper.reserve(token.size());
-    for (wchar_t ch : token) {
-        upper.push_back(static_cast<wchar_t>(std::towupper(ch)));
-    }
-
-    if (upper == L"0" || upper == L"EXIT") return L"EXIT";
-    if (upper == L"1" || upper == L"HUP") return L"HUP";
-    if (upper == L"2" || upper == L"INT") return L"INT";
-    if (upper == L"3" || upper == L"BREAK") return L"BREAK";
-    if (upper == L"QUIT") return L"QUIT";
-    if (upper == L"8" || upper == L"FPE") return L"FPE";
-    if (upper == L"10" || upper == L"USR1") return L"USR1";
-    if (upper == L"11" || upper == L"SEGV") return L"SEGV";
-    if (upper == L"12" || upper == L"USR2") return L"USR2";
-    if (upper == L"14" || upper == L"ALRM") return L"ALRM";
-    if (upper == L"15" || upper == L"TERM") return L"TERM";
-    if (upper == L"17" || upper == L"CHLD" || upper == L"CLD") return L"CHLD";
-
-    return L"";
-}
-
-bool has_trap_handler(const std::wstring& event_name) {
-    return g_trap_handlers.find(event_name) != g_trap_handlers.end();
-}
-
-BOOL WINAPI ksh_console_ctrl_handler(DWORD ctrl_type) {
-    switch (ctrl_type) {
-    case CTRL_C_EVENT: {
-        const bool int_active = InterlockedCompareExchange(&g_int_trap_active, 0, 0) != 0;
-        if (int_active) {
-            InterlockedExchange(&g_pending_int_trap, 1);
-            return TRUE;
-        }
-        const bool fg_active = InterlockedCompareExchange(&g_foreground_process_active, 0, 0) != 0;
-        const bool interactive = InterlockedCompareExchange(&g_in_interactive_loop, 0, 0) != 0;
-        if (fg_active || interactive) {
-            InterlockedExchange(&g_pending_int_trap, 1);
-            return TRUE;
-        }
-        return FALSE;
-    }
-    case CTRL_BREAK_EVENT: {
-        const bool break_active = InterlockedCompareExchange(&g_break_trap_active, 0, 0) != 0;
-        if (break_active) {
-            InterlockedExchange(&g_pending_break_trap, 1);
-            return TRUE;
-        }
-        const bool fg_active = InterlockedCompareExchange(&g_foreground_process_active, 0, 0) != 0;
-        const bool interactive = InterlockedCompareExchange(&g_in_interactive_loop, 0, 0) != 0;
-        if (fg_active || interactive) {
-            InterlockedExchange(&g_pending_break_trap, 1);
-            return TRUE;
-        }
-        return FALSE;
-    }
-    case CTRL_CLOSE_EVENT:
-    case CTRL_LOGOFF_EVENT:
-    case CTRL_SHUTDOWN_EVENT: {
-        const bool hup_active = InterlockedCompareExchange(&g_hup_trap_active, 0, 0) != 0;
-        const bool term_active = InterlockedCompareExchange(&g_term_trap_active, 0, 0) != 0;
-        if (!hup_active && !term_active) {
-            return FALSE;
-        }
-        if (hup_active) {
-            InterlockedExchange(&g_pending_hup_trap, 1);
-        }
-        InterlockedExchange(&g_pending_term_trap, 1);
-        return TRUE;
-    }
-    default:
-        return FALSE;
-    }
-}
-
-class ScopedDebugPrivilege {
-public:
-    ScopedDebugPrivilege() {
-        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token_handle_)) {
-            return;
+        if (target == L"kill") {
+            if (!write_help_lines(write_output, kHelpKillCommandLines) || !write_help_lines(write_output, kHelpKillCommandLinesTail)) {
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+            ksh_env.variables[L"?"] = L"0";
+            return true;
         }
 
-        LUID privilege_luid;
-        if (!LookupPrivilegeValueW(nullptr, L"SeDebugPrivilege", &privilege_luid)) {
-            return;
+        if (target == L"prompt" || target == L"PS1") {
+            if (!write_help_lines(write_output, kHelpPromptCommandLines) || !write_help_lines(write_output, kHelpPromptCommandLinesTail)) {
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+            ksh_env.variables[L"?"] = L"0";
+            return true;
         }
 
-        TOKEN_PRIVILEGES requested_state;
-        ZeroMemory(&requested_state, sizeof(requested_state));
-        requested_state.PrivilegeCount = 1;
-        requested_state.Privileges[0].Luid = privilege_luid;
-        requested_state.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-
-        DWORD previous_state_size = sizeof(previous_state_);
-        const BOOL adjusted = AdjustTokenPrivileges(
-            token_handle_,
-            FALSE,
-            &requested_state,
-            sizeof(previous_state_),
-            &previous_state_,
-            &previous_state_size);
-        const DWORD adjust_error = GetLastError();
-        if (!adjusted || adjust_error == ERROR_NOT_ALL_ASSIGNED) {
-            ZeroMemory(&previous_state_, sizeof(previous_state_));
-            return;
+        if (target == L"break" || target == L"continue") {
+            if (!write_output(target + L"\n") || !write_help_lines(write_output, kHelpLoopKeywordLines)) {
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+            ksh_env.variables[L"?"] = L"0";
+            return true;
         }
 
-        has_previous_state_ = true;
-    }
-
-    ~ScopedDebugPrivilege() {
-        if (token_handle_ == nullptr) {
-            return;
+        const std::wstring lowered_target = to_lower_copy(target);
+        if (lowered_target == L"all" || lowered_target == L"full" || lowered_target == L"reference") {
+            write_full_help_text(write_output);
+            ksh_env.variables[L"?"] = L"0";
+            return true;
         }
 
-        if (has_previous_state_) {
-            AdjustTokenPrivileges(token_handle_, FALSE, &previous_state_, 0, nullptr, nullptr);
+        if (write_help_topic(target, write_output)) {
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+        
+        if (const BuiltinCommandHelp* entry = find_builtin_command_help(target)) {
+            write_output(std::wstring(entry->name) + L" - " + entry->description + L"\n");
+            ksh_env.variables[L"?"] = L"0";
+            return true;
         }
 
-        CloseHandle(token_handle_);
+        std::map<std::wstring, ShellFunctionDefinition>::const_iterator fn_it = g_shell_functions.find(target);
+        if (fn_it != g_shell_functions.end()) {
+            std::wstring body = L"function " + target + L"\n{\n";
+            for (const auto& line : fn_it->second.body_lines) {
+                body += L"    " + line + L"\n";
+            }
+            body += L"}\n";
+            write_output(body);
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+
+        std::wcerr << L"ksh: help: no help found for: " << target << L"\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
     }
-
-private:
-    HANDLE token_handle_ = nullptr;
-    TOKEN_PRIVILEGES previous_state_ = {};
-    bool has_previous_state_ = false;
-};
-
-enum class KillBuiltinSignal {
-    Hup,
-    Int,
-    Quit,
-    Kill,
-    Term
-};
-
-struct KillWindowEnumData {
-    DWORD pid;
-    bool window_found;
-};
-
-BOOL CALLBACK kill_window_enum_proc(HWND window_handle, LPARAM parameter) {
-    KillWindowEnumData* data = reinterpret_cast<KillWindowEnumData*>(parameter);
-    DWORD window_pid = 0;
-    GetWindowThreadProcessId(window_handle, &window_pid);
-
-    if (window_pid == data->pid && IsWindowVisible(window_handle)) {
-        PostMessageW(window_handle, WM_CLOSE, 0, 0);
-        data->window_found = true;
-    }
-
-    return TRUE;
-}
-
-bool parse_kill_builtin_signal(const std::wstring& raw_signal, KillBuiltinSignal& signal) {
-    std::wstring normalized_signal = normalize_trap_event_name(raw_signal);
-    if (normalized_signal == L"HUP") {
-        signal = KillBuiltinSignal::Hup;
-        return true;
-    }
-    if (normalized_signal == L"INT") {
-        signal = KillBuiltinSignal::Int;
-        return true;
-    }
-    if (normalized_signal == L"BREAK" || normalized_signal == L"QUIT") {
-        signal = KillBuiltinSignal::Quit;
-        return true;
-    }
-    if (normalized_signal == L"TERM") {
-        signal = KillBuiltinSignal::Term;
-        return true;
-    }
-
-    std::wstring upper_signal;
-    upper_signal.reserve(raw_signal.size());
-    for (wchar_t ch : raw_signal) {
-        upper_signal.push_back(static_cast<wchar_t>(std::towupper(ch)));
-    }
-    if (upper_signal.rfind(L"SIG", 0) == 0) {
-        upper_signal = upper_signal.substr(3);
-    }
-
-    if (upper_signal == L"9" || upper_signal == L"KILL") {
-        signal = KillBuiltinSignal::Kill;
-        return true;
-    }
-
-    return false;
-}
-
-std::wstring signal_spec_to_trap_event(const std::wstring& raw_signal) {
-    std::wstring normalized_signal = normalize_trap_event_name(raw_signal);
-    if (normalized_signal == L"QUIT") {
-        return L"BREAK";
-    }
-    return normalized_signal;
-}
-
-bool force_kill_process_by_pid(DWORD pid) {
-    HANDLE process_handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-    if (process_handle == nullptr) {
+    write_output(L"\n");
+    write_help_topic_index(write_output);
+    write_output(L"\nCrossShellKSH Commands:\n");
+    if (!write_grouped_builtin_help(write_output, false)) {
+        ksh_env.variables[L"?"] = L"1";
         return false;
     }
 
-    const BOOL terminated = TerminateProcess(process_handle, 1);
-    CloseHandle(process_handle);
-    return terminated != FALSE;
-}
-
-bool graceful_kill_process_by_pid(DWORD pid) {
-    KillWindowEnumData enum_data = { pid, false };
-    EnumWindows(kill_window_enum_proc, reinterpret_cast<LPARAM>(&enum_data));
-    if (!enum_data.window_found) {
-        return force_kill_process_by_pid(pid);
+    write_output(L"\nPrompt customization:\n");
+    write_output(L"  Set PS1 in ~/.kshrc to customize prompt order/content.\n");
+    write_output(L"  Tokens: %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent\n");
+    if (!write_help_lines(write_output, kHelpPromptCustomizationShortLines)) {
+        ksh_env.variables[L"?"] = L"1";
+        return false;
     }
+
+    write_output(L"\n");
+    
+    ksh_env.variables[L"?"] = L"0";
     return true;
 }
 
-bool send_console_event_to_pid(DWORD pid, DWORD control_event) {
-    if (!AttachConsole(pid)) {
-        return false;
-    }
-
-    SetConsoleCtrlHandler(nullptr, TRUE);
-    const BOOL generated = GenerateConsoleCtrlEvent(control_event, 0);
-    FreeConsole();
-    SetConsoleCtrlHandler(nullptr, FALSE);
-    return generated != FALSE;
-}
-
-bool execute_registered_trap(const std::wstring& event_name, bool& should_exit_shell) {
-    std::map<std::wstring, std::wstring>::const_iterator it = g_trap_handlers.find(event_name);
-    if (it == g_trap_handlers.end()) {
-        return true;
-    }
-
-    const std::wstring command = it->second;
-    if (command.empty()) {
-        return true;
-    }
-
-    if (g_running_trap_handler) {
-        return true;
-    }
-
-    ScopedTrapExecutionFlag trap_guard(g_running_trap_handler);
-    bool trap_exit_requested = false;
-    bool ok = execute_command_line(command, trap_exit_requested);
-    if (trap_exit_requested) {
-        should_exit_shell = true;
-    }
-    return ok;
-}
-
-bool queue_pending_trap_event(const std::wstring& event_name) {
-    if (event_name == L"INT") {
-        InterlockedExchange(&g_pending_int_trap, 1);
-        return true;
-    }
-    if (event_name == L"BREAK") {
-        InterlockedExchange(&g_pending_break_trap, 1);
-        return true;
-    }
-    if (event_name == L"HUP") {
-        InterlockedExchange(&g_pending_hup_trap, 1);
-        return true;
-    }
-    if (event_name == L"ALRM") {
-        InterlockedExchange(&g_pending_alrm_trap, 1);
-        return true;
-    }
-    if (event_name == L"USR1") {
-        InterlockedExchange(&g_pending_usr1_trap, 1);
-        return true;
-    }
-    if (event_name == L"USR2") {
-        InterlockedExchange(&g_pending_usr2_trap, 1);
-        return true;
-    }
-    if (event_name == L"SEGV") {
-        InterlockedExchange(&g_pending_segv_trap, 1);
-        return true;
-    }
-    if (event_name == L"FPE") {
-        InterlockedExchange(&g_pending_fpe_trap, 1);
-        return true;
-    }
-    if (event_name == L"TERM") {
-        InterlockedExchange(&g_pending_term_trap, 1);
-        return true;
-    }
-    if (event_name == L"CHLD") {
-        InterlockedExchange(&g_pending_chld_trap, 1);
-        return true;
-    }
-    return false;
-}
-
-void process_pending_traps(bool& should_exit_shell) {
-    if (InterlockedExchange(&g_pending_int_trap, 0) != 0) {
-        if (!has_trap_handler(L"INT")) {
-            ksh_env.variables[L"?"] = L"130";
-        }
-        execute_registered_trap(L"INT", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_break_trap, 0) != 0) {
-        if (!has_trap_handler(L"BREAK")) {
-            ksh_env.variables[L"?"] = L"131";
-        }
-        execute_registered_trap(L"BREAK", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_hup_trap, 0) != 0) {
-        if (!has_trap_handler(L"HUP")) {
-            ksh_env.variables[L"?"] = L"129";
-            should_exit_shell = true;
-        }
-        execute_registered_trap(L"HUP", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_alrm_trap, 0) != 0) {
-        execute_registered_trap(L"ALRM", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_usr1_trap, 0) != 0) {
-        execute_registered_trap(L"USR1", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_usr2_trap, 0) != 0) {
-        execute_registered_trap(L"USR2", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_segv_trap, 0) != 0) {
-        execute_registered_trap(L"SEGV", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_fpe_trap, 0) != 0) {
-        execute_registered_trap(L"FPE", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_term_trap, 0) != 0) {
-        if (!has_trap_handler(L"TERM")) {
-            ksh_env.variables[L"?"] = L"143";
-            should_exit_shell = true;
-        }
-        execute_registered_trap(L"TERM", should_exit_shell);
-    }
-
-    if (InterlockedExchange(&g_pending_chld_trap, 0) != 0) {
-        execute_registered_trap(L"CHLD", should_exit_shell);
-    }
-}
-
-void run_exit_trap_once(bool& should_exit_shell) {
-    if (g_exit_trap_executed) {
-        return;
-    }
-
-    g_exit_trap_executed = true;
-    execute_registered_trap(L"EXIT", should_exit_shell);
-}
-
-void update_background_jobs(bool print_completions) {
-    auto ensure_job_handle_views = [](BackgroundJob& job) {
-        if (job.process_handles.empty() && job.process_handle != nullptr) {
-            job.process_handles.push_back(job.process_handle);
-        }
-        if (job.pids.empty() && job.pid != 0) {
-            job.pids.push_back(job.pid);
-        }
-        if (!job.process_handles.empty()) {
-            job.process_handle = job.process_handles.back();
-        }
-        if (!job.pids.empty()) {
-            job.pid = job.pids.back();
-        }
-    };
-
-    for (BackgroundJob& job : g_background_jobs) {
-        if (job.completed) {
-            continue;
-        }
-
-        ensure_job_handle_views(job);
-
-        if (job.process_handles.empty()) {
-            job.completed = true;
-            job.exit_code = 1;
-            job.completion_reported = true;
-            continue;
-        }
-
-        bool all_complete = true;
-        DWORD last_code = 0;
-        for (size_t i = 0; i < job.process_handles.size(); ++i) {
-            HANDLE handle = job.process_handles[i];
-            if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
-                last_code = 1;
-                continue;
-            }
-
-            DWORD code = STILL_ACTIVE;
-            bool is_pipeline_thread = false;
-            {
-                std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
-                is_pipeline_thread = (g_pipeline_thread_handles.find(handle) != g_pipeline_thread_handles.end());
-            }
-            if (is_pipeline_thread) {
-                if (!GetExitCodeThread(handle, &code)) code = 1;
-            } else if (!GetExitCodeProcess(handle, &code)) {
-                code = 1;
-            }
-
-            if (i + 1 == job.process_handles.size()) {
-                last_code = code;
-            }
-
-            if (code == STILL_ACTIVE) {
-                all_complete = false;
-            }
-        }
-
-        if (all_complete) {
-            for (HANDLE handle : job.process_handles) {
-                register_child_process_times(handle);
-            }
-            job.completed = true;
-            job.exit_code = (last_code == STILL_ACTIVE) ? 1 : last_code;
-            if (print_completions && !job.completion_reported) {
-                std::wcout << format_background_job_line(job) << L"\n";
-            }
-            job.completion_reported = true;
-            // Release process handles as soon as the job is done to avoid handle buildup.
-            close_background_job_handles(job);
-        }
-    }
-}
-
-BackgroundJob* find_background_job(int job_id) {
-    for (BackgroundJob& job : g_background_jobs) {
-        if (job.id == job_id) {
-            return &job;
-        }
-    }
-    return nullptr;
-}
-
-BackgroundJob* find_default_background_job_for_resume_or_foreground() {
-    for (size_t i = g_background_jobs.size(); i > 0; --i) {
-        BackgroundJob& job = g_background_jobs[i - 1];
-        if (!job.completed) {
-            return &job;
-        }
-    }
-    return nullptr;
-}
-
-bool resolve_job_reference(const std::wstring& raw, int& job_id) {
-    if (raw.empty()) {
-        return false;
-    }
-
-    if (raw == L"%+" || raw == L"%%") {
-        if (g_background_jobs.empty()) {
-            return false;
-        }
-        job_id = g_background_jobs.back().id;
-        return true;
-    }
-
-    if (raw == L"%-") {
-        if (g_background_jobs.size() < 2) {
-            return false;
-        }
-        job_id = g_background_jobs[g_background_jobs.size() - 2].id;
-        return true;
-    }
-
-    std::wstring value = raw;
-    if (!value.empty() && value[0] == L'%') {
-        value = value.substr(1);
-    }
-    if (value.empty()) {
-        return false;
-    }
-
-    int parsed = 0;
-    if (!try_parse_positive_int_strict(value, parsed)) {
-        return false;
-    }
-    job_id = parsed;
-    return true;
-}
-
-std::wstring format_background_job_line(const BackgroundJob& job) {
-    std::wstring line = L"[" + std::to_wstring(job.id) + L"] ";
-    if (job.completed) {
-        line += L"Done (exit=" + std::to_wstring(job.exit_code) + L") ";
-    } else {
-        line += L"Running pid=" + std::to_wstring(job.pid) + L" ";
-    }
-    line += job.command;
-    return line;
-}
-
-bool parse_job_id(const std::wstring& raw, int& job_id) {
-    if (raw.empty()) {
-        return false;
-    }
-
-    std::wstring value = raw;
-    if (!value.empty() && value[0] == L'%') {
-        value = value.substr(1);
-    }
-    if (value.empty()) {
-        return false;
-    }
-
-    int parsed = 0;
-    if (!try_parse_positive_int_strict(value, parsed)) {
-        return false;
-    }
-    job_id = parsed;
-    return true;
-}
-
-bool try_parse_int_strict(const std::wstring& raw, int& parsed_value) {
-    if (raw.empty()) {
-        return false;
-    }
-
-    wchar_t* end_ptr = nullptr;
-    errno = 0;
-    long parsed = std::wcstol(raw.c_str(), &end_ptr, 10);
-    if (errno != 0 || end_ptr == raw.c_str() || (end_ptr != nullptr && *end_ptr != L'\0')) {
-        return false;
-    }
-    if (parsed < static_cast<long>(INT_MIN) || parsed > static_cast<long>(INT_MAX)) {
-        return false;
-    }
-
-    parsed_value = static_cast<int>(parsed);
-    return true;
-}
-
-bool try_parse_unsigned_long_strict(const std::wstring& raw, unsigned long& parsed_value) {
-    if (raw.empty()) {
-        return false;
-    }
-
-    wchar_t* end_ptr = nullptr;
-    errno = 0;
-    unsigned long parsed = std::wcstoul(raw.c_str(), &end_ptr, 10);
-    if (errno != 0 || end_ptr == raw.c_str() || (end_ptr != nullptr && *end_ptr != L'\0')) {
-        return false;
-    }
-
-    parsed_value = parsed;
-    return true;
-}
-
-bool try_parse_positive_int_strict(const std::wstring& raw, int& parsed_value) {
-    if (!try_parse_int_strict(raw, parsed_value)) {
-        return false;
-    }
-    return parsed_value > 0;
-}
-
-void close_background_job_handles(BackgroundJob& job) {
-    std::vector<HANDLE> closed;
-    closed.reserve(job.process_handles.size() + 1);
-
-    auto close_once = [&](HANDLE handle) {
-        if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
-            return;
-        }
-        if (std::find(closed.begin(), closed.end(), handle) != closed.end()) {
-            return;
-        }
-        {
-            std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
-            g_pipeline_thread_handles.erase(handle);
-        }
-        CloseHandle(handle);
-        closed.push_back(handle);
-    };
-
-    for (HANDLE handle : job.process_handles) {
-        close_once(handle);
-    }
-    close_once(job.process_handle);
-
-    for (const std::wstring& path : job.temp_file_paths) {
-        if (!path.empty()) {
-            DeleteFileW(path.c_str());
-        }
-    }
-    job.temp_file_paths.clear();
-
-    job.process_handle = nullptr;
-    job.process_handles.clear();
-}
-
-bool wait_for_background_job(BackgroundJob& job, DWORD& exit_code) {
-    update_background_jobs(false);
-
-    if (job.completed) {
-        close_background_job_handles(job);
-        exit_code = job.exit_code;
-        return true;
-    }
-
-    if (job.process_handles.empty() && job.process_handle != nullptr) {
-        job.process_handles.push_back(job.process_handle);
-    }
-
-    if (job.process_handles.empty()) {
-        exit_code = 1;
-        job.completed = true;
-        job.exit_code = 1;
-        return false;
-    }
-
-    DWORD last_code = 1;
-    bool ok = true;
-    for (size_t i = 0; i < job.process_handles.size(); ++i) {
-        HANDLE handle = job.process_handles[i];
-        if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
-            ok = false;
-            if (i + 1 == job.process_handles.size()) {
-                last_code = 1;
-            }
-            continue;
-        }
-
-        WaitForSingleObject(handle, INFINITE);
-        register_child_process_times(handle);
-        DWORD code = 1;
-        if (!GetExitCodeProcess(handle, &code)) {
-            code = 1;
-            ok = false;
-        }
-
-        if (i + 1 == job.process_handles.size()) {
-            last_code = code;
-        }
-    }
-
-    job.completed = true;
-    job.exit_code = last_code;
-    job.completion_reported = true;
-    close_background_job_handles(job);
-    exit_code = last_code;
-    return ok;
-}
-
-void remove_background_job(int job_id) {
-    for (size_t i = 0; i < g_background_jobs.size(); ++i) {
-        if (g_background_jobs[i].id == job_id) {
-            close_background_job_handles(g_background_jobs[i]);
-            g_background_jobs.erase(g_background_jobs.begin() + static_cast<long long>(i));
-            return;
-        }
-    }
-}
-
-void cleanup_all_background_jobs() {
-    for (BackgroundJob& job : g_background_jobs) {
-        close_background_job_handles(job);
-    }
-    g_background_jobs.clear();
-}
-
-const std::vector<std::wstring>& current_script_args() {
-    static const std::vector<std::wstring> empty_args;
-    if (g_script_context_stack.empty()) {
-        return empty_args;
-    }
-    return g_script_context_stack.back().args;
-}
-
-// Script context section: current script name and argument helpers.
-std::wstring current_script_name() {
-    if (g_script_context_stack.empty()) {
-        return L"";
-    }
-    return g_script_context_stack.back().script_name;
-}
-
-std::wstring join_script_args(const std::vector<std::wstring>& args) {
-    std::wstring joined;
-    for (size_t i = 0; i < args.size(); ++i) {
-        joined += args[i];
-        if (i + 1 < args.size()) {
-            joined += L" ";
-        }
-    }
-    return joined;
-}
-
-std::wstring trim_copy(const std::wstring& value) {
-    return trim_copy(std::wstring_view(value));
-}
-
-std::wstring trim_copy(std::wstring_view value) {
-    const std::wstring_view whitespace = L" \t\r\n";
-    const size_t start = value.find_first_not_of(whitespace);
-    if (start == std::wstring::npos) {
-        return L"";
-    }
-    const size_t end = value.find_last_not_of(whitespace);
-    return std::wstring(value.substr(start, end - start + 1));
-}
-
-bool ends_with_case_insensitive(const std::wstring& value, const std::wstring& suffix) {
-    if (suffix.size() > value.size()) {
-        return false;
-    }
-
-    const size_t offset = value.size() - suffix.size();
-    for (size_t i = 0; i < suffix.size(); ++i) {
-        if (std::towlower(value[offset + i]) != std::towlower(suffix[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::wstring quote_command_argument(const std::wstring& arg) {
-    if (arg.empty()) {
-        return L"\"\"";
-    }
-
-    bool needs_quotes = false;
-    for (wchar_t ch : arg) {
-        if (std::iswspace(ch) || ch == L'"') {
-            needs_quotes = true;
-            break;
-        }
-    }
-
-    if (!needs_quotes) {
-        return arg;
-    }
-
-    std::wstring escaped;
-    escaped.reserve(arg.size() + 8);
-    escaped.push_back(L'"');
-
-    size_t backslash_run = 0;
-    for (wchar_t ch : arg) {
-        if (ch == L'\\') {
-            backslash_run++;
-            continue;
-        }
-
-        if (ch == L'"') {
-            escaped.append(backslash_run * 2 + 1, L'\\');
-            escaped.push_back(L'"');
-            backslash_run = 0;
-            continue;
-        }
-
-        if (backslash_run > 0) {
-            escaped.append(backslash_run, L'\\');
-            backslash_run = 0;
-        }
-
-        escaped.push_back(ch);
-    }
-
-    if (backslash_run > 0) {
-        escaped.append(backslash_run * 2, L'\\');
-    }
-
-    escaped.push_back(L'"');
-    return escaped;
-}
-
-std::wstring quote_shell_argument(const std::wstring& arg) {
-    std::wstring quoted = L"'";
-    for (wchar_t ch : arg) {
-        if (ch == L'\'') {
-            quoted += L"'\\''";
-        } else {
-            quoted.push_back(ch);
-        }
-    }
-    quoted.push_back(L'\'');
-    return quoted;
-}
-
-bool build_cmd_shell_command_line(const std::wstring& command, std::wstring& command_line) {
-    // Pass command as a single argv item to cmd so spaces/quotes do not split unexpectedly.
-    std::wstring cmd_path;
-    if (!resolve_cmd_exe_path(cmd_path)) {
-        return false;
-    }
-
-    command_line = quote_command_argument(cmd_path) + L" /d /s /c \"" + command + L"\"";
-    return true;
-}
-
-std::wstring join_tokens_as_command_line(const std::vector<std::wstring>& tokens) {
-    std::wstring command;
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        if (!command.empty()) {
-            command += L" ";
-        }
-        command += quote_command_argument(tokens[i]);
-    }
-    return command;
-}
-
-std::wstring join_tokens_with_spaces(const std::vector<std::wstring>& tokens, size_t start_index = 0) {
-    size_t estimated_size = 0;
-    if (start_index < tokens.size()) {
-        for (size_t i = start_index; i < tokens.size(); ++i) {
-            estimated_size += tokens[i].size();
-            if (i + 1 < tokens.size()) {
-                estimated_size += 1;
-            }
-        }
-    }
-
-    std::wstring joined;
-    joined.reserve(estimated_size);
-    for (size_t i = start_index; i < tokens.size(); ++i) {
-        if (!joined.empty()) {
-            joined += L" ";
-        }
-        joined += tokens[i];
-    }
-    return joined;
-}
-
-std::wstring quote_for_single_quoted_shell_literal(const std::wstring& value) {
-    std::wstring quoted = L"'";
-    for (wchar_t ch : value) {
-        if (ch == L'\'') {
-            quoted += L"'\\''";
-            continue;
-        }
-        quoted.push_back(ch);
-    }
-    quoted += L"'";
-    return quoted;
-}
+// -----------------------------------------------------------------------------
+// Command Resolution & Names
+// -----------------------------------------------------------------------------
 
 bool resolve_external_command_path(const std::wstring& command_name, std::wstring& resolved_path) {
     resolved_path.clear();
@@ -4304,280 +11399,6 @@ bool resolve_external_command_path(const std::wstring& command_name, std::wstrin
     }
 
     return false;
-}
-
-enum class CommandResolutionKind {
-    Alias,
-    Function,
-    Builtin,
-    External,
-    Missing
-};
-
-bool can_capture_builtin_command_substitution(const std::vector<std::wstring>& tokens) {
-    if (tokens.empty()) {
-        return false;
-    }
-
-    // Only allow builtins that are expected to be stateless with respect to
-    // shell globals so command substitution can safely avoid full env snapshots.
-    static const std::vector<std::wstring> capture_safe_builtins = {
-        L":",
-        L"echo",
-        L"getconf",
-        L"help",
-        L"math",
-        L"pathchk",
-        L"print",
-        L"printf",
-        L"pwd",
-        L"times",
-    };
-
-    if (std::find(capture_safe_builtins.begin(), capture_safe_builtins.end(), tokens[0]) == capture_safe_builtins.end()) {
-        return false;
-    }
-
-    // Ensure it is not shadowed by an alias or user-defined function
-    if (g_aliases.find(tokens[0]) != g_aliases.end()) {
-        return false;
-    }
-    if (g_shell_functions.find(tokens[0]) != g_shell_functions.end()) {
-        return false;
-    }
-
-    return true;
-}
-
-bool is_snapshot_safe_external_segment(const std::wstring& segment_text) {
-    const std::wstring trimmed = trim_copy(segment_text);
-    if (trimmed.empty()) {
-        return false;
-    }
-
-    std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(trimmed);
-    if (tokens.empty()) {
-        return false;
-    }
-
-    RedirectionSpec redir;
-    std::wstring redirection_error;
-    if (!parse_redirections(tokens, redir, redirection_error)) {
-        return false;
-    }
-
-    if (tokens.empty()) {
-        return false;
-    }
-
-    const std::wstring residual = join_tokens_with_spaces(tokens);
-    if (has_unquoted_shell_metacharacters(residual)) {
-        return false;
-    }
-
-    // Leading NAME=VALUE assignment mutates shell state.
-    const std::wstring& first = tokens[0];
-    size_t eq_pos = first.find(L'=');
-    if (eq_pos != std::wstring::npos && eq_pos > 0) {
-        std::wstring lhs = first.substr(0, eq_pos);
-        if (is_valid_shell_identifier(lhs)) {
-            return false;
-        }
-    }
-
-    std::wstring detail;
-    CommandResolutionKind kind = resolve_command_kind(first, detail);
-    return kind == CommandResolutionKind::External;
-}
-
-bool command_requires_environment_snapshot(const std::wstring& command) {
-    const std::wstring trimmed = trim_copy(command);
-    if (trimmed.empty()) {
-        return true;
-    }
-
-    if (!has_unquoted_shell_metacharacters(trimmed)) {
-        return !is_snapshot_safe_external_segment(trimmed);
-    }
-
-    // Allow external-only pipelines (with optional redirections) to bypass
-    // full environment snapshots; they do not mutate shell variable state.
-    std::vector<std::wstring> pipeline_segments = split_pipeline_segments(trimmed);
-    if (pipeline_segments.size() <= 1) {
-        return true;
-    }
-
-    for (const std::wstring& segment : pipeline_segments) {
-        if (!is_snapshot_safe_external_segment(segment)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-std::wstring execute_command_substitution(const std::wstring& command, bool use_capture_sink) {
-    const bool perf_trace = is_performance_telemetry_enabled();
-    const ULONGLONG substitution_start = GetTickCount64();
-
-    const bool require_state_snapshot = !use_capture_sink && command_requires_environment_snapshot(command);
-    ScopedSubshellDepthGuard subshell_depth_guard;
-    std::optional<ShellStateSnapshot> saved_snapshot;
-    ScopedSnapshotRestoreGuard snapshot_guard(saved_snapshot, L"0");
-
-    std::wstring sub_output;
-
-    if (use_capture_sink) {
-        struct CaptureSinkGuard {
-            std::wstring*& slot;
-            std::wstring* previous;
-            CaptureSinkGuard(std::wstring*& slot_ref, std::wstring* current) : slot(slot_ref), previous(slot_ref) {
-                slot = current;
-            }
-            ~CaptureSinkGuard() {
-                slot = previous;
-            }
-        } capture_guard(g_builtin_capture_output, &sub_output);
-
-        bool should_exit = false;
-        execute_command_line(command, should_exit);
-    } else {
-        HANDLE read_pipe = INVALID_HANDLE_VALUE;
-        HANDLE write_pipe = INVALID_HANDLE_VALUE;
-        SECURITY_ATTRIBUTES sa;
-        sa.nLength = sizeof(sa);
-        sa.lpSecurityDescriptor = nullptr;
-        sa.bInheritHandle = TRUE;
-
-        if (CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
-            if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
-                CloseHandle(read_pipe);
-                CloseHandle(write_pipe);
-            } else {
-                HANDLE old_subshell_stdout = g_subshell_stdout;
-                g_subshell_stdout = write_pipe;
-                std::string bytes;
-                bool output_limit_hit = false;
-
-                bool reader_started = false;
-                std::thread reader_thread;
-                try {
-                    reader_thread = std::thread([&]() {
-                        char buffer[4096];
-                        DWORD bytesRead = 0;
-                        while (ReadFile(read_pipe, buffer, sizeof(buffer), &bytesRead, NULL) && bytesRead > 0) {
-                            if (output_limit_hit) {
-                                continue;
-                            }
-
-                            const size_t current_size = bytes.size();
-                            if (current_size + bytesRead > kMaxCommandSubstitutionOutputBytes) {
-                                const size_t remaining = kMaxCommandSubstitutionOutputBytes - current_size;
-                                if (remaining > 0) {
-                                    bytes.append(buffer, remaining);
-                                }
-                                output_limit_hit = true;
-                                continue;
-                            }
-
-                            bytes.append(buffer, bytesRead);
-                        }
-                    });
-                    reader_started = true;
-                } catch (...) {
-                    g_subshell_stdout = old_subshell_stdout;
-                    CloseHandle(write_pipe);
-                    CloseHandle(read_pipe);
-                }
-
-                if (reader_started) {
-                    try {
-                        if (require_state_snapshot) {
-                            saved_snapshot.emplace(capture_shell_state_snapshot());
-                        }
-
-                        bool should_exit = false;
-                        execute_command_line(command, should_exit);
-                    } catch (...) {
-                        if (write_pipe != INVALID_HANDLE_VALUE) {
-                            CloseHandle(write_pipe);
-                            write_pipe = INVALID_HANDLE_VALUE;
-                        }
-                        g_subshell_stdout = old_subshell_stdout;
-                        if (reader_thread.joinable()) {
-                            reader_thread.join();
-                        }
-                        if (read_pipe != INVALID_HANDLE_VALUE) {
-                            CloseHandle(read_pipe);
-                            read_pipe = INVALID_HANDLE_VALUE;
-                        }
-                        throw;
-                    }
-
-                    if (write_pipe != INVALID_HANDLE_VALUE) {
-                        CloseHandle(write_pipe);
-                        write_pipe = INVALID_HANDLE_VALUE;
-                    }
-                    g_subshell_stdout = old_subshell_stdout;
-
-                    if (reader_thread.joinable()) {
-                        reader_thread.join();
-                    }
-                    if (read_pipe != INVALID_HANDLE_VALUE) {
-                        CloseHandle(read_pipe);
-                        read_pipe = INVALID_HANDLE_VALUE;
-                    }
-                }
-
-                if (reader_started && output_limit_hit) {
-                    std::wcerr << L"ksh: command substitution output exceeded limit\n";
-                    g_expansion_error = true;
-                    ksh_env.variables[L"?"] = L"1";
-                } else if (reader_started && !bytes.empty()) {
-                    int wlen = MultiByteToWideChar(CP_UTF8, 0, bytes.data(), (int)bytes.size(), NULL, 0);
-                    if (wlen > 0) {
-                        std::vector<wchar_t> wbuf(wlen);
-                        MultiByteToWideChar(CP_UTF8, 0, bytes.data(), (int)bytes.size(), wbuf.data(), wlen);
-                        sub_output = std::wstring(wbuf.data(), wlen);
-                    } else {
-                        wlen = MultiByteToWideChar(CP_ACP, 0, bytes.data(), (int)bytes.size(), NULL, 0);
-                        if (wlen > 0) {
-                            std::vector<wchar_t> wbuf(wlen);
-                            MultiByteToWideChar(CP_ACP, 0, bytes.data(), (int)bytes.size(), wbuf.data(), wlen);
-                            sub_output = std::wstring(wbuf.data(), wlen);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    const bool used_snapshot_restore = saved_snapshot.has_value();
-    restore_shell_state_snapshot_if_present(saved_snapshot, L"0");
-    snapshot_guard.dismiss();
-
-    while (!sub_output.empty() && (sub_output.back() == L'\n' || sub_output.back() == L'\r')) {
-        sub_output.pop_back();
-    }
-
-    const ULONGLONG elapsed_ms = GetTickCount64() - substitution_start;
-    record_command_substitution_path_perf(use_capture_sink, used_snapshot_restore, elapsed_ms);
-    if (perf_trace) {
-        std::wstring detail;
-        if (use_capture_sink) {
-            detail = L"path=fast_capture count=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_fast_count) +
-                L" total_ms=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_fast_ms);
-        } else if (used_snapshot_restore) {
-            detail = L"path=snapshot_restore count=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_snapshot_count) +
-                L" total_ms=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_snapshot_ms);
-        } else {
-            detail = L"path=direct_no_snapshot count=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_direct_count) +
-                L" total_ms=" + std::to_wstring(g_subshell_path_perf_counters.command_subst_direct_ms);
-        }
-        log_performance_trace(L"substitution.command", elapsed_ms, detail);
-    }
-
-    return sub_output;
 }
 
 CommandResolutionKind resolve_command_kind(const std::wstring& name, std::wstring& detail) {
@@ -4661,5663 +11482,1615 @@ std::wstring command_kind_description(const std::wstring& name, bool verbose, bo
     return L"";
 }
 
-bool parse_positive_int(const std::wstring& text, int& value) {
-    if (!try_parse_positive_int_strict(text, value)) {
-        return false;
-    }
+std::wstring get_command_name(const std::wstring& full_command) {
+    size_t start = full_command.find_first_not_of(L" \t\r\n");
+    if (start == std::wstring::npos) return L"";
+    size_t end = full_command.find_first_of(L" \t\r\n", start);
+    if (end == std::wstring::npos) return full_command.substr(start);
+    return full_command.substr(start, end - start);
+}
 
+bool is_ksh_builtin_command(const std::wstring& cmd) {
+    const std::vector<std::wstring>& list = builtin_commands();
+    return std::find(list.begin(), list.end(), cmd) != list.end();
+}
+
+bool is_valid_builtin_name(const std::wstring& name) {
+    return is_ksh_builtin_command(name);
+}
+
+bool is_alias_defined(const std::wstring& name) {
+    return g_aliases.find(name) != g_aliases.end();
+}
+
+bool initialize_default_shell_aliases() {
+    if (g_main_aliases.empty()) {
+        g_main_aliases[L"integer"] = L"typeset -i";
+        g_main_aliases[L"float"] = L"typeset -E";
+        g_main_aliases[L"nameref"] = L"typeset -n";
+        g_main_aliases[L"functions"] = L"typeset -f";
+        g_main_aliases[L"autoload"] = L"typeset -fu";
+        g_main_aliases[L"compound"] = L"typeset -C";
+        g_main_aliases[L"history"] = L"fc -l";
+        g_main_aliases[L"r"] = L"fc -s";
+        g_main_aliases[L"type"] = L"whence -v";
+    }
     return true;
 }
 
-bool is_internal_shell_state_variable(const std::wstring& name) {
-    return name == kGetoptsCursorVar || name == kGetoptsOptindMirrorVar;
-}
+// -----------------------------------------------------------------------------
+// Conditional Testing: test, [, [[
+// -----------------------------------------------------------------------------
 
-bool has_any_redirection(const RedirectionSpec& redir) {
-    return redir.has_stdin || redir.has_stdout || redir.stdout_to_stderr || redir.has_stderr || redir.stderr_to_stdout;
-}
+bool extract_ksh_conditional_block(const std::wstring& expanded_input, std::wstring& condition, std::wstring& error_message) {
+    condition.clear();
+    error_message.clear();
 
-bool try_parse_custom_fd_redirection_token(
-    const std::wstring& token,
-    std::vector<std::wstring>& tokens,
-    size_t& token_index,
-    RedirectionSpec& redir,
-    std::wstring& error_message,
-    bool& handled) {
-    handled = false;
-    if (token.size() < 2 || !std::iswdigit(token[0])) {
-        return true;
-    }
-
-    const int fd = token[0] - L'0';
-    if (!is_custom_fd_in_range(fd)) {
-        return true;
-    }
-
-    std::wstring suffix = token.substr(1);
-    if (suffix.empty() || (suffix[0] != L'>' && suffix[0] != L'<')) {
-        return true;
-    }
-    handled = true;
-
-    auto consume_target = [&](size_t op_len, std::wstring& target_out) -> bool {
-        if (suffix.size() > op_len) {
-            target_out = suffix.substr(op_len);
-            return true;
-        }
-        if (token_index + 1 >= tokens.size()) {
-            return false;
-        }
-        token_index++;
-        target_out = tokens[token_index];
-        return true;
-    };
-
-    if (suffix == L">&-" || suffix == L"<&-") {
-        RedirectionSpec::CustomFdAction action;
-        action.fd = fd;
-        action.kind = RedirectionSpec::CustomFdAction::Kind::Close;
-        redir.custom_fd_actions.push_back(action);
-        return true;
-    }
-
-    if (suffix.rfind(L">&", 0) == 0) {
-        std::wstring source_text;
-        if (!consume_target(2, source_text) || source_text.size() != 1 || !std::iswdigit(source_text[0])) {
-            error_message = L"ksh: invalid custom fd duplication: " + token;
-            return false;
-        }
-
-        RedirectionSpec::CustomFdAction action;
-        action.fd = fd;
-        action.kind = RedirectionSpec::CustomFdAction::Kind::Duplicate;
-        action.duplicate_source_fd = source_text[0] - L'0';
-        redir.custom_fd_actions.push_back(action);
-        return true;
-    }
-
-    std::wstring target_path;
-    if (suffix.rfind(L">>", 0) == 0) {
-        if (!consume_target(2, target_path) || target_path.empty()) {
-            error_message = L"ksh: missing file for custom fd append redirection";
-            return false;
-        }
-        RedirectionSpec::CustomFdAction action;
-        action.fd = fd;
-        action.kind = RedirectionSpec::CustomFdAction::Kind::OpenWriteAppend;
-        action.path = target_path;
-        redir.custom_fd_actions.push_back(action);
-        return true;
-    }
-
-    if (suffix.rfind(L">", 0) == 0) {
-        if (!consume_target(1, target_path) || target_path.empty()) {
-            error_message = L"ksh: missing file for custom fd output redirection";
-            return false;
-        }
-        RedirectionSpec::CustomFdAction action;
-        action.fd = fd;
-        action.kind = RedirectionSpec::CustomFdAction::Kind::OpenWriteTruncate;
-        action.path = target_path;
-        redir.custom_fd_actions.push_back(action);
-        return true;
-    }
-
-    if (suffix.rfind(L"<", 0) == 0) {
-        if (!consume_target(1, target_path) || target_path.empty()) {
-            error_message = L"ksh: missing file for custom fd input redirection";
-            return false;
-        }
-        RedirectionSpec::CustomFdAction action;
-        action.fd = fd;
-        action.kind = RedirectionSpec::CustomFdAction::Kind::OpenRead;
-        action.path = target_path;
-        redir.custom_fd_actions.push_back(action);
-        return true;
-    }
-
-    error_message = L"ksh: unsupported custom fd redirection construct: " + token;
-    return false;
-}
-
-// Parser section: redirection normalization and token filtering.
-bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redir, std::wstring& error_message) {
-    std::vector<std::wstring> filtered;
-    filtered.reserve(tokens.size());
-
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        const std::wstring& token = tokens[i];
-
-        bool handled_custom_fd = false;
-        if (!try_parse_custom_fd_redirection_token(token, tokens, i, redir, error_message, handled_custom_fd)) {
-            return false;
-        }
-        if (handled_custom_fd) {
-            continue;
-        }
-
-        enum class RedirKind {
-            None,
-            In,
-            OutTrunc,
-            OutAppend,
-            OutToErr,
-            ErrTrunc,
-            ErrAppend,
-            ErrToOut
-        };
-
-        auto classify_token = [&](const std::wstring& value, size_t& operator_len, RedirKind& kind) -> bool {
-            operator_len = 0;
-            kind = RedirKind::None;
-
-            if (value == L"2>&1") {
-                operator_len = value.size();
-                kind = RedirKind::ErrToOut;
-                return true;
-            }
-            if (value == L"1>&2" || value == L">&2") {
-                operator_len = value.size();
-                kind = RedirKind::OutToErr;
-                return true;
-            }
-
-            size_t dup_pos = value.find(L">&");
-            if (dup_pos != std::wstring::npos) {
-                int source_fd = 1;
-                if (dup_pos > 0) {
-                    if (dup_pos > 1 || !std::iswdigit(value[0])) {
-                        return false;
-                    }
-                    source_fd = value[0] - L'0';
-                }
-
-                if (dup_pos + 2 >= value.size() || (dup_pos + 3) != value.size() || !std::iswdigit(value[dup_pos + 2])) {
-                    return false;
-                }
-
-                int target_fd = value[dup_pos + 2] - L'0';
-                if (source_fd == 1 && target_fd == 2) {
-                    operator_len = value.size();
-                    kind = RedirKind::OutToErr;
-                    return true;
-                }
-                if (source_fd == 2 && target_fd == 1) {
-                    operator_len = value.size();
-                    kind = RedirKind::ErrToOut;
-                    return true;
-                }
-
-                // Allow no-op fd self-duplication forms to parse without effect.
-                if (source_fd == target_fd && (source_fd == 1 || source_fd == 2)) {
-                    operator_len = value.size();
-                    kind = RedirKind::None;
-                    return true;
-                }
-
-                return false;
-            }
-
-            // Parse optional leading FD only when at the very start.
-            int fd = -1;
-            size_t pos = 0;
-            if (!value.empty() && std::iswdigit(value[0])) {
-                fd = value[0] - L'0';
-                pos = 1;
-            }
-
-            if (pos >= value.size()) {
-                return false;
-            }
-
-            // Strict classification: only treat prefix operators as redirection.
-            if (value.compare(pos, 2, L">>") == 0) {
-                if (fd == -1 || fd == 1) {
-                    operator_len = pos + 2;
-                    kind = RedirKind::OutAppend;
-                    return true;
-                }
-                if (fd == 2) {
-                    operator_len = pos + 2;
-                    kind = RedirKind::ErrAppend;
-                    return true;
-                }
-                return false;
-            }
-
-            if (value[pos] == L'>') {
-                if (fd == -1 || fd == 1) {
-                    operator_len = pos + 1;
-                    kind = RedirKind::OutTrunc;
-                    return true;
-                }
-                if (fd == 2) {
-                    operator_len = pos + 1;
-                    kind = RedirKind::ErrTrunc;
-                    return true;
-                }
-                return false;
-            }
-
-            if (value[pos] == L'<') {
-                // Support <, 0< and 1< forms.
-                if (fd == -1 || fd == 0 || fd == 1) {
-                    operator_len = pos + 1;
-                    kind = RedirKind::In;
-                    return true;
-                }
-                return false;
-            }
-
-            return false;
-        };
-
-        auto consume_target = [&](size_t operator_len, std::wstring& target_out) -> bool {
-            if (token.size() > operator_len) {
-                target_out = token.substr(operator_len);
-                return true;
-            }
-            if (i + 1 >= tokens.size()) {
-                return false;
-            }
-            i++;
-            target_out = tokens[i];
-            return true;
-        };
-
-        size_t op_len = 0;
-        RedirKind kind = RedirKind::None;
-        if (!classify_token(token, op_len, kind)) {
-            size_t redir_pos = 0;
-            if (!token.empty() && std::iswdigit(token[0])) {
-                redir_pos = 1;
-            }
-
-            if (redir_pos < token.size() && (token[redir_pos] == L'>' || token[redir_pos] == L'<')) {
-                error_message = L"ksh: unsupported or invalid redirection construct: " + token;
-                return false;
-            }
-
-            // Mixed tokens like "a>b" are arguments, not redirection operators.
-            filtered.push_back(token);
-            continue;
-        }
-
-        std::wstring target;
-        if (kind == RedirKind::None) {
-            continue;
-        }
-
-        if (kind == RedirKind::ErrToOut) {
-            redir.stderr_to_stdout = true;
-            redir.has_stderr = false;
-            redir.append_stderr = false;
-            redir.stderr_path.clear();
-            continue;
-        }
-
-        if (kind == RedirKind::OutToErr) {
-            redir.stdout_to_stderr = true;
-            redir.has_stdout = false;
-            redir.append_stdout = false;
-            redir.stdout_path.clear();
-            continue;
-        }
-
-        if (kind == RedirKind::In) {
-            if (!consume_target(op_len, target)) {
-                error_message = L"ksh: missing file for input redirection";
-                return false;
-            }
-            redir.has_stdin = true;
-            redir.stdin_path = target;
-            continue;
-        }
-
-        if (kind == RedirKind::OutAppend) {
-            if (!consume_target(op_len, target)) {
-                error_message = L"ksh: missing file for output redirection";
-                return false;
-            }
-            redir.has_stdout = true;
-            redir.stdout_to_stderr = false;
-            redir.append_stdout = true;
-            redir.stdout_path = target;
-            continue;
-        }
-
-        if (kind == RedirKind::OutTrunc) {
-            if (!consume_target(op_len, target)) {
-                error_message = L"ksh: missing file for output redirection";
-                return false;
-            }
-            redir.has_stdout = true;
-            redir.stdout_to_stderr = false;
-            redir.append_stdout = false;
-            redir.stdout_path = target;
-            continue;
-        }
-
-        if (kind == RedirKind::ErrAppend) {
-            if (!consume_target(op_len, target)) {
-                error_message = L"ksh: missing file for stderr redirection";
-                return false;
-            }
-            redir.has_stderr = true;
-            redir.stderr_to_stdout = false;
-            redir.append_stderr = true;
-            redir.stderr_path = target;
-            continue;
-        }
-
-        if (kind == RedirKind::ErrTrunc) {
-            if (!consume_target(op_len, target)) {
-                error_message = L"ksh: missing file for stderr redirection";
-                return false;
-            }
-            redir.has_stderr = true;
-            redir.stderr_to_stdout = false;
-            redir.append_stderr = false;
-            redir.stderr_path = target;
-            continue;
-        }
-    }
-
-    // Ordered fd duplication semantics (e.g. 1>&2 combined with 2>file) are
-    // not modeled by this parser; reject ambiguous mixes instead of misrouting.
-    if (redir.stdout_to_stderr && (redir.has_stderr || redir.stderr_to_stdout)) {
-        error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
-        return false;
-    }
-    if (redir.stderr_to_stdout && (redir.has_stdout || redir.stdout_to_stderr)) {
-        error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
+    size_t start = expanded_input.find(L"[[");
+    if (start == std::wstring::npos) {
+        error_message = L"missing opening [[";
         return false;
     }
 
-    tokens = filtered;
-    return true;
-}
-
-std::vector<std::wstring> split_pipeline_segments(const std::wstring& input) {
-    std::vector<std::wstring> segments;
-    std::wstring current;
     bool in_single_quotes = false;
     bool in_double_quotes = false;
     bool escaped = false;
-    int paren_depth = 0;
+    size_t i = start + 2;
+    size_t closing = std::wstring::npos;
 
-    for (size_t i = 0; i < input.size(); ++i) {
-        wchar_t ch = input[i];
+    while (i < expanded_input.size()) {
+        wchar_t ch = expanded_input[i];
 
         if (escaped) {
-            current += ch;
             escaped = false;
+            i++;
             continue;
         }
 
         if (ch == L'\\' && !in_single_quotes) {
-            current += ch;
             escaped = true;
+            i++;
             continue;
         }
 
         if (ch == L'\'' && !in_double_quotes) {
             in_single_quotes = !in_single_quotes;
-            current += ch;
+            i++;
             continue;
         }
 
         if (ch == L'"' && !in_single_quotes) {
             in_double_quotes = !in_double_quotes;
-            current += ch;
+            i++;
             continue;
         }
 
-        if (!in_single_quotes && !in_double_quotes) {
-            if (ch == L'(') {
-                paren_depth++;
-            } else if (ch == L')') {
-                if (paren_depth > 0) paren_depth--;
-            }
+        if (!in_single_quotes && !in_double_quotes && ch == L']' && (i + 1) < expanded_input.size() && expanded_input[i + 1] == L']') {
+            closing = i;
+            break;
         }
 
-        if (ch == L'|' && !in_single_quotes && !in_double_quotes && paren_depth == 0) {
-            // Do not split logical OR (||) as a pipeline segment delimiter.
-            if ((i + 1) < input.size() && input[i + 1] == L'|') {
-                current += L"||";
-                ++i;
-                continue;
-            }
+        i++;
+    }
 
-            segments.push_back(trim_copy(current));
+    if (closing == std::wstring::npos) {
+        error_message = L"missing closing ]]";
+        return false;
+    }
+
+    condition = trim_copy(expanded_input.substr(start + 2, closing - (start + 2)));
+
+    std::wstring trailing = trim_copy(expanded_input.substr(closing + 2));
+    if (!trailing.empty()) {
+        error_message = L"unexpected tokens after ]]";
+        return false;
+    }
+
+    return true;
+}
+
+bool tokenize_ksh_conditional(const std::wstring& condition, std::vector<std::wstring>& tokens, std::wstring& error_message) {
+    tokens.clear();
+    error_message.clear();
+
+    std::wstring current;
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+    bool in_token = false;
+
+    auto flush_current = [&]() {
+        if (in_token) {
+            tokens.push_back(current);
             current.clear();
+            in_token = false;
+        }
+    };
+
+    for (size_t i = 0; i < condition.size(); ) {
+        wchar_t ch = condition[i];
+
+        if (escaped) {
+            current += ch;
+            in_token = true;
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (ch == L'\\' && !in_single_quotes) {
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (ch == L'$' && i + 1 < condition.length() && condition[i + 1] == L'\'' && !in_double_quotes && !in_single_quotes) {
+            current += expand_ansi_c_quoting(condition, i);
+            in_token = true;
+            continue;
+        }
+
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            in_token = true;
+            i++;
+            continue;
+        }
+
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            in_token = true;
+            i++;
+            continue;
+        }
+
+        if (!in_single_quotes && !in_double_quotes && std::iswspace(ch)) {
+            flush_current();
+            i++;
             continue;
         }
 
         current += ch;
+        in_token = true;
+        i++;
     }
 
-    segments.push_back(trim_copy(current));
-    return segments;
-}
-
-bool validate_shell_lexical_state(const std::wstring& input, std::wstring& error_message) {
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-
-    for (wchar_t ch : input) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-            continue;
-        }
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-        } else if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-        }
-    }
-
-    if (in_single_quotes || in_double_quotes) {
-        error_message = L"ksh: syntax error: unterminated quote";
-        return false;
-    }
     if (escaped) {
-        const std::wstring trimmed = trim_copy(input);
-        const size_t command_end = trimmed.find_first_of(L" \t");
-        const std::wstring command = trimmed.substr(0, command_end);
-        if ((command == L"cd" || command == L"cp" || command == L"mv" || command == L"ls") &&
-            trimmed.size() > command.size() && trimmed.back() == L'\\') {
-            return true;
-        }
-        error_message = L"ksh: syntax error: trailing escape";
+        error_message = L"unfinished escape sequence";
         return false;
     }
+    if (in_single_quotes || in_double_quotes) {
+        error_message = L"unterminated quoted string";
+        return false;
+    }
+
+    flush_current();
     return true;
 }
 
-bool has_unquoted_shell_metacharacters(const std::wstring& input) {
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-    int paren_depth = 0;
+static bool evaluate_file_unary_operator(const std::wstring& op, const std::wstring& path, bool& result) {
+    result = false;
 
-    for (wchar_t ch : input) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
+    DWORD attrs = GetFileAttributesW(path.c_str());
+    const bool exists = attrs != INVALID_FILE_ATTRIBUTES;
 
-        if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            continue;
-        }
-
-        if (!in_single_quotes && !in_double_quotes) {
-            if (ch == L'(') {
-                paren_depth++;
-            } else if (ch == L')') {
-                if (paren_depth > 0) paren_depth--;
-            } else if (paren_depth == 0 && (ch == L'>' || ch == L'<' || ch == L'&' || ch == L'|' || ch == L';')) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-bool create_process_with_handle_list(
-    const std::wstring& command_line,
-    const STARTUPINFOW& startup,
-    const std::vector<HANDLE>& handles_to_inherit,
-    DWORD creation_flags,
-    PROCESS_INFORMATION& process_info) {
-    std::vector<wchar_t> mutable_cmd(command_line.begin(), command_line.end());
-    mutable_cmd.push_back(L'\0');
-
-    if (handles_to_inherit.empty()) {
-        STARTUPINFOW si = startup;
-        return CreateProcessW(
-            nullptr,
-            mutable_cmd.data(),
-            nullptr,
-            nullptr,
-            FALSE,
-            creation_flags,
-            nullptr,
-            nullptr,
-            &si,
-            &process_info) != FALSE;
-    }
-
-    std::vector<HANDLE> filtered_handles;
-    filtered_handles.reserve(handles_to_inherit.size());
-    for (HANDLE handle : handles_to_inherit) {
-        if (handle != nullptr && handle != INVALID_HANDLE_VALUE &&
-            std::find(filtered_handles.begin(), filtered_handles.end(), handle) == filtered_handles.end()) {
-            filtered_handles.push_back(handle);
-        }
-    }
-
-    if (filtered_handles.empty()) {
-        STARTUPINFOW si = startup;
-        return CreateProcessW(
-            nullptr,
-            mutable_cmd.data(),
-            nullptr,
-            nullptr,
-            FALSE,
-            creation_flags,
-            nullptr,
-            nullptr,
-            &si,
-            &process_info) != FALSE;
-    }
-
-    SIZE_T attribute_list_size = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_list_size);
-    std::vector<unsigned char> attribute_list_buffer(attribute_list_size);
-
-    STARTUPINFOEXW startup_ex;
-    ZeroMemory(&startup_ex, sizeof(startup_ex));
-    startup_ex.StartupInfo = startup;
-    startup_ex.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attribute_list_buffer.data());
-
-    if (!InitializeProcThreadAttributeList(startup_ex.lpAttributeList, 1, 0, &attribute_list_size)) {
-        return false;
-    }
-
-    std::vector<HANDLE> launch_handles;
-    launch_handles.reserve(filtered_handles.size());
-    for (HANDLE handle : filtered_handles) {
-        HANDLE duplicate = nullptr;
-        if (!DuplicateHandle(
-                GetCurrentProcess(),
-                handle,
-                GetCurrentProcess(),
-                &duplicate,
-                0,
-                TRUE,
-                DUPLICATE_SAME_ACCESS)) {
-            DeleteProcThreadAttributeList(startup_ex.lpAttributeList);
-            for (HANDLE launch_handle : launch_handles) {
-                CloseHandle(launch_handle);
-            }
-            return false;
-        }
-        launch_handles.push_back(duplicate);
-    }
-
-    auto remap_standard_handle = [&](HANDLE handle) -> HANDLE {
-        for (size_t index = 0; index < filtered_handles.size(); ++index) {
-            if (filtered_handles[index] == handle) {
-                return launch_handles[index];
-            }
-        }
-        return handle;
-    };
-    startup_ex.StartupInfo.hStdInput = remap_standard_handle(startup_ex.StartupInfo.hStdInput);
-    startup_ex.StartupInfo.hStdOutput = remap_standard_handle(startup_ex.StartupInfo.hStdOutput);
-    startup_ex.StartupInfo.hStdError = remap_standard_handle(startup_ex.StartupInfo.hStdError);
-    startup_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
-    startup_ex.StartupInfo.cb = sizeof(STARTUPINFOEXW);
-
-    bool updated = UpdateProcThreadAttribute(
-        startup_ex.lpAttributeList,
-        0,
-        PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-        launch_handles.data(),
-        launch_handles.size() * sizeof(HANDLE),
-        nullptr,
-        nullptr) != FALSE;
-
-    if (!updated) {
-        DeleteProcThreadAttributeList(startup_ex.lpAttributeList);
-        for (HANDLE handle : launch_handles) {
-            CloseHandle(handle);
-        }
-        return false;
-    }
-
-    bool created = CreateProcessW(
-        nullptr,
-        mutable_cmd.data(),
-        nullptr,
-        nullptr,
-        TRUE,
-        creation_flags | EXTENDED_STARTUPINFO_PRESENT,
-        nullptr,
-        nullptr,
-        &startup_ex.StartupInfo,
-        &process_info) != FALSE;
-
-    DeleteProcThreadAttributeList(startup_ex.lpAttributeList);
-    for (HANDLE handle : launch_handles) {
-        CloseHandle(handle);
-    }
-    return created;
-}
-
-// Pipeline section: stage launch and process wiring.
-struct InProcessPipelineStage {
-    std::wstring command;
-    HANDLE input = INVALID_HANDLE_VALUE;
-    HANDLE output = INVALID_HANDLE_VALUE;
-    HANDLE error = INVALID_HANDLE_VALUE;
-    KshEnvironment environment;
-    std::map<std::wstring, CustomTypeDefinition> custom_types;
-    std::vector<ScriptContext> script_context_stack;
-    std::map<std::wstring, ShellFunctionDefinition> shell_functions;
-    std::vector<FunctionScopeContext> function_scope_stack;
-    std::map<std::wstring, std::wstring> aliases;
-    std::map<std::wstring, std::wstring> trap_handlers;
-};
-
-DWORD WINAPI run_inprocess_pipeline_stage(LPVOID raw_context) {
-    std::unique_ptr<InProcessPipelineStage> context(static_cast<InProcessPipelineStage*>(raw_context));
-    g_current_env = &context->environment;
-    g_current_custom_types = &context->custom_types;
-    g_current_script_context_stack = &context->script_context_stack;
-    g_current_shell_functions = &context->shell_functions;
-    g_current_function_scope_stack = &context->function_scope_stack;
-    g_current_aliases = &context->aliases;
-    g_trap_handlers = context->trap_handlers;
-    g_pipeline_stdin = context->input;
-    g_pipeline_stdout = context->output;
-    g_pipeline_stderr = context->error;
-    g_inprocess_pipeline_stage = true;
-    bool should_exit = false;
-    const bool ok = execute_command_line(context->command, should_exit);
-    DWORD exit_code = 1;
-    std::map<std::wstring, std::wstring>::const_iterator status_it = ksh_env.variables.find(L"?");
-    if (status_it != ksh_env.variables.end()) {
-        int parsed_status = 1;
-        if (try_parse_int_strict(status_it->second, parsed_status)) {
-            exit_code = static_cast<DWORD>(parsed_status);
-        }
-    } else if (ok) {
-        exit_code = 0;
-    }
-    if (context->input != INVALID_HANDLE_VALUE) CloseHandle(context->input);
-    if (context->output != INVALID_HANDLE_VALUE) CloseHandle(context->output);
-    if (context->error != INVALID_HANDLE_VALUE) CloseHandle(context->error);
-    g_pipeline_stdin = INVALID_HANDLE_VALUE;
-    g_pipeline_stdout = INVALID_HANDLE_VALUE;
-    g_pipeline_stderr = INVALID_HANDLE_VALUE;
-    g_inprocess_pipeline_stage = false;
-    return exit_code;
-}
-
-bool launch_pipeline_stage_process(
-    const std::wstring& segment,
-    HANDLE segment_stdin,
-    HANDLE segment_stdout,
-    HANDLE segment_stderr,
-    PROCESS_INFORMATION& pi,
-    std::wstring& temp_file_path_out,
-    bool allow_inprocess) {
-    STARTUPINFOW si;
-    ZeroMemory(&si, sizeof(si));
-    ZeroMemory(&pi, sizeof(pi));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = segment_stdin;
-    si.hStdOutput = segment_stdout;
-    si.hStdError = segment_stderr;
-    temp_file_path_out.clear();
-
-    bool needs_shell = has_unquoted_shell_metacharacters(segment);
-    if (!needs_shell) {
-        std::wstring_view trimmed = trim_copy(std::wstring_view(segment));
-        std::wstring first_token;
-        size_t first_space = trimmed.find_first_of(L" \t\r\n");
-        if (first_space != std::wstring::npos) {
-            first_token = std::wstring(trimmed.substr(0, first_space));
-        } else {
-            first_token = std::wstring(trimmed);
-        }
-        const std::vector<std::wstring>& builtins = builtin_commands();
-        bool is_builtin = (std::find(builtins.begin(), builtins.end(), first_token) != builtins.end());
-        bool is_function = (g_shell_functions.find(first_token) != g_shell_functions.end());
-        if (is_builtin || is_function) {
-            needs_shell = true;
-        }
-    }
-
-    if (allow_inprocess && needs_shell) {
-        auto duplicate_for_thread = [](HANDLE source, HANDLE& duplicate) {
-            duplicate = INVALID_HANDLE_VALUE;
-            return DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE;
-        };
-        std::unique_ptr<InProcessPipelineStage> context(new InProcessPipelineStage());
-        context->command = segment;
-        context->environment = ksh_env;
-        context->custom_types = g_custom_types;
-        context->script_context_stack = g_script_context_stack;
-        context->shell_functions = g_shell_functions;
-        context->function_scope_stack = g_function_scope_stack;
-        context->aliases = g_aliases;
-        context->trap_handlers = g_trap_handlers;
-        if (!duplicate_for_thread(segment_stdin, context->input) ||
-            !duplicate_for_thread(segment_stdout, context->output) ||
-            !duplicate_for_thread(segment_stderr, context->error)) {
-            if (context->input != INVALID_HANDLE_VALUE) CloseHandle(context->input);
-            if (context->output != INVALID_HANDLE_VALUE) CloseHandle(context->output);
-            if (context->error != INVALID_HANDLE_VALUE) CloseHandle(context->error);
-            SetLastError(ERROR_DUPLICATE_TAG);
-            return false;
-        }
-        InProcessPipelineStage* stage_ptr = context.release();
-        HANDLE thread = CreateThread(nullptr, 0, run_inprocess_pipeline_stage, stage_ptr, 0, &pi.dwProcessId);
-        if (thread != nullptr) {
-            pi.hProcess = thread;
-            {
-                std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
-                g_pipeline_thread_handles.insert(thread);
-            }
-            return true;
-        }
-        delete stage_ptr;
-    }
-    if (!needs_shell) {
-        std::vector<HANDLE> stage_handles = { segment_stdin, segment_stdout, segment_stderr };
-        if (create_process_with_handle_list(segment, si, stage_handles, 0, pi)) {
-            return true;
-        }
-    }
-
-    wchar_t exe_path[MAX_PATH];
-    DWORD len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) {
-        return false;
-    }
-
-    std::wstring command_to_run;
-    size_t reserve_size = segment.size() + 1024;
-    for (const auto& pair : g_shell_functions) {
-        reserve_size += pair.first.size() + 32;
-        for (const auto& line : pair.second.body_lines) {
-            reserve_size += line.size() + 1;
-        }
-    }
-    for (const auto& pair : ksh_env.variables) {
-        reserve_size += pair.first.size() + pair.second.size() + 16;
-    }
-    for (const auto& arr_pair : ksh_env.arrays) {
-        reserve_size += arr_pair.first.size() + 32;
-        for (const auto& elem : arr_pair.second) {
-            reserve_size += arr_pair.first.size() + elem.first.size() + elem.second.size() + 16;
-        }
-    }
-    for (const auto& pair : g_aliases) {
-        reserve_size += pair.first.size() + pair.second.size() + 16;
-    }
-    command_to_run.reserve(reserve_size);
-
-    for (const auto& pair : ksh_env.variables) {
-        const std::wstring& name = pair.first;
-        if (!is_valid_shell_identifier(name)) {
-            continue;
-        }
-        if (name == L"RANDOM" || name == L"SECONDS" || name == L"LINENO" || name == L"PPID") {
-            continue;
-        }
-
-        std::wstring options;
-        if (get_flag_value(ksh_env.integer_flags, name)) options += L"i";
-        if (get_flag_value(ksh_env.uppercase_flags, name)) options += L"u";
-        if (get_flag_value(ksh_env.lowercase_flags, name)) options += L"l";
-        if (get_flag_value(ksh_env.readonly_flags, name)) options += L"r";
-        if (get_flag_value(ksh_env.exported, name)) options += L"x";
-
-        command_to_run += name + L"=" + quote_for_single_quoted_shell_literal(pair.second) + L";\n";
-        if (!options.empty()) {
-            command_to_run += L"typeset -" + options + L" " + name + L";\n";
-        }
-    }
-
-    for (const auto& arr_pair : ksh_env.arrays) {
-        const std::wstring& name = arr_pair.first;
-        if (!is_valid_shell_identifier(name)) {
-            continue;
-        }
-
-        bool is_assoc = get_flag_value(ksh_env.associative_flags, name);
-        if (is_assoc) {
-            command_to_run += L"typeset -A " + name + L";\n";
-        } else {
-            command_to_run += L"typeset -a " + name + L";\n";
-        }
-
-        for (const auto& elem : arr_pair.second) {
-            command_to_run += name + L"[" + elem.first + L"]=" + quote_for_single_quoted_shell_literal(elem.second) + L";\n";
-        }
-    }
-
-    for (const auto& pair : g_aliases) {
-        command_to_run += L"alias " + pair.first + L"=" + quote_for_single_quoted_shell_literal(pair.second) + L";\n";
-    }
-
-    for (const auto& pair : g_shell_functions) {
-        command_to_run += L"function " + pair.first + L" { ";
-        for (const auto& line : pair.second.body_lines) {
-            command_to_run += line + L"\n";
-        }
-        command_to_run += L" };\n";
-    }
-
-    command_to_run += segment;
-
-    std::wstring cmd_line;
-    if (command_to_run.size() > 4000) {
-        wchar_t temp_path[MAX_PATH];
-        wchar_t temp_file[MAX_PATH];
-        if (GetTempPathW(MAX_PATH, temp_path) != 0 && GetTempFileNameW(temp_path, L"ksh", 0, temp_file) != 0) {
-            HANDLE hFile = CreateFileW(
-                temp_file,
-                GENERIC_WRITE,
-                FILE_SHARE_READ,
-                NULL,
-                CREATE_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL,
-                NULL
-            );
-            if (hFile != INVALID_HANDLE_VALUE) {
-                std::string utf8;
-                int utf8_len = WideCharToMultiByte(CP_UTF8, 0, command_to_run.c_str(), (int)command_to_run.size(), NULL, 0, NULL, NULL);
-                if (utf8_len > 0) {
-                    utf8.resize(utf8_len);
-                    WideCharToMultiByte(CP_UTF8, 0, command_to_run.c_str(), (int)command_to_run.size(), &utf8[0], utf8_len, NULL, NULL);
-                }
-                DWORD written = 0;
-                if (WriteFile(hFile, utf8.data(), (DWORD)utf8.size(), &written, NULL)) {
-                    FlushFileBuffers(hFile);
-                    CloseHandle(hFile);
-                    temp_file_path_out = temp_file;
-                    cmd_line = quote_command_argument(exe_path) + L" " + quote_command_argument(temp_file);
-                } else {
-                    CloseHandle(hFile);
-                    DeleteFileW(temp_file);
-                }
-            }
-        }
-    }
-
-    if (temp_file_path_out.empty()) {
-        cmd_line = quote_command_argument(exe_path) + L" -c " + quote_command_argument(command_to_run);
-    }
-
-    std::vector<HANDLE> stage_handles = { segment_stdin, segment_stdout, segment_stderr };
-    return create_process_with_handle_list(cmd_line, si, stage_handles, 0, pi);
-}
-
-bool strip_trailing_unquoted_background_marker(const std::wstring& input, std::wstring& stripped_output) {
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-    size_t last_non_space_index = std::wstring::npos;
-    bool last_non_space_is_background_amp = false;
-
-    for (size_t i = 0; i < input.size(); ++i) {
-        wchar_t ch = input[i];
-
-        if (escaped) {
-            escaped = false;
-        } else if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-        } else if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-        } else if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-        }
-
-        if (!std::iswspace(ch)) {
-            last_non_space_index = i;
-            last_non_space_is_background_amp = (!in_single_quotes && !in_double_quotes && !escaped && ch == L'&');
-        }
-    }
-
-    if (last_non_space_index != std::wstring::npos && last_non_space_is_background_amp) {
-        stripped_output = trim_copy(std::wstring_view(input).substr(0, last_non_space_index));
+    if (op == L"-e" || op == L"-a") {
+        result = exists;
         return true;
     }
 
-    stripped_output = input;
+    if (op == L"-f") {
+        result = exists && ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0);
+        return true;
+    }
+
+    if (op == L"-d") {
+        result = exists && ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0);
+        return true;
+    }
+
+    if (op == L"-h" || op == L"-L") {
+        result = exists && ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+        return true;
+    }
+
+    if (op == L"-s") {
+        if (!exists || ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0)) {
+            result = false;
+            return true;
+        }
+
+        WIN32_FILE_ATTRIBUTE_DATA file_data;
+        if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &file_data)) {
+            result = false;
+            return true;
+        }
+
+        ULONGLONG size = (static_cast<ULONGLONG>(file_data.nFileSizeHigh) << 32) | file_data.nFileSizeLow;
+        result = size > 0;
+        return true;
+    }
+
+    if (op == L"-r") {
+        result = _waccess(path.c_str(), 4) == 0;
+        return true;
+    }
+
+    if (op == L"-w") {
+        result = _waccess(path.c_str(), 2) == 0;
+        return true;
+    }
+
+    if (op == L"-x") {
+        result = _waccess(path.c_str(), 0) == 0;
+        return true;
+    }
+
     return false;
 }
 
-bool strip_trailing_unquoted_coprocess_marker(const std::wstring& input, std::wstring& stripped_output) {
-    const std::wstring trimmed = trim_copy(input);
-    if (trimmed.size() < 2 || trimmed[trimmed.size() - 2] != L'|' || trimmed.back() != L'&') {
-        stripped_output = input;
-        return false;
-    }
+static bool evaluate_file_comparison_operator(const std::wstring& left, const std::wstring& op, const std::wstring& right, bool& result, std::wstring& error_message) {
+    error_message.clear();
 
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-    const size_t marker_start = trimmed.size() - 2;
-    for (size_t i = 0; i < marker_start; ++i) {
-        const wchar_t ch = trimmed[i];
-        if (escaped) {
-            escaped = false;
-            continue;
+    if (op == L"-ef") {
+        wchar_t left_full[MAX_PATH];
+        wchar_t right_full[MAX_PATH];
+        DWORD left_len = GetFullPathNameW(left.c_str(), MAX_PATH, left_full, nullptr);
+        DWORD right_len = GetFullPathNameW(right.c_str(), MAX_PATH, right_full, nullptr);
+        if (left_len == 0 || right_len == 0) {
+            result = false;
+            return true;
         }
-        if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-        } else if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-        } else if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
+        result = _wcsicmp(left_full, right_full) == 0;
+        return true;
+    }
+
+    if (op == L"-nt" || op == L"-ot") {
+        WIN32_FILE_ATTRIBUTE_DATA left_data;
+        WIN32_FILE_ATTRIBUTE_DATA right_data;
+        if (!GetFileAttributesExW(left.c_str(), GetFileExInfoStandard, &left_data) ||
+            !GetFileAttributesExW(right.c_str(), GetFileExInfoStandard, &right_data)) {
+            result = false;
+            return true;
         }
+
+        LONG cmp = CompareFileTime(&left_data.ftLastWriteTime, &right_data.ftLastWriteTime);
+        result = (op == L"-nt") ? (cmp > 0) : (cmp < 0);
+        return true;
     }
 
-    if (in_single_quotes || in_double_quotes || escaped) {
-        stripped_output = input;
-        return false;
-    }
-
-    stripped_output = trim_copy(trimmed.substr(0, marker_start));
-    return true;
+    return false;
 }
 
-std::wstring format_win32_error_message(DWORD error_code) {
-    if (error_code == 0) {
-        return L"success";
-    }
+static bool evaluate_ksh_simple_condition(const std::vector<std::wstring>& tokens, size_t begin, size_t end, bool& result, std::wstring& error_message) {
+    error_message.clear();
+    result = false;
 
-    wchar_t* buffer = nullptr;
-    const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
-                        FORMAT_MESSAGE_FROM_SYSTEM |
-                        FORMAT_MESSAGE_IGNORE_INSERTS;
-    const DWORD length = FormatMessageW(
-        flags,
-        nullptr,
-        error_code,
-        0,
-        reinterpret_cast<LPWSTR>(&buffer),
-        0,
-        nullptr);
-
-    if (length == 0 || buffer == nullptr) {
-        return L"unknown error";
-    }
-
-    std::wstring message(buffer, length);
-    LocalFree(buffer);
-    while (!message.empty() && (message.back() == L'\r' || message.back() == L'\n' || message.back() == L' ')) {
-        message.pop_back();
-    }
-    return message;
-}
-
-bool execute_pipeline_segments(
-    const std::vector<std::wstring>& segments,
-    bool run_in_background,
-    DWORD& last_exit_code,
-    HANDLE& background_handle,
-    DWORD& background_pid,
-    std::vector<HANDLE>* background_handles,
-    std::vector<DWORD>* background_pids,
-    std::vector<std::wstring>* temp_files_out = nullptr) {
-    last_exit_code = 1;
-    background_handle = nullptr;
-    background_pid = 0;
-    if (background_handles != nullptr) {
-        background_handles->clear();
-    }
-    if (background_pids != nullptr) {
-        background_pids->clear();
-    }
-    g_last_pipeline_error_detail.clear();
-    if (segments.size() < 2) {
-        g_last_pipeline_error_detail = L"ksh: pipeline requires at least 2 stages";
+    if (begin >= end) {
+        error_message = L"missing conditional expression";
         return false;
     }
 
-    std::vector<HANDLE> process_handles;
-    std::vector<DWORD> process_pids;
-    std::vector<std::wstring> stage_temp_paths;
-    HANDLE prev_read = nullptr;
-    bool run_last_stage_in_parent = false;
+    size_t negate_count = 0;
+    while (begin < end && tokens[begin] == L"!") {
+        negate_count++;
+        begin++;
+    }
 
-    for (size_t i = 0; i < segments.size(); ++i) {
-        const std::wstring segment = trim_copy(segments[i]);
-        if (segment.empty()) {
-            std::wcerr << L"ksh: invalid null command in pipeline\n";
-            g_last_pipeline_error_detail = L"ksh: invalid null command in pipeline";
-            last_exit_code = 2;
-            if (prev_read != nullptr) {
-                CloseHandle(prev_read);
-            }
-            for (HANDLE h : process_handles) {
-                if (h != nullptr) {
-                    WaitForSingleObject(h, INFINITE);
-                    CloseHandle(h);
-                }
-            }
-            for (const std::wstring& path : stage_temp_paths) {
-                if (!path.empty()) {
-                    DeleteFileW(path.c_str());
-                }
-            }
+    if (begin >= end) {
+        error_message = L"missing conditional expression after !";
+        return false;
+    }
+
+    size_t count = end - begin;
+
+    if (count == 1) {
+        result = !tokens[begin].empty();
+    } else if (count == 2) {
+        const std::wstring op = tokens[begin];
+        const std::wstring operand = tokens[begin + 1];
+        if (op == L"-n") {
+            result = !operand.empty();
+        } else if (op == L"-z") {
+            result = operand.empty();
+        } else if (evaluate_file_unary_operator(op, operand, result)) {
+            // File test operator evaluated.
+        } else {
+            error_message = L"unsupported unary operator: " + op;
             return false;
         }
+    } else if (count == 3) {
+        const std::wstring left = tokens[begin];
+        const std::wstring op = tokens[begin + 1];
+        const std::wstring right = tokens[begin + 2];
 
-        HANDLE segment_stdin = GetStdHandle(STD_INPUT_HANDLE);
-        HANDLE segment_stdout = GetStdHandle(STD_OUTPUT_HANDLE);
-        HANDLE segment_stderr = GetStdHandle(STD_ERROR_HANDLE);
-
-        HANDLE stdin_dup = nullptr;
-        if (prev_read != nullptr) {
-            if (!DuplicateHandle(GetCurrentProcess(), prev_read, GetCurrentProcess(), &stdin_dup, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
-                DWORD duplicate_error = GetLastError();
-                g_last_pipeline_error_detail =
-                    L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
-                    L" failed duplicating stdin handle (" + std::to_wstring(duplicate_error) + L": " +
-                    format_win32_error_message(duplicate_error) + L")";
-                last_exit_code = 1;
-                if (prev_read != nullptr) {
-                    CloseHandle(prev_read);
-                }
-                for (HANDLE h : process_handles) {
-                    if (h != nullptr) {
-                        WaitForSingleObject(h, INFINITE);
-                        CloseHandle(h);
-                    }
-                }
-                for (const std::wstring& path : stage_temp_paths) {
-                    if (!path.empty()) {
-                        DeleteFileW(path.c_str());
-                    }
-                }
+        if (op == L"==" || op == L"=") {
+            result = match_glob_pattern(right, left);
+        } else if (op == L"!=") {
+            result = !match_glob_pattern(right, left);
+        } else if (op == L"=~") {
+            if (!is_regex_enabled()) {
+                error_message = L"regex matching is disabled";
                 return false;
             }
-            segment_stdin = stdin_dup;
-        }
-
-        HANDLE next_read = nullptr;
-        HANDLE next_write = nullptr;
-        const bool is_last = (i + 1 == segments.size());
-        if (!is_last) {
-            SECURITY_ATTRIBUTES sa;
-            sa.nLength = sizeof(sa);
-            sa.lpSecurityDescriptor = nullptr;
-            sa.bInheritHandle = TRUE;
-
-            if (!CreatePipe(&next_read, &next_write, &sa, 0)) {
-                DWORD pipe_error = GetLastError();
-                g_last_pipeline_error_detail =
-                    L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
-                    L" failed creating pipe (" + std::to_wstring(pipe_error) + L": " +
-                    format_win32_error_message(pipe_error) + L")";
-                last_exit_code = 1;
-                if (stdin_dup != nullptr) CloseHandle(stdin_dup);
-                if (prev_read != nullptr) CloseHandle(prev_read);
-                for (HANDLE h : process_handles) {
-                    if (h != nullptr) {
-                        WaitForSingleObject(h, INFINITE);
-                        CloseHandle(h);
-                    }
-                }
-                for (const std::wstring& path : stage_temp_paths) {
-                    if (!path.empty()) {
-                        DeleteFileW(path.c_str());
-                    }
-                }
+            if (right.size() > kMaxRegexPatternLength) {
+                error_message = L"regex pattern exceeds limit";
                 return false;
             }
-
-            if (!SetHandleInformation(next_read, HANDLE_FLAG_INHERIT, 0)) {
-                DWORD inherit_error = GetLastError();
-                g_last_pipeline_error_detail =
-                    L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
-                    L" failed setting pipe inheritance (" + std::to_wstring(inherit_error) + L": " +
-                    format_win32_error_message(inherit_error) + L")";
-                last_exit_code = 1;
-                if (stdin_dup != nullptr) CloseHandle(stdin_dup);
-                if (next_read != nullptr) CloseHandle(next_read);
-                if (next_write != nullptr) CloseHandle(next_write);
-                if (prev_read != nullptr) CloseHandle(prev_read);
-                for (HANDLE h : process_handles) {
-                    if (h != nullptr) {
-                        WaitForSingleObject(h, INFINITE);
-                        CloseHandle(h);
-                    }
-                }
-                for (const std::wstring& path : stage_temp_paths) {
-                    if (!path.empty()) {
-                        DeleteFileW(path.c_str());
-                    }
-                }
+            if (left.size() > kMaxRegexInputLength) {
+                error_message = L"regex input exceeds limit";
                 return false;
             }
-            segment_stdout = next_write;
-        }
-
-        if (is_last && !run_in_background) {
-            bool needs_shell = has_unquoted_shell_metacharacters(segment);
-            if (!needs_shell) {
-                std::wstring_view trimmed_stage = trim_copy(std::wstring_view(segment));
-                std::wstring first_token;
-                size_t first_space = trimmed_stage.find_first_of(L" \t\r\n");
-                if (first_space != std::wstring::npos) {
-                    first_token = std::wstring(trimmed_stage.substr(0, first_space));
+            try {
+                std::wregex rx(right);
+                std::wsmatch match;
+                result = std::regex_search(left, match, rx);
+                if (result) {
+                    ksh_env.arrays[L".sh.match"].clear();
+                    for (size_t group_idx = 0; group_idx < match.size(); ++group_idx) {
+                        std::wstring idx_str = std::to_wstring(group_idx);
+                        ksh_env.arrays[L".sh.match"][idx_str] = match[group_idx].str();
+                    }
                 } else {
-                    first_token = std::wstring(trimmed_stage);
+                    ksh_env.arrays[L".sh.match"].clear();
                 }
-                const std::vector<std::wstring>& builtins = builtin_commands();
-                bool is_builtin = (std::find(builtins.begin(), builtins.end(), first_token) != builtins.end());
-                bool is_function = (g_shell_functions.find(first_token) != g_shell_functions.end());
-                if (is_builtin || is_function) {
-                    needs_shell = true;
-                }
+            } catch (...) {
+                ksh_env.arrays[L".sh.match"].clear();
+                error_message = L"invalid regex pattern";
+                return false;
             }
-            if (needs_shell) {
-                run_last_stage_in_parent = true;
-            }
-        }
-
-        if (run_last_stage_in_parent) {
-            // AT&T KornShell native model: Execute rightmost pipeline stage in parent process
-            HANDLE old_pipe_in = g_pipeline_stdin;
-            HANDLE old_pipe_out = g_pipeline_stdout;
-            HANDLE old_pipe_err = g_pipeline_stderr;
-
-            g_pipeline_stdin = segment_stdin;
-            g_pipeline_stdout = segment_stdout;
-            g_pipeline_stderr = segment_stderr;
-
-            bool should_exit = false;
-            const bool ok = execute_command_line(segment, should_exit);
-            DWORD last_stage_code = ok ? 0 : 1;
-            std::map<std::wstring, std::wstring>::const_iterator status_it = ksh_env.variables.find(L"?");
-            if (status_it != ksh_env.variables.end()) {
-                int parsed_status = ok ? 0 : 1;
-                if (try_parse_int_strict(status_it->second, parsed_status)) {
-                    last_stage_code = static_cast<DWORD>(parsed_status);
-                }
+        } else if (op == L"<") {
+            result = left < right;
+        } else if (op == L">") {
+            result = left > right;
+        } else if (op == L"-eq" || op == L"-ne" || op == L"-gt" || op == L"-ge" || op == L"-lt" || op == L"-le") {
+            double left_num = 0.0;
+            double right_num = 0.0;
+            if (!try_parse_strict_double(left, left_num) || !try_parse_strict_double(right, right_num)) {
+                error_message = L"numeric comparison requires numeric operands";
+                return false;
             }
 
-            g_pipeline_stdin = old_pipe_in;
-            g_pipeline_stdout = old_pipe_out;
-            g_pipeline_stderr = old_pipe_err;
-
-            if (stdin_dup != nullptr) {
-                CloseHandle(stdin_dup);
-                stdin_dup = nullptr;
-            }
-            if (prev_read != nullptr) {
-                CloseHandle(prev_read);
-                prev_read = nullptr;
-            }
-
-            last_exit_code = last_stage_code;
-            break;
-        }
-
-        PROCESS_INFORMATION pi;
-        std::wstring temp_file_path;
-        if (!launch_pipeline_stage_process(segment, segment_stdin, segment_stdout, segment_stderr, pi, temp_file_path, true)) {
-            DWORD launch_error = GetLastError();
-            g_last_pipeline_error_detail =
-                L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +
-                L" failed launching command: " + segment +
-                L" (" + std::to_wstring(launch_error) + L": " +
-                format_win32_error_message(launch_error) + L")";
-            last_exit_code = 127;
-            if (stdin_dup != nullptr) CloseHandle(stdin_dup);
-            if (next_read != nullptr) CloseHandle(next_read);
-            if (next_write != nullptr) CloseHandle(next_write);
-            if (prev_read != nullptr) CloseHandle(prev_read);
-            for (HANDLE h : process_handles) {
-                if (h != nullptr) {
-                    WaitForSingleObject(h, INFINITE);
-                    CloseHandle(h);
-                }
-            }
-            if (!temp_file_path.empty()) {
-                DeleteFileW(temp_file_path.c_str());
-            }
-            for (const std::wstring& path : stage_temp_paths) {
-                if (!path.empty()) {
-                    DeleteFileW(path.c_str());
-                }
-            }
-            return false;
-        }
-
-        if (!temp_file_path.empty()) {
-            stage_temp_paths.push_back(temp_file_path);
-        }
-
-        if (pi.hThread != nullptr && pi.hThread != INVALID_HANDLE_VALUE) {
-            CloseHandle(pi.hThread);
-        }
-        process_handles.push_back(pi.hProcess);
-        process_pids.push_back(pi.dwProcessId);
-
-        if (stdin_dup != nullptr) {
-            CloseHandle(stdin_dup);
-        }
-        if (prev_read != nullptr) {
-            CloseHandle(prev_read);
-            prev_read = nullptr;
-        }
-        if (next_write != nullptr) {
-            CloseHandle(next_write);
-        }
-        prev_read = next_read;
-    }
-
-    if (prev_read != nullptr) {
-        CloseHandle(prev_read);
-    }
-
-    if (run_in_background) {
-        if (!process_handles.empty()) {
-            if (background_handles != nullptr) {
-                *background_handles = process_handles;
-            }
-            if (background_pids != nullptr) {
-                *background_pids = process_pids;
-            }
-            background_handle = process_handles.back();
-            background_pid = process_pids.back();
-            last_exit_code = 0;
-            if (temp_files_out != nullptr) {
-                *temp_files_out = std::move(stage_temp_paths);
+            if (op == L"-eq") result = (left_num == right_num);
+            if (op == L"-ne") result = (left_num != right_num);
+            if (op == L"-gt") result = (left_num > right_num);
+            if (op == L"-ge") result = (left_num >= right_num);
+            if (op == L"-lt") result = (left_num < right_num);
+            if (op == L"-le") result = (left_num <= right_num);
+        } else {
+            bool file_result = false;
+            if (evaluate_file_comparison_operator(left, op, right, file_result, error_message)) {
+                result = file_result;
             } else {
-                for (const std::wstring& path : stage_temp_paths) {
-                    if (!path.empty()) {
-                        DeleteFileW(path.c_str());
-                    }
-                }
-            }
-            return true;
-        }
-        for (const std::wstring& path : stage_temp_paths) {
-            if (!path.empty()) {
-                DeleteFileW(path.c_str());
+                error_message = L"unsupported binary operator: " + op;
+                return false;
             }
         }
+    } else {
+        error_message = L"unable to parse conditional expression";
         return false;
     }
 
-    DWORD rightmost_failure = (run_last_stage_in_parent && last_exit_code != 0) ? last_exit_code : 0;
-    for (size_t i = 0; i < process_handles.size(); ++i) {
-        WaitForSingleObject(process_handles[i], INFINITE);
-        DWORD code = 1;
-        bool is_pipe_thread = false;
-        {
-            std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
-            auto it = g_pipeline_thread_handles.find(process_handles[i]);
-            if (it != g_pipeline_thread_handles.end()) {
-                is_pipe_thread = true;
-                g_pipeline_thread_handles.erase(it);
-            }
-        }
-        if (is_pipe_thread) {
-            GetExitCodeThread(process_handles[i], &code);
-        } else {
-            register_child_process_times(process_handles[i]);
-            GetExitCodeProcess(process_handles[i], &code);
-        }
-        if (code != 0) {
-            rightmost_failure = code;
-        }
-        if (!run_last_stage_in_parent && i + 1 == process_handles.size()) {
-            last_exit_code = code;
-        }
-        CloseHandle(process_handles[i]);
-    }
-
-    if (g_pipefail_enabled && rightmost_failure != 0) {
-        last_exit_code = rightmost_failure;
-    }
-
-    for (const std::wstring& path : stage_temp_paths) {
-        if (!path.empty()) {
-            DeleteFileW(path.c_str());
-        }
-    }
-
-    return true;
-}
-
-bool open_redirection_file(const std::wstring& path, DWORD access, DWORD creation, HANDLE& handle) {
-    std::wstring norm_path = path;
-    bool is_pipe = (norm_path.rfind(L"\\\\.\\", 0) == 0 || norm_path.rfind(L"//./", 0) == 0 ||
-                    norm_path.find(L"\\pipe\\") != std::wstring::npos || norm_path.find(L"/pipe/") != std::wstring::npos);
-    if (!is_pipe) {
-        for (auto& ch : norm_path) {
-            if (ch == L'\\') ch = L'/';
-        }
-    } else {
-        for (auto& ch : norm_path) {
-            if (ch == L'/') ch = L'\\';
-        }
-    }
-
-    if (norm_path == L"/dev/null") {
-        norm_path = L"NUL";
-    } else {
-        HANDLE source = INVALID_HANDLE_VALUE;
-        if (norm_path == L"/dev/stdin") {
-            source = GetStdHandle(STD_INPUT_HANDLE);
-        } else if (norm_path == L"/dev/stdout") {
-            source = GetStdHandle(STD_OUTPUT_HANDLE);
-        } else if (norm_path == L"/dev/stderr") {
-            source = GetStdHandle(STD_ERROR_HANDLE);
-        }
-
-        if (source != INVALID_HANDLE_VALUE && source != nullptr) {
-            return DuplicateHandle(
-                GetCurrentProcess(),
-                source,
-                GetCurrentProcess(),
-                &handle,
-                0,
-                TRUE,
-                DUPLICATE_SAME_ACCESS
-            ) != 0;
-        }
-    }
-
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = nullptr;
-    sa.bInheritHandle = TRUE;
-
-    handle = CreateFileW(
-        norm_path.c_str(),
-        access,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        &sa,
-        creation,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr);
-    return handle != INVALID_HANDLE_VALUE;
-}
-
-bool set_persistent_custom_fd(int fd, HANDLE new_handle, std::wstring& error_message) {
-    if (!is_custom_fd_in_range(fd)) {
-        error_message = L"ksh: custom fd out of range (expected 3-9)";
-        return false;
-    }
-
-    HANDLE& slot = g_custom_fd_table[static_cast<size_t>(fd)];
-    if (is_valid_handle_value(slot)) {
-        CloseHandle(slot);
-    }
-
-    if (is_valid_handle_value(new_handle)) {
-        slot = new_handle;
-    } else {
-        slot = INVALID_HANDLE_VALUE;
+    if ((negate_count % 2) == 1) {
+        result = !result;
     }
     return true;
 }
 
-bool duplicate_handle_for_custom_fd_source(int source_fd, HANDLE& duplicated_handle, std::wstring& error_message) {
-    duplicated_handle = INVALID_HANDLE_VALUE;
+static bool is_test_open_paren(const std::wstring& token) {
+    return token == L"(" || token == L"\\(";
+}
 
-    HANDLE source_handle = INVALID_HANDLE_VALUE;
-    if (source_fd == 0) {
-        source_handle = GetStdHandle(STD_INPUT_HANDLE);
-    } else if (source_fd == 1) {
-        source_handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    } else if (source_fd == 2) {
-        source_handle = GetStdHandle(STD_ERROR_HANDLE);
-    } else if (is_custom_fd_in_range(source_fd)) {
-        HANDLE persistent = get_persistent_custom_fd(source_fd);
-        if (!is_valid_handle_value(persistent)) {
-            error_message = L"ksh: source custom fd is not open: " + std::to_wstring(source_fd);
+static bool is_test_close_paren(const std::wstring& token) {
+    return token == L")" || token == L"\\)";
+}
+
+static bool is_supported_unary_condition_operator(const std::wstring& op) {
+    return op == L"-n" || op == L"-z" || op == L"-e" || op == L"-a" || op == L"-f" || op == L"-d" ||
+           op == L"-h" || op == L"-L" || op == L"-s" || op == L"-r" || op == L"-w" || op == L"-x";
+}
+
+static bool is_supported_binary_condition_operator(const std::wstring& op) {
+    return op == L"==" || op == L"=" || op == L"!=" || op == L"=~" || op == L"<" || op == L">" ||
+           op == L"-eq" || op == L"-ne" || op == L"-gt" || op == L"-ge" || op == L"-lt" || op == L"-le" ||
+           op == L"-ef" || op == L"-nt" || op == L"-ot";
+}
+
+static bool evaluate_test_condition_or(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message);
+
+static bool evaluate_test_condition_primary(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
+    if (index >= tokens.size()) {
+        error_message = L"missing conditional expression";
+        return false;
+    }
+
+    if (is_test_open_paren(tokens[index])) {
+        index++;
+        if (!evaluate_test_condition_or(tokens, index, result, error_message)) {
             return false;
         }
-        source_handle = persistent;
-    } else {
-        error_message = L"ksh: unsupported source fd: " + std::to_wstring(source_fd);
-        return false;
-    }
-
-    if (!is_valid_handle_value(source_handle)) {
-        error_message = L"ksh: source fd is not available: " + std::to_wstring(source_fd);
-        return false;
-    }
-
-    if (!DuplicateHandle(
-            GetCurrentProcess(),
-            source_handle,
-            GetCurrentProcess(),
-            &duplicated_handle,
-            0,
-            TRUE,
-            DUPLICATE_SAME_ACCESS)) {
-        error_message = L"ksh: failed to duplicate fd: " + std::to_wstring(source_fd);
-        return false;
-    }
-
-    return true;
-}
-
-class ScopedCustomFdTransaction {
-public:
-    ScopedCustomFdTransaction(
-        const std::vector<RedirectionSpec::CustomFdAction>& actions,
-        std::wstring& error_message)
-        : committed_(false), ready_(true) {
-        for (const RedirectionSpec::CustomFdAction& action : actions) {
-            if (!is_custom_fd_in_range(action.fd)) {
-                error_message = L"ksh: custom fd out of range (expected 3-9)";
-                ready_ = false;
-                cleanup_saved_handles();
-                return;
-            }
-
-            const size_t slot = static_cast<size_t>(action.fd);
-            if (has_snapshot_[slot]) {
-                continue;
-            }
-            has_snapshot_[slot] = true;
-
-            Snapshot snapshot;
-            snapshot.had_entry = false;
-            snapshot.saved_handle = INVALID_HANDLE_VALUE;
-
-            HANDLE current = g_custom_fd_table[slot];
-            if (is_valid_handle_value(current)) {
-                HANDLE duplicated = INVALID_HANDLE_VALUE;
-                if (!DuplicateHandle(
-                        GetCurrentProcess(),
-                        current,
-                        GetCurrentProcess(),
-                        &duplicated,
-                        0,
-                        TRUE,
-                        DUPLICATE_SAME_ACCESS)) {
-                    error_message = L"ksh: failed to snapshot custom fd: " + std::to_wstring(action.fd);
-                    ready_ = false;
-                    cleanup_saved_handles();
-                    return;
-                }
-
-                snapshot.had_entry = true;
-                snapshot.saved_handle = duplicated;
-            }
-
-            snapshots_[slot] = snapshot;
-        }
-    }
-
-    ~ScopedCustomFdTransaction() {
-        if (!ready_) {
-            return;
-        }
-
-        if (!committed_) {
-            rollback();
-            return;
-        }
-
-        cleanup_saved_handles();
-    }
-
-    bool ready() const {
-        return ready_;
-    }
-
-    void commit() {
-        committed_ = true;
-    }
-
-private:
-    struct Snapshot {
-        bool had_entry;
-        HANDLE saved_handle;
-    };
-
-    void rollback() {
-        for (int fd = kMinCustomFd; fd <= kMaxCustomFd; ++fd) {
-            const size_t slot = static_cast<size_t>(fd);
-            if (!has_snapshot_[slot]) {
-                continue;
-            }
-
-            Snapshot& snapshot = snapshots_[slot];
-            if (is_valid_handle_value(g_custom_fd_table[slot])) {
-                CloseHandle(g_custom_fd_table[slot]);
-            }
-
-            if (snapshot.had_entry && is_valid_handle_value(snapshot.saved_handle)) {
-                g_custom_fd_table[slot] = snapshot.saved_handle;
-                snapshot.saved_handle = INVALID_HANDLE_VALUE;
-            } else {
-                g_custom_fd_table[slot] = INVALID_HANDLE_VALUE;
-            }
-        }
-    }
-
-    void cleanup_saved_handles() {
-        for (int fd = kMinCustomFd; fd <= kMaxCustomFd; ++fd) {
-            const size_t slot = static_cast<size_t>(fd);
-            if (!has_snapshot_[slot]) {
-                continue;
-            }
-
-            HANDLE& handle = snapshots_[slot].saved_handle;
-            if (is_valid_handle_value(handle)) {
-                CloseHandle(handle);
-                handle = INVALID_HANDLE_VALUE;
-            }
-        }
-    }
-
-    std::array<Snapshot, kCustomFdTableSize> snapshots_ = {};
-    std::array<bool, kCustomFdTableSize> has_snapshot_ = {};
-    bool committed_;
-    bool ready_;
-};
-
-bool is_custom_fd_source_available_preflight(int source_fd, const std::array<bool, kCustomFdTableSize>& simulated_custom_open) {
-    if (is_custom_fd_in_range(source_fd)) {
-        return simulated_custom_open[static_cast<size_t>(source_fd)];
-    }
-
-    HANDLE source_handle = INVALID_HANDLE_VALUE;
-    if (source_fd == 0) {
-        source_handle = GetStdHandle(STD_INPUT_HANDLE);
-    } else if (source_fd == 1) {
-        source_handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    } else if (source_fd == 2) {
-        source_handle = GetStdHandle(STD_ERROR_HANDLE);
-    } else {
-        return false;
-    }
-
-    return source_handle != nullptr && source_handle != INVALID_HANDLE_VALUE;
-}
-
-bool preflight_validate_persistent_custom_fd_actions(
-    const std::vector<RedirectionSpec::CustomFdAction>& actions,
-    std::wstring& error_message) {
-    std::array<bool, kCustomFdTableSize> simulated_custom_open = {};
-    for (int fd = kMinCustomFd; fd <= kMaxCustomFd; ++fd) {
-        simulated_custom_open[static_cast<size_t>(fd)] =
-            is_valid_handle_value(g_custom_fd_table[static_cast<size_t>(fd)]);
-    }
-
-    for (const RedirectionSpec::CustomFdAction& action : actions) {
-        if (!is_custom_fd_in_range(action.fd)) {
-            error_message = L"ksh: custom fd out of range (expected 3-9)";
+        if (index >= tokens.size() || !is_test_close_paren(tokens[index])) {
+            error_message = L"missing closing parenthesis in test expression";
             return false;
         }
-
-        if (action.kind == RedirectionSpec::CustomFdAction::Kind::Close) {
-            simulated_custom_open[static_cast<size_t>(action.fd)] = false;
-            continue;
-        }
-
-        if (action.kind == RedirectionSpec::CustomFdAction::Kind::Duplicate) {
-            if (!is_custom_fd_source_available_preflight(action.duplicate_source_fd, simulated_custom_open)) {
-                if (action.duplicate_source_fd >= 3 && action.duplicate_source_fd <= 9) {
-                    error_message = L"ksh: source custom fd is not open: " + std::to_wstring(action.duplicate_source_fd);
-                } else {
-                    error_message = L"ksh: source fd is not available: " + std::to_wstring(action.duplicate_source_fd);
-                }
-                return false;
-            }
-            simulated_custom_open[static_cast<size_t>(action.fd)] = true;
-            continue;
-        }
-
-        // Open actions conceptually make the destination fd available once applied.
-        simulated_custom_open[static_cast<size_t>(action.fd)] = true;
-    }
-
-    return true;
-}
-
-bool apply_persistent_custom_fd_actions(const RedirectionSpec& redir, std::wstring& error_message) {
-    if (!preflight_validate_persistent_custom_fd_actions(redir.custom_fd_actions, error_message)) {
-        return false;
-    }
-
-    ScopedCustomFdTransaction transaction(redir.custom_fd_actions, error_message);
-    if (!transaction.ready()) {
-        return false;
-    }
-
-    for (const RedirectionSpec::CustomFdAction& action : redir.custom_fd_actions) {
-        if (action.fd < 3 || action.fd > 9) {
-            error_message = L"ksh: custom fd out of range (expected 3-9)";
-            return false;
-        }
-
-        if (action.kind == RedirectionSpec::CustomFdAction::Kind::Close) {
-            if (!set_persistent_custom_fd(action.fd, INVALID_HANDLE_VALUE, error_message)) {
-                return false;
-            }
-            continue;
-        }
-
-        HANDLE new_handle = INVALID_HANDLE_VALUE;
-        if (action.kind == RedirectionSpec::CustomFdAction::Kind::OpenRead) {
-            if (!open_redirection_file(action.path, GENERIC_READ, OPEN_EXISTING, new_handle)) {
-                error_message = L"ksh: failed opening custom fd input file: " + action.path;
-                return false;
-            }
-        } else if (action.kind == RedirectionSpec::CustomFdAction::Kind::OpenWriteTruncate) {
-            if (!open_redirection_file(action.path, GENERIC_WRITE, CREATE_ALWAYS, new_handle)) {
-                error_message = L"ksh: failed opening custom fd output file: " + action.path;
-                return false;
-            }
-        } else if (action.kind == RedirectionSpec::CustomFdAction::Kind::OpenWriteAppend) {
-            if (!open_redirection_file(action.path, GENERIC_WRITE, OPEN_ALWAYS, new_handle)) {
-                error_message = L"ksh: failed opening custom fd append file: " + action.path;
-                return false;
-            }
-            SetFilePointer(new_handle, 0, nullptr, FILE_END);
-        } else if (action.kind == RedirectionSpec::CustomFdAction::Kind::Duplicate) {
-            if (!duplicate_handle_for_custom_fd_source(action.duplicate_source_fd, new_handle, error_message)) {
-                return false;
-            }
-        }
-
-        if (!set_persistent_custom_fd(action.fd, new_handle, error_message)) {
-            if (new_handle != nullptr && new_handle != INVALID_HANDLE_VALUE) {
-                CloseHandle(new_handle);
-            }
-            return false;
-        }
-    }
-
-    transaction.commit();
-    return true;
-}
-
-// Redirection section: std-handle setup and cleanup for command execution.
-bool setup_redirection_handles(
-    const RedirectionSpec* redir,
-    HANDLE& std_in,
-    HANDLE& std_out,
-    HANDLE& std_err,
-    bool& close_in,
-    bool& close_out,
-    bool& close_err) {
-    std_in = (g_pipeline_stdin != INVALID_HANDLE_VALUE) ? g_pipeline_stdin : GetStdHandle(STD_INPUT_HANDLE);
-    std_out = (g_pipeline_stdout != INVALID_HANDLE_VALUE)
-        ? g_pipeline_stdout
-        : ((g_subshell_stdout != INVALID_HANDLE_VALUE) ? g_subshell_stdout : GetStdHandle(STD_OUTPUT_HANDLE));
-    std_err = (g_pipeline_stderr != INVALID_HANDLE_VALUE) ? g_pipeline_stderr : GetStdHandle(STD_ERROR_HANDLE);
-    close_in = false;
-    close_out = false;
-    close_err = false;
-
-    if (redir == nullptr || !has_any_redirection(*redir)) {
+        index++;
         return true;
     }
 
-    // Defense-in-depth: reject conflicting redirection state combinations.
-    if ((redir->stderr_to_stdout && redir->has_stderr) ||
-        (redir->stdout_to_stderr && redir->has_stdout) ||
-        (redir->stderr_to_stdout && redir->stdout_to_stderr)) {
+    if (is_test_close_paren(tokens[index])) {
+        error_message = L"unexpected closing parenthesis in test expression";
         return false;
     }
 
-    if (redir->has_stdin) {
-        if (!open_redirection_file(redir->stdin_path, GENERIC_READ, OPEN_EXISTING, std_in)) {
+    size_t start = index;
+    size_t consume = 1;
+
+    if ((index + 1) < tokens.size() && is_supported_unary_condition_operator(tokens[index])) {
+        consume = 2;
+    } else if ((index + 2) < tokens.size() && is_supported_binary_condition_operator(tokens[index + 1])) {
+        consume = 3;
+    }
+
+    if ((start + consume) > tokens.size()) {
+        error_message = L"missing operand in conditional expression";
+        return false;
+    }
+
+    if (!evaluate_ksh_simple_condition(tokens, start, start + consume, result, error_message)) {
+        return false;
+    }
+
+    index += consume;
+    return true;
+}
+
+static bool evaluate_test_condition_not(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
+    if (index < tokens.size() && tokens[index] == L"!") {
+        index++;
+        if (!evaluate_test_condition_not(tokens, index, result, error_message)) {
             return false;
         }
-        close_in = true;
+        result = !result;
+        return true;
     }
 
-    if (redir->has_stdout) {
-        const DWORD creation = redir->append_stdout ? OPEN_ALWAYS : CREATE_ALWAYS;
-        if (!open_redirection_file(redir->stdout_path, GENERIC_WRITE, creation, std_out)) {
-            if (close_in) CloseHandle(std_in);
+    return evaluate_test_condition_primary(tokens, index, result, error_message);
+}
+
+static bool evaluate_test_condition_and(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
+    if (!evaluate_test_condition_not(tokens, index, result, error_message)) {
+        return false;
+    }
+
+    while (index < tokens.size() && tokens[index] == L"-a") {
+        index++;
+        bool rhs = false;
+        if (!evaluate_test_condition_not(tokens, index, rhs, error_message)) {
+            if (error_message.empty()) {
+                error_message = L"missing expression after -a";
+            }
             return false;
         }
-        if (redir->append_stdout) {
-            SetFilePointer(std_out, 0, nullptr, FILE_END);
-        }
-        close_out = true;
-    }
-
-    if (redir->has_stderr) {
-        const DWORD creation = redir->append_stderr ? OPEN_ALWAYS : CREATE_ALWAYS;
-        if (!open_redirection_file(redir->stderr_path, GENERIC_WRITE, creation, std_err)) {
-            if (close_in) CloseHandle(std_in);
-            if (close_out) CloseHandle(std_out);
-            return false;
-        }
-        if (redir->append_stderr) {
-            SetFilePointer(std_err, 0, nullptr, FILE_END);
-        }
-        close_err = true;
-    }
-
-    if (redir->stderr_to_stdout) {
-        std_err = std_out;
-        close_err = false;
-    }
-
-    if (redir->stdout_to_stderr) {
-        std_out = std_err;
-        close_out = false;
+        result = result && rhs;
     }
 
     return true;
 }
 
-void close_redirection_handles(HANDLE std_in, HANDLE std_out, HANDLE std_err, bool close_in, bool close_out, bool close_err) {
-    if (close_in && std_in != nullptr && std_in != INVALID_HANDLE_VALUE) {
-        CloseHandle(std_in);
-    }
-
-    if (std_out == std_err && std_out != nullptr && std_out != INVALID_HANDLE_VALUE) {
-        if (close_out || close_err) {
-            CloseHandle(std_out);
-        }
-        return;
-    }
-
-    if (close_out && std_out != nullptr && std_out != INVALID_HANDLE_VALUE) {
-        CloseHandle(std_out);
-    }
-    if (close_err && std_err != nullptr && std_err != INVALID_HANDLE_VALUE) {
-        CloseHandle(std_err);
-    }
-}
-
-std::wstring translate_device_path(const std::wstring& path) {
-    std::wstring norm_path = path;
-    for (auto& ch : norm_path) {
-        if (ch == L'\\') ch = L'/';
-    }
-    if (norm_path == L"/dev/null") {
-        return L"NUL";
-    }
-    if (norm_path == L"/dev/stdout" || norm_path == L"/dev/stderr") {
-        return L"CONOUT$";
-    }
-    if (norm_path == L"/dev/stdin") {
-        return L"CONIN$";
-    }
-    return path;
-}
-
-bool write_text_with_stdout_redirection(const std::wstring& text, const RedirectionSpec& redir) {
-    if (redir.stdout_to_stderr) {
-        if (g_pipeline_stderr != INVALID_HANDLE_VALUE) {
-            int byte_count = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-            if (byte_count > 0) {
-                std::string bytes(static_cast<size_t>(byte_count), '\0');
-                WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), &bytes[0], byte_count, nullptr, nullptr);
-                DWORD written = 0;
-                return WriteFile(g_pipeline_stderr, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE;
-            }
-        }
-        std::wcerr << text;
-        return true;
-    }
-
-    if (!redir.has_stdout) {
-        if (g_pipeline_stdout != INVALID_HANDLE_VALUE) {
-            int byte_count = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-            if (byte_count > 0) {
-                std::string bytes(static_cast<size_t>(byte_count), '\0');
-                WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), &bytes[0], byte_count, nullptr, nullptr);
-                DWORD written = 0;
-                return WriteFile(g_pipeline_stdout, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE;
-            }
-        }
-        std::wcout << text;
-        return true;
-    }
-
-    std::wstring target_path = translate_device_path(redir.stdout_path);
-    std::wofstream out_file;
-    if (redir.append_stdout) {
-        out_file.open(target_path.c_str(), std::ios::app);
-    } else {
-        out_file.open(target_path.c_str(), std::ios::trunc);
-    }
-
-    if (!out_file.is_open()) {
-        std::wcerr << L"ksh: failed to open output file: " << redir.stdout_path << L"\n";
+static bool evaluate_test_condition_or(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
+    if (!evaluate_test_condition_and(tokens, index, result, error_message)) {
         return false;
     }
 
-    out_file << text;
+    while (index < tokens.size() && tokens[index] == L"-o") {
+        index++;
+        bool rhs = false;
+        if (!evaluate_test_condition_and(tokens, index, rhs, error_message)) {
+            if (error_message.empty()) {
+                error_message = L"missing expression after -o";
+            }
+            return false;
+        }
+        result = result || rhs;
+    }
+
     return true;
 }
 
-bool get_system_directory_path(std::wstring& system_directory) {
-    wchar_t buffer[MAX_PATH];
-    UINT length = GetSystemDirectoryW(buffer, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH) {
-        return false;
-    }
+bool evaluate_test_condition_expression(const std::vector<std::wstring>& tokens, bool& result, std::wstring& error_message) {
+    result = false;
+    error_message.clear();
 
-    system_directory = buffer;
-    return true;
-}
-
-bool resolve_cmd_exe_path(std::wstring& cmd_path) {
-    std::wstring system_directory;
-    if (!get_system_directory_path(system_directory)) {
-        return false;
-    }
-
-    cmd_path = system_directory + L"\\cmd.exe";
-    return file_exists_regular(cmd_path);
-}
-
-bool resolve_powershell_exe_path(std::wstring& powershell_path) {
-    std::wstring system_directory;
-    if (!get_system_directory_path(system_directory)) {
-        return false;
-    }
-
-    powershell_path = system_directory + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
-    return file_exists_regular(powershell_path);
-}
-
-bool is_absolute_windows_path(const std::wstring& path) {
-    if (path.size() >= 3 && std::iswalpha(path[0]) && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) {
-        return true;
-    }
-
-    return path.rfind(L"\\\\", 0) == 0;
-}
-
-std::wstring normalize_cd_path(const std::wstring& input_path) {
-    if (input_path.empty()) {
-        return input_path;
-    }
-
-    std::wstring path = input_path;
-    std::replace(path.begin(), path.end(), L'/', L'\\');
-
-    if (is_absolute_windows_path(path)) {
-        return path;
-    }
-
-    if (!path.empty() && path[0] == L'\\') {
-        wchar_t cwd[MAX_PATH];
-        if (GetCurrentDirectoryW(MAX_PATH, cwd) > 0) {
-            std::wstring drive_root = cwd;
-            if (drive_root.size() >= 2 && drive_root[1] == L':') {
-                return drive_root.substr(0, 2) + path;
-            }
-        }
-    }
-
-    return path;
-}
-
-bool resolve_bash_exe_path(std::wstring& bash_path) {
-    const wchar_t* candidates[] = {
-        L"C:\\Program Files\\Git\\bin\\bash.exe",
-        L"C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-        L"C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-        L"C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe"
-    };
-
-    for (const wchar_t* candidate : candidates) {
-        if (file_exists_regular(candidate)) {
-            bash_path = candidate;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool is_powershell_bypass_enabled() {
-    if (g_powershell_bypass_enabled) {
-        return true;
-    }
-    std::wstring val = trim_copy(get_environment_value(L"KSH_POWERSHELL_BYPASS"));
-    if (val.empty()) {
-        return false;
-    }
-    for (wchar_t ch : val) {
-        if (ch == L'1' || ch == L'y' || ch == L'Y' || ch == L't' || ch == L'T') {
-            return true;
-        }
-    }
-    return false;
-}
-
-enum class ScriptInterpreterResolution {
-    NotScript,
-    Resolved,
-    Failed
-};
-
-ScriptInterpreterResolution build_script_interpreter_command(const std::vector<std::wstring>& tokens, std::wstring& command_line) {
     if (tokens.empty()) {
-        return ScriptInterpreterResolution::NotScript;
-    }
-
-    const std::wstring& script_path = tokens[0];
-    if (script_path.empty() || script_path.find(L'=') != std::wstring::npos) {
-        return ScriptInterpreterResolution::NotScript;
-    }
-
-    auto append_script_arguments = [&]() {
-        for (size_t i = 1; i < tokens.size(); ++i) {
-            command_line += L" ";
-            command_line += quote_command_argument(tokens[i]);
-        }
-    };
-
-    if (ends_with_case_insensitive(script_path, L".ps1")) {
-        std::wstring powershell_path;
-        if (!resolve_powershell_exe_path(powershell_path)) {
-            return ScriptInterpreterResolution::Failed;
-        }
-        command_line = quote_command_argument(powershell_path);
-        command_line += L" -NoProfile ";
-        if (is_powershell_bypass_enabled()) {
-            command_line += L"-ExecutionPolicy Bypass ";
-        }
-        command_line += L"-File ";
-        command_line += quote_command_argument(script_path);
-        append_script_arguments();
-        return ScriptInterpreterResolution::Resolved;
-    } else if (ends_with_case_insensitive(script_path, L".cmd") || ends_with_case_insensitive(script_path, L".bat")) {
-        std::wstring cmd_path;
-        if (!resolve_cmd_exe_path(cmd_path)) {
-            return ScriptInterpreterResolution::Failed;
-        }
-        command_line = quote_command_argument(cmd_path);
-        command_line += L" /d /c ";
-        command_line += quote_command_argument(script_path);
-        append_script_arguments();
-        return ScriptInterpreterResolution::Resolved;
-    } else if (ends_with_case_insensitive(script_path, L".sh")) {
-        std::wstring bash_path;
-        if (!resolve_bash_exe_path(bash_path)) {
-            return ScriptInterpreterResolution::Failed;
-        }
-        command_line = quote_command_argument(bash_path);
-        command_line += L" ";
-        command_line += quote_command_argument(script_path);
-        append_script_arguments();
-        return ScriptInterpreterResolution::Resolved;
-    } else {
-        return ScriptInterpreterResolution::NotScript;
-    }
-}
-
-bool is_ksh_script_path(const std::wstring& path) {
-    return ends_with_case_insensitive(path, L".ksh");
-}
-
-bool build_self_script_command(const std::wstring& script_path, const std::vector<std::wstring>& script_args, std::wstring& command_line) {
-    wchar_t exe_path[MAX_PATH];
-    DWORD len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) {
+        error_message = L"missing conditional expression";
         return false;
     }
 
-    command_line = quote_command_argument(exe_path);
-    command_line += L" ";
-    command_line += quote_command_argument(script_path);
-    for (const std::wstring& arg : script_args) {
-        command_line += L" ";
-        command_line += quote_command_argument(arg);
+    size_t index = 0;
+    if (!evaluate_test_condition_or(tokens, index, result, error_message)) {
+        return false;
     }
+
+    if (index != tokens.size()) {
+        error_message = L"unexpected token in test expression: " + tokens[index];
+        return false;
+    }
+
     return true;
 }
 
-std::wstring decode_multibyte(const std::string& input, UINT code_page) {
-    if (input.empty()) {
-        return L"";
-    }
+bool evaluate_ksh_conditional(const std::wstring& condition_str, bool& value, std::wstring& error_message) {
+    value = false;
+    error_message.clear();
 
-    if (input.size() > static_cast<size_t>(INT_MAX)) {
-        return L"";
-    }
-
-    const int input_len = static_cast<int>(input.size());
-    DWORD flags = (code_page == CP_UTF8) ? MB_ERR_INVALID_CHARS : 0;
-
-    int wide_len = MultiByteToWideChar(code_page, flags, input.data(), input_len, nullptr, 0);
-    if (wide_len <= 0 && flags != 0) {
-        wide_len = MultiByteToWideChar(code_page, 0, input.data(), input_len, nullptr, 0);
-    }
-    if (wide_len <= 0) {
-        return L"";
-    }
-
-    std::wstring output(static_cast<size_t>(wide_len), L'\0');
-    if (!MultiByteToWideChar(code_page, 0, input.data(), input_len, &output[0], wide_len)) {
-        return L"";
-    }
-    return output;
-}
-
-std::wstring decode_script_text(const std::vector<char>& bytes) {
-    if (bytes.empty()) {
-        return L"";
-    }
-
-    if (bytes.size() >= 3 &&
-        static_cast<unsigned char>(bytes[0]) == 0xEF &&
-        static_cast<unsigned char>(bytes[1]) == 0xBB &&
-        static_cast<unsigned char>(bytes[2]) == 0xBF) {
-        return decode_multibyte(std::string(bytes.begin() + 3, bytes.end()), CP_UTF8);
-    }
-
-    if (bytes.size() >= 2 &&
-        static_cast<unsigned char>(bytes[0]) == 0xFF &&
-        static_cast<unsigned char>(bytes[1]) == 0xFE) {
-        const size_t byte_count = bytes.size() - 2;
-        const size_t wchar_count = byte_count / sizeof(wchar_t);
-        std::wstring text(wchar_count, L'\0');
-        if (wchar_count > 0) {
-            std::memcpy(&text[0], bytes.data() + 2, wchar_count * sizeof(wchar_t));
-        }
-        return text;
-    }
-
-    if (bytes.size() >= 2 &&
-        static_cast<unsigned char>(bytes[0]) == 0xFE &&
-        static_cast<unsigned char>(bytes[1]) == 0xFF) {
-        std::wstring text;
-        for (size_t i = 2; i + 1 < bytes.size(); i += 2) {
-            const unsigned char hi = static_cast<unsigned char>(bytes[i]);
-            const unsigned char lo = static_cast<unsigned char>(bytes[i + 1]);
-            wchar_t ch = static_cast<wchar_t>((hi << 8) | lo);
-            text.push_back(ch);
-        }
-        return text;
-    }
-
-    std::wstring utf8 = decode_multibyte(std::string(bytes.begin(), bytes.end()), CP_UTF8);
-    if (!utf8.empty()) {
-        return utf8;
-    }
-    return decode_multibyte(std::string(bytes.begin(), bytes.end()), CP_ACP);
-}
-
-std::vector<std::wstring> split_script_lines(const std::wstring& text) {
-    std::vector<std::wstring> lines;
-    std::wstring current;
-    for (wchar_t ch : text) {
-        if (ch == L'\r') {
-            continue;
-        }
-        if (ch == L'\n') {
-            lines.push_back(current);
-            current.clear();
-            continue;
-        }
-        current.push_back(ch);
-    }
-    if (!current.empty()) {
-        lines.push_back(current);
-    }
-    return lines;
-}
-
-std::vector<std::wstring> split_top_level_script_commands(const std::wstring& line) {
-    std::vector<std::wstring> commands;
-    std::wstring current;
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-    int paren_depth = 0;
-
-    for (size_t i = 0; i < line.size(); ++i) {
-        const wchar_t ch = line[i];
-        if (escaped) {
-            current += ch;
-            escaped = false;
-            continue;
-        }
-        if (ch == L'\\' && !in_single_quotes) {
-            current += ch;
-            escaped = true;
-            continue;
-        }
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            current += ch;
-            continue;
-        }
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            current += ch;
-            continue;
-        }
-        if (!in_single_quotes && !in_double_quotes) {
-            if (ch == L'(') {
-                ++paren_depth;
-            } else if (ch == L')' && paren_depth > 0) {
-                --paren_depth;
-            }
-            if (ch == L';' && paren_depth == 0) {
-                if (i + 2 < line.size() && line[i + 1] == L';' && line[i + 2] == L'&') {
-                    current += L";;&";
-                    i += 2;
-                    continue;
-                }
-                if (i + 1 < line.size() && (line[i + 1] == L';' || line[i + 1] == L'&')) {
-                    current += L';';
-                    current += line[i + 1];
-                    ++i;
-                    continue;
-                }
-                const std::wstring command = trim_copy(current);
-                if (!command.empty()) {
-                    commands.push_back(command);
-                }
-                current.clear();
-                continue;
-            }
-        }
-        current += ch;
-    }
-
-    const std::wstring command = trim_copy(current);
-    if (!command.empty()) {
-        commands.push_back(command);
-    }
-    return commands;
-}
-
-std::vector<std::wstring> prepare_script_lines(const std::wstring& text) {
-    const std::vector<std::wstring> physical_lines = split_script_lines(text);
-    std::vector<std::wstring> logical_lines;
-    std::wstring continued;
-
-    for (const std::wstring& physical_line : physical_lines) {
-        std::wstring line = physical_line;
-        size_t trailing = line.size();
-        while (trailing > 0 && (line[trailing - 1] == L' ' || line[trailing - 1] == L'\t')) {
-            --trailing;
-        }
-        const bool escaped_newline = trailing > 0 && line[trailing - 1] == L'\\';
-        const std::wstring line_trimmed = trim_copy(line);
-        const size_t line_command_end = line_trimmed.find_first_of(L" \t");
-        const bool is_cd_path = line_trimmed.substr(0, line_command_end) == L"cd" &&
-            line_trimmed.size() > line_command_end;
-        if (escaped_newline && !is_cd_path) {
-            line.erase(trailing - 1);
-            continued += line;
-            continue;
-        }
-
-        if (!continued.empty()) {
-            line = continued + line;
-            continued.clear();
-        }
-
-        const std::wstring trimmed = trim_copy(line);
-        const bool trailing_pipe = !trimmed.empty() && trimmed.back() == L'|';
-        if (trailing_pipe) {
-            continued = line + L' ';
-            continue;
-        }
-
-        const std::wstring lowered_line = to_lower_copy(trimmed);
-        if (starts_with_for_control_keyword(trimmed)) {
-            const size_t do_pos = lowered_line.find(L"; do");
-            const size_t done_pos = lowered_line.rfind(L"; done");
-            if (do_pos != std::wstring::npos && done_pos != std::wstring::npos && done_pos > do_pos) {
-                logical_lines.push_back(trim_copy(trimmed.substr(0, do_pos)));
-                logical_lines.push_back(L"do");
-                const std::wstring body = trim_copy(trimmed.substr(do_pos + 5, done_pos - (do_pos + 5)));
-                const std::vector<std::wstring> body_commands = split_top_level_script_commands(body);
-                logical_lines.insert(logical_lines.end(), body_commands.begin(), body_commands.end());
-                logical_lines.push_back(L"done" + trimmed.substr(done_pos + 6));
-                continue;
-            }
-        }
-
-        const std::vector<std::wstring> commands = split_top_level_script_commands(line);
-        for (const std::wstring& command : commands) {
-            std::wstring compact = trim_copy(command);
-            std::wstring lowered = to_lower_copy(compact);
-            if (starts_with_for_control_keyword(compact)) {
-                const size_t do_pos = lowered.find(L"; do");
-                const size_t done_pos = lowered.rfind(L"; done");
-                if (do_pos != std::wstring::npos && done_pos != std::wstring::npos && done_pos > do_pos) {
-                    logical_lines.push_back(trim_copy(compact.substr(0, do_pos)));
-                    logical_lines.push_back(L"do");
-                    const std::wstring body = trim_copy(compact.substr(do_pos + 5, done_pos - (do_pos + 5)));
-                    const std::vector<std::wstring> body_commands = split_top_level_script_commands(body);
-                    logical_lines.insert(logical_lines.end(), body_commands.begin(), body_commands.end());
-                    logical_lines.push_back(L"done" + compact.substr(done_pos + 6));
-                    continue;
-                }
-            }
-            logical_lines.push_back(compact);
-        }
-    }
-
-    if (!continued.empty()) {
-        const std::vector<std::wstring> commands = split_top_level_script_commands(continued);
-        logical_lines.insert(logical_lines.end(), commands.begin(), commands.end());
-    }
-    return logical_lines;
-}
-
-// Evaluate ksh93 arithmetic expansion: $(( expr ))
-double evaluate_math_function(const std::wstring& function_name, const std::vector<double>& args) {
-    std::wstring name = to_lower_copy(function_name);
-
-    if (name == L"abs" && args.size() == 1) return std::fabs(args[0]);
-    if (name == L"sqrt" && args.size() == 1) return std::sqrt(args[0]);
-    if (name == L"pow" && args.size() == 2) return std::pow(args[0], args[1]);
-    if (name == L"min" && args.size() == 2) return (args[0] < args[1]) ? args[0] : args[1];
-    if (name == L"max" && args.size() == 2) return (args[0] > args[1]) ? args[0] : args[1];
-    if (name == L"sin" && args.size() == 1) return std::sin(args[0]);
-    if (name == L"cos" && args.size() == 1) return std::cos(args[0]);
-    if (name == L"tan" && args.size() == 1) return std::tan(args[0]);
-    if (name == L"asin" && args.size() == 1) return std::asin(args[0]);
-    if (name == L"acos" && args.size() == 1) return std::acos(args[0]);
-    if (name == L"atan" && args.size() == 1) return std::atan(args[0]);
-    if (name == L"log" && args.size() == 1) return std::log(args[0]);
-    if (name == L"log10" && args.size() == 1) return std::log10(args[0]);
-    if (name == L"exp" && args.size() == 1) return std::exp(args[0]);
-    if (name == L"floor" && args.size() == 1) return std::floor(args[0]);
-    if (name == L"ceil" && args.size() == 1) return std::ceil(args[0]);
-    if (name == L"round" && args.size() == 1) return std::round(args[0]);
-
-    throw std::runtime_error("unsupported function");
-}
-
-std::wstring get_variable_value_simple(const std::wstring& name) {
-    std::wstring resolved = resolve_variable_name(name);
-    std::wstring base_name;
-    std::wstring index_expr;
-    bool has_index = false;
-    if (parse_array_reference_expression(resolved, base_name, index_expr, has_index)) {
-        auto arr_it = ksh_env.arrays.find(base_name);
-        if (arr_it != ksh_env.arrays.end()) {
-            if (!has_index) {
-                auto val_it = arr_it->second.find(L"0");
-                return (val_it != arr_it->second.end()) ? val_it->second : L"0";
-            }
-            bool is_assoc = get_flag_value(ksh_env.associative_flags, base_name);
-            std::wstring key = index_expr;
-            if (!is_assoc) {
-                size_t idx = 0;
-                if (parse_non_negative_index(index_expr, idx)) {
-                    key = std::to_wstring(idx);
-                }
-            }
-            auto val_it = arr_it->second.find(key);
-            return (val_it != arr_it->second.end()) ? val_it->second : L"0";
-        }
-    }
-    auto it = ksh_env.variables.find(resolved);
-    if (it != ksh_env.variables.end()) {
-        return it->second;
-    }
-    return L"0";
-}
-
-class ArithmeticParser {
-public:
-    explicit ArithmeticParser(const std::wstring& expression) : expr(expression), pos(0), depth(0), has_float_operands(false) {}
-
-    bool is_float() const { return has_float_operands; }
-
-    static long long to_safe_int64(double v) {
-        if (!std::isfinite(v)) return 0;
-        if (v >= static_cast<double>(LLONG_MAX)) return LLONG_MAX;
-        if (v <= static_cast<double>(LLONG_MIN)) return LLONG_MIN;
-        return static_cast<long long>(v);
-    }
-
-    double parse() {
-        double value = parse_expression();
-        skip_spaces();
-        if (pos != expr.size()) {
-            throw std::runtime_error("unexpected trailing characters");
-        }
-        return value;
-    }
-
-private:
-    const std::wstring& expr;
-    size_t pos;
-    int depth;
-    bool has_float_operands;
-
-    void check_depth() {
-        if (depth >= kMaxArithmeticParseDepth) {
-            throw std::runtime_error("arithmetic expression nesting too deep");
-        }
-    }
-
-    void skip_spaces() {
-        while (pos < expr.size() && std::iswspace(expr[pos])) {
-            pos++;
-        }
-    }
-
-    bool consume(wchar_t token) {
-        skip_spaces();
-        if (pos < expr.size() && expr[pos] == token) {
-            pos++;
-            return true;
-        }
+    std::vector<std::wstring> tokens;
+    if (!tokenize_ksh_conditional(condition_str, tokens, error_message)) {
         return false;
     }
 
-    bool consume(const wchar_t* token) {
-        skip_spaces();
-        const size_t length = wcslen(token);
-        if (expr.compare(pos, length, token) == 0) {
-            pos += length;
-            return true;
-        }
+    if (tokens.empty()) {
+        error_message = L"empty conditional expression";
         return false;
     }
 
-    double parse_expression() {
-        check_depth();
-        depth++;
+    bool overall_value = false;
+    bool have_or_term = false;
+    size_t i = 0;
 
-        // Try parsing assignment target: identifier followed by optional [...]
-        size_t saved_pos = pos;
-        skip_spaces();
-        if (pos < expr.size() && (std::iswalpha(expr[pos]) || expr[pos] == L'_')) {
-            std::wstring var = parse_identifier();
-            skip_spaces();
-            bool parsed_subscript = true;
-            std::wstring subscript_expr;
-            if (pos < expr.size() && expr[pos] == L'[') {
-                pos++; // consume '['
-                int bracket_depth = 1;
-                while (pos < expr.size() && bracket_depth > 0) {
-                    if (expr[pos] == L'[') {
-                        bracket_depth++;
-                    } else if (expr[pos] == L']') {
-                        bracket_depth--;
-                        if (bracket_depth == 0) {
-                            pos++; // consume ']'
-                            break;
-                        }
-                    }
-                    subscript_expr.push_back(expr[pos]);
-                    pos++;
-                }
-                if (bracket_depth > 0) {
-                    parsed_subscript = false;
-                }
-            }
+    while (i < tokens.size()) {
+        bool and_value = true;
+        bool have_and_value = false;
 
-            if (parsed_subscript) {
-                skip_spaces();
-                bool is_plus_eq = (pos + 1 < expr.size() && expr[pos] == L'+' && expr[pos + 1] == L'=');
-                bool is_minus_eq = (pos + 1 < expr.size() && expr[pos] == L'-' && expr[pos + 1] == L'=');
-                bool is_eq = (pos < expr.size() && expr[pos] == L'=' && (pos + 1 >= expr.size() || expr[pos + 1] != L'='));
-
-                if (is_eq || is_plus_eq || is_minus_eq) {
-                    if (is_eq) pos++;
-                    else pos += 2;
-
-                    double rhs = parse_expression();
-
-                    std::wstring lhs_target = var;
-                    if (!subscript_expr.empty()) {
-                        ArithmeticParser sub_parser(subscript_expr);
-                        double idx_val = sub_parser.parse();
-                        std::wstring idx_str;
-                        if (idx_val == std::floor(idx_val)) {
-                            idx_str = std::to_wstring(static_cast<long long>(idx_val));
-                        } else {
-                            idx_str = std::to_wstring(idx_val);
-                            size_t dot_or_comma = idx_str.find_first_of(L".,");
-                            if (dot_or_comma != std::wstring::npos) {
-                                while (!idx_str.empty() && idx_str.back() == L'0') {
-                                    idx_str.pop_back();
-                                }
-                                if (!idx_str.empty() && (idx_str.back() == L'.' || idx_str.back() == L',')) {
-                                    idx_str.pop_back();
-                                }
-                            }
-                        }
-                        lhs_target += L"[" + idx_str + L"]";
-                    }
-
-                    double lhs_val = 0.0;
-                    if (is_plus_eq || is_minus_eq) {
-                        std::wstring current_str = get_variable_value_simple(lhs_target);
-                        try {
-                            lhs_val = std::stod(current_str);
-                        } catch (...) {
-                            lhs_val = 0.0;
-                        }
-                    }
-
-                    double final_val = rhs;
-                    if (is_plus_eq) final_val = lhs_val + rhs;
-                    else if (is_minus_eq) final_val = lhs_val - rhs;
-
-                    std::wstring val_str;
-                    if (final_val == std::floor(final_val)) {
-                        val_str = std::to_wstring(static_cast<long long>(final_val));
-                    } else {
-                        val_str = std::to_wstring(final_val);
-                        size_t dot_or_comma = val_str.find_first_of(L".,");
-                        if (dot_or_comma != std::wstring::npos) {
-                            while (!val_str.empty() && val_str.back() == L'0') {
-                                val_str.pop_back();
-                            }
-                            if (!val_str.empty() && (val_str.back() == L'.' || val_str.back() == L',')) {
-                                val_str.pop_back();
-                            }
-                        }
-                    }
-
-                    std::wstring err;
-                    assign_parameter_value(lhs_target, val_str, false, false, err, false);
-                    depth--;
-                    return final_val;
-                }
-            }
-        }
-
-        // Restore pos if not an assignment expression
-        pos = saved_pos;
-
-        double value = parse_ternary();
-        depth--;
-        return value;
-    }
-
-    double parse_ternary() {
-        check_depth();
-        depth++;
-        double condition = parse_logical_or();
-        if (!consume(L'?')) {
-            depth--;
-            return condition;
-        }
-        const double when_true = parse_expression();
-        if (!consume(L':')) {
-            depth--;
-            throw std::runtime_error("missing ':' in ternary expression");
-        }
-        const double when_false = parse_ternary();
-        depth--;
-        return condition != 0.0 ? when_true : when_false;
-    }
-
-    double parse_logical_or() {
-        double value = parse_logical_and();
-        while (consume(L"||")) {
-            const double right = parse_logical_and();
-            value = (value != 0.0 || right != 0.0) ? 1.0 : 0.0;
-        }
-        return value;
-    }
-
-    double parse_logical_and() {
-        double value = parse_bitwise_or();
-        while (consume(L"&&")) {
-            const double right = parse_bitwise_or();
-            value = (value != 0.0 && right != 0.0) ? 1.0 : 0.0;
-        }
-        return value;
-    }
-
-    double parse_bitwise_or() {
-        double value = parse_bitwise_xor();
-        while (true) {
-            skip_spaces();
-            if (expr.compare(pos, 2, L"||") == 0 || !consume(L'|')) break;
-            value = static_cast<double>(to_safe_int64(value) | to_safe_int64(parse_bitwise_xor()));
-        }
-        return value;
-    }
-
-    double parse_bitwise_xor() {
-        double value = parse_bitwise_and();
-        while (consume(L'^')) value = static_cast<double>(to_safe_int64(value) ^ to_safe_int64(parse_bitwise_and()));
-        return value;
-    }
-
-    double parse_bitwise_and() {
-        double value = parse_equality();
-        while (true) {
-            skip_spaces();
-            if (expr.compare(pos, 2, L"&&") == 0 || !consume(L'&')) break;
-            value = static_cast<double>(to_safe_int64(value) & to_safe_int64(parse_equality()));
-        }
-        return value;
-    }
-
-    double parse_equality() {
-        double value = parse_relational();
-        while (true) {
-            if (consume(L"==")) value = value == parse_relational() ? 1.0 : 0.0;
-            else if (consume(L"!=")) value = value != parse_relational() ? 1.0 : 0.0;
-            else break;
-        }
-        return value;
-    }
-
-    double parse_relational() {
-        double value = parse_shift();
-        while (true) {
-            if (consume(L"<=")) value = value <= parse_shift() ? 1.0 : 0.0;
-            else if (consume(L">=")) value = value >= parse_shift() ? 1.0 : 0.0;
-            else if (consume(L'<')) value = value < parse_shift() ? 1.0 : 0.0;
-            else if (consume(L'>')) value = value > parse_shift() ? 1.0 : 0.0;
-            else break;
-        }
-        return value;
-    }
-
-    double parse_shift() {
-        double value = parse_additive();
-        while (true) {
-            if (consume(L"<<")) {
-                double rhs = parse_additive();
-                long long lhs_i = to_safe_int64(value);
-                long long shift_cnt = to_safe_int64(rhs);
-                if (shift_cnt < 0 || shift_cnt >= 64) {
-                    value = 0.0;
-                } else {
-                    value = static_cast<double>(static_cast<unsigned long long>(lhs_i) << shift_cnt);
-                }
-            } else if (consume(L">>")) {
-                double rhs = parse_additive();
-                long long lhs_i = to_safe_int64(value);
-                long long shift_cnt = to_safe_int64(rhs);
-                if (shift_cnt < 0) {
-                    value = 0.0;
-                } else if (shift_cnt >= 64) {
-                    value = (lhs_i < 0) ? -1.0 : 0.0;
-                } else {
-                    value = static_cast<double>(lhs_i >> shift_cnt);
-                }
-            } else {
-                break;
-            }
-        }
-        return value;
-    }
-
-    double parse_additive() {
-        double value = parse_term();
-        while (true) {
-            if (consume(L'+')) value += parse_term();
-            else if (consume(L'-')) value -= parse_term();
-            else break;
-        }
-        return value;
-    }
-
-    double parse_term() {
-        double value = parse_power();
-        while (true) {
-            if (consume(L'*')) {
-                value *= parse_power();
-            } else if (consume(L'/')) {
-                double right = parse_power();
-                if (right == 0.0) {
-                    throw std::runtime_error("division by zero");
-                }
-                if (!has_float_operands && std::floor(value) == value && std::floor(right) == right) {
-                    long long i_val = to_safe_int64(value);
-                    long long i_right = to_safe_int64(right);
-                    value = static_cast<double>(i_val / i_right);
-                } else {
-                    has_float_operands = true;
-                    value /= right;
-                }
-            } else if (consume(L'%')) {
-                double right = parse_power();
-                if (right == 0.0) {
-                    throw std::runtime_error("modulo by zero");
-                }
-                value = std::fmod(value, right);
-            } else {
-                break;
-            }
-        }
-        return value;
-    }
-
-    double parse_power() {
-        double left = parse_unary();
-        if (consume(L"**")) {
-            check_depth();
-            depth++;
-            double right = parse_power();
-            depth--;
-            return std::pow(left, right);
-        }
-        return left;
-    }
-
-    double parse_unary() {
-        check_depth();
-        depth++;
-        double result;
-        if (consume(L'+')) {
-            result = parse_unary();
-        } else if (consume(L'-')) {
-            result = -parse_unary();
-        } else {
-            result = parse_primary();
-        }
-        depth--;
-        return result;
-    }
-
-    std::wstring parse_identifier() {
-        skip_spaces();
-        std::wstring identifier;
-        while (pos < expr.size() && (std::iswalnum(expr[pos]) || expr[pos] == L'_')) {
-            identifier.push_back(expr[pos]);
-            pos++;
-        }
-        return identifier;
-    }
-
-    double parse_number() {
-        skip_spaces();
-        size_t start = pos;
-        
-        // Let's first read a sequence of digits
-        size_t digit_start = pos;
-        while (pos < expr.size() && std::iswdigit(expr[pos])) {
-            pos++;
-        }
-        
-        if (pos < expr.size() && expr[pos] == L'#') {
-            // We have base#number!
-            std::wstring base_str = expr.substr(digit_start, pos - digit_start);
-            if (base_str.empty()) {
-                throw std::runtime_error("missing base for arithmetic conversion");
-            }
-            int base = 0;
-            if (!try_parse_int_strict(base_str, base)) {
-                throw std::runtime_error("invalid arithmetic base");
-            }
-            if (base < 2 || base > 64) {
-                throw std::runtime_error("invalid arithmetic base (must be 2-64)");
-            }
-            
-            pos++; // consume '#'
-            double value = 0;
-            bool read_any = false;
-            while (pos < expr.size()) {
-                wchar_t ch = expr[pos];
-                int digit_val = -1;
-                if (ch >= L'0' && ch <= L'9') {
-                    digit_val = ch - L'0';
-                } else if (ch >= L'a' && ch <= L'z') {
-                    digit_val = (base <= 36) ? (ch - L'a' + 10) : (ch - L'a' + 10);
-                } else if (ch >= L'A' && ch <= L'Z') {
-                    digit_val = (base <= 36) ? (ch - L'A' + 10) : (ch - L'A' + 36);
-                } else if (ch == L'_') {
-                    digit_val = 62;
-                } else if (ch == L'@') {
-                    digit_val = 63;
-                }
-                
-                if (digit_val >= 0 && digit_val < base) {
-                    value = value * base + digit_val;
-                    pos++;
-                    read_any = true;
-                } else {
-                    break;
-                }
-            }
-            
-            if (!read_any) {
-                throw std::runtime_error("invalid character for base arithmetic");
-            }
-            return value;
-        }
-        
-        // Otherwise, fall back to standard decimal parsing!
-        pos = start;
-        bool seen_dot = false;
-        while (pos < expr.size()) {
-            wchar_t ch = expr[pos];
-            if (std::iswdigit(ch)) {
-                pos++;
-                continue;
-            }
-            if (ch == L'.' && !seen_dot) {
-                seen_dot = true;
-                pos++;
-                continue;
-            }
-            break;
-        }
-        if (start == pos) {
-            throw std::runtime_error("number expected");
-        }
-        if (seen_dot) {
-            has_float_operands = true;
-        }
-        return std::stod(expr.substr(start, pos - start));
-    }
-
-    double parse_primary() {
-        skip_spaces();
-        if (consume(L'(')) {
-            double inner = parse_expression();
-            if (!consume(L')')) {
-                throw std::runtime_error("missing closing parenthesis");
-            }
-            return inner;
-        }
-
-        if (pos < expr.size() && (std::iswalpha(expr[pos]) || expr[pos] == L'_')) {
-            std::wstring identifier = parse_identifier();
-            std::wstring lowered = to_lower_copy(identifier);
-            if (lowered == L"pi") {
-                has_float_operands = true;
-                return std::acos(-1.0);
-            }
-            if (lowered == L"e") {
-                has_float_operands = true;
-                return std::exp(1.0);
-            }
-
-            if (consume(L'(')) {
-                std::vector<double> args;
-                skip_spaces();
-                if (!consume(L')')) {
-                    while (true) {
-                        args.push_back(parse_expression());
-                        if (consume(L')')) {
-                            break;
-                        }
-                        if (!consume(L',')) {
-                            throw std::runtime_error("comma expected");
-                        }
-                    }
-                }
-                has_float_operands = true;
-                return evaluate_math_function(identifier, args);
-            }
-
-            bool is_set = false;
-            std::wstring val = get_variable_value_with_hooks(identifier, is_set);
-            if (is_set) {
-                if (val.find(L'.') != std::wstring::npos) {
-                    has_float_operands = true;
-                }
-                return std::stod(val);
-            }
-            return 0.0;
-        }
-
-        return parse_number();
-    }
-};
-
-std::wstring evaluate_arithmetic(const std::wstring& expr) {
-    try {
-        ArithmeticParser parser(expr);
-        double value = parser.parse();
-        if (!std::isfinite(value)) {
-            return L"0";
-        }
-
-        if (!parser.is_float()) {
-            return std::to_wstring(ArithmeticParser::to_safe_int64(value));
-        }
-
-        double nearest = std::round(value);
-        if (std::fabs(value - nearest) < 1e-9) {
-            return std::to_wstring(static_cast<long long>(nearest));
-        }
-
-        wchar_t buffer[64];
-        _snwprintf_s(buffer, _countof(buffer), _TRUNCATE, L"%.10f", value);
-        std::wstring result(buffer);
-        while (!result.empty() && result.back() == L'0') {
-            result.pop_back();
-        }
-        if (!result.empty() && (result.back() == L'.' || result.back() == L',')) {
-            result.pop_back();
-        }
-        return result.empty() ? L"0" : result;
-    } catch (...) {
-        return L"0";
-    }
-}
-
-std::wstring trim_trailing_line_endings(const std::wstring& value) {
-    size_t end = value.size();
-    while (end > 0 && (value[end - 1] == L'\n' || value[end - 1] == L'\r')) {
-        end--;
-    }
-    return value.substr(0, end);
-}
-
-std::wstring run_command_and_capture_stdout(const std::wstring& command, DWORD& exit_code) {
-    exit_code = 1;
-
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = nullptr;
-    sa.bInheritHandle = TRUE;
-
-    HANDLE read_pipe = nullptr;
-    HANDLE write_pipe = nullptr;
-    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
-        return L"";
-    }
-
-    if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
-        CloseHandle(read_pipe);
-        CloseHandle(write_pipe);
-        return L"";
-    }
-
-    std::wstring command_line;
-    if (!build_cmd_shell_command_line(command, command_line)) {
-        CloseHandle(read_pipe);
-        CloseHandle(write_pipe);
-        return L"";
-    }
-    STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    ZeroMemory(&pi, sizeof(pi));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    HANDLE inherited_stdin = GetStdHandle(STD_INPUT_HANDLE);
-    HANDLE inherited_stderr = GetStdHandle(STD_ERROR_HANDLE);
-    HANDLE dup_stdin = nullptr;
-    HANDLE dup_stderr = nullptr;
-
-    if (inherited_stdin != nullptr && inherited_stdin != INVALID_HANDLE_VALUE) {
-        if (!DuplicateHandle(GetCurrentProcess(), inherited_stdin, GetCurrentProcess(), &dup_stdin, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
-            CloseHandle(read_pipe);
-            CloseHandle(write_pipe);
-            return L"";
-        }
-        inherited_stdin = dup_stdin;
-    }
-
-    if (inherited_stderr != nullptr && inherited_stderr != INVALID_HANDLE_VALUE) {
-        if (!DuplicateHandle(GetCurrentProcess(), inherited_stderr, GetCurrentProcess(), &dup_stderr, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
-            if (dup_stdin != nullptr) {
-                CloseHandle(dup_stdin);
-            }
-            CloseHandle(read_pipe);
-            CloseHandle(write_pipe);
-            return L"";
-        }
-        inherited_stderr = dup_stderr;
-    }
-
-    si.hStdInput = inherited_stdin;
-    si.hStdOutput = write_pipe;
-    si.hStdError = inherited_stderr;
-
-    std::vector<HANDLE> inherited_handles = { si.hStdInput, si.hStdOutput, si.hStdError };
-    BOOL created = create_process_with_handle_list(command_line, si, inherited_handles, CREATE_NO_WINDOW, pi) ? TRUE : FALSE;
-
-    CloseHandle(write_pipe);
-    if (dup_stdin != nullptr) {
-        CloseHandle(dup_stdin);
-    }
-    if (dup_stderr != nullptr) {
-        CloseHandle(dup_stderr);
-    }
-
-    if (!created) {
-        CloseHandle(read_pipe);
-        return L"";
-    }
-
-    std::string stdout_bytes;
-    char buffer[4096];
-    DWORD bytes_read = 0;
-    bool output_limit_hit = false;
-    while (ReadFile(read_pipe, buffer, static_cast<DWORD>(sizeof(buffer)), &bytes_read, nullptr) && bytes_read > 0) {
-        if (stdout_bytes.size() + bytes_read > kMaxCommandSubstitutionOutputBytes) {
-            output_limit_hit = true;
-            TerminateProcess(pi.hProcess, 1);
-            break;
-        }
-        stdout_bytes.append(buffer, buffer + bytes_read);
-    }
-
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    register_child_process_times(pi.hProcess);
-    GetExitCodeProcess(pi.hProcess, &exit_code);
-
-    if (output_limit_hit) {
-        std::wcerr << L"ksh: command substitution output exceeded limit\n";
-        exit_code = 1;
-        g_expansion_error = true;
-        ksh_env.variables[L"?"] = L"1";
-    }
-
-    CloseHandle(read_pipe);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    UINT cp = GetConsoleOutputCP();
-    if (cp == 0) {
-        cp = CP_OEMCP;
-    }
-
-    std::wstring text = decode_multibyte(stdout_bytes, CP_UTF8);
-    if (text.empty() && !stdout_bytes.empty()) {
-        text = decode_multibyte(stdout_bytes, cp);
-    }
-    if (text.empty() && !stdout_bytes.empty()) {
-        text = decode_multibyte(stdout_bytes, CP_ACP);
-    }
-
-    return trim_trailing_line_endings(text);
-}
-
-bool parse_command_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index) {
-    content.clear();
-    next_index = start_index;
-
-    int depth = 1;
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-
-    size_t i = start_index;
-    while (i < input.size()) {
-        wchar_t ch = input[i];
-
-        if (escaped) {
-            content += ch;
-            escaped = false;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            content += ch;
-            escaped = true;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            content += ch;
-            i++;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            content += ch;
-            i++;
-            continue;
-        }
-
-        if (!in_single_quotes && !in_double_quotes) {
-            if (ch == L'$' && (i + 1) < input.size() && input[i + 1] == L'(' && !((i + 2) < input.size() && input[i + 2] == L'(')) {
-                depth++;
-                if (depth > kMaxSubstitutionParseDepth) {
-                    return false;
-                }
-                content += L"$(";
-                i += 2;
-                continue;
-            }
-
-            if (ch == L'(') {
-                depth++;
-                if (depth > kMaxSubstitutionParseDepth) {
-                    return false;
-                }
-                content += ch;
+        while (i < tokens.size() && tokens[i] != L"||") {
+            size_t segment_start = i;
+            while (i < tokens.size() && tokens[i] != L"&&" && tokens[i] != L"||") {
                 i++;
-                continue;
             }
 
-            if (ch == L')') {
-                depth--;
-                if (depth == 0) {
-                    next_index = i + 1;
-                    return true;
-                }
-                content += ch;
-                i++;
-                continue;
-            }
-        }
-
-        content += ch;
-        i++;
-    }
-
-    return false;
-}
-
-bool parse_arithmetic_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index) {
-    content.clear();
-    next_index = start_index;
-
-    int paren_depth = 0;
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-
-    size_t i = start_index;
-    while (i < input.size()) {
-        wchar_t ch = input[i];
-
-        if (escaped) {
-            content += ch;
-            escaped = false;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            content += ch;
-            escaped = true;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            content += ch;
-            i++;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            content += ch;
-            i++;
-            continue;
-        }
-
-        if (!in_single_quotes && !in_double_quotes) {
-            if (ch == L'(') {
-                paren_depth++;
-                if (paren_depth > kMaxSubstitutionParseDepth) {
-                    return false;
-                }
-                content += ch;
-                i++;
-                continue;
-            }
-
-            if (ch == L')') {
-                if (paren_depth > 0) {
-                    paren_depth--;
-                    content += ch;
-                    i++;
-                    continue;
-                }
-
-                if ((i + 1) < input.size() && input[i + 1] == L')') {
-                    next_index = i + 2;
-                    return true;
-                }
-            }
-        }
-
-        content += ch;
-        i++;
-    }
-
-    return false;
-}
-
-std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_index, size_t& next_index, bool in_double_quotes) {
-    auto is_assignable_parameter_name = [](const std::wstring& name) -> bool {
-        if (name.empty()) {
-            return false;
-        }
-        if (!(std::iswalpha(name[0]) || name[0] == L'_')) {
-            return false;
-        }
-        return std::all_of(name.begin(), name.end(), [](wchar_t ch) {
-            return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.';
-        });
-    };
-
-    auto is_valid_variable_name = [](const std::wstring& name) -> bool {
-        if (name.empty()) {
-            return false;
-        }
-        if (name[0] == L'.') {
-            if (name.size() < 2) return false;
-            return std::all_of(name.begin() + 1, name.end(), [](wchar_t ch) {
-                return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.' || ch == L'/';
-            });
-        }
-        if (!(std::iswalpha(name[0]) || name[0] == L'_')) {
-            return false;
-        }
-        return std::all_of(name.begin(), name.end(), [](wchar_t ch) {
-            return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.' || ch == L'/';
-        });
-    };
-
-    auto parse_array_reference = [&](const std::wstring& text, std::wstring& array_name, std::wstring& index_expr, bool& has_index) -> bool {
-        array_name.clear();
-        index_expr.clear();
-        has_index = false;
-
-        size_t open = text.find(L'[');
-        if (open == std::wstring::npos) {
-            array_name = text;
-            return is_valid_variable_name(array_name);
-        }
-
-        if (open == 0 || text.back() != L']') {
-            return false;
-        }
-
-        array_name = text.substr(0, open);
-        if (!is_valid_variable_name(array_name)) {
-            return false;
-        }
-
-        index_expr = text.substr(open + 1, text.size() - open - 2);
-        if (index_expr.empty()) {
-            return false;
-        }
-
-        has_index = true;
-        return true;
-    };
-
-    auto parse_non_negative_index = [](const std::wstring& text, size_t& out_index) -> bool {
-        if (text.empty()) {
-            return false;
-        }
-
-        try {
-            size_t consumed = 0;
-            unsigned long long parsed = std::stoull(text, &consumed);
-            if (consumed != text.size()) {
+            bool segment_value = false;
+            if (!evaluate_ksh_simple_condition(tokens, segment_start, i, segment_value, error_message)) {
                 return false;
             }
-            out_index = static_cast<size_t>(parsed);
-            return true;
+
+            if (!have_and_value) {
+                and_value = segment_value;
+                have_and_value = true;
+            } else {
+                and_value = and_value && segment_value;
+            }
+
+            if (i < tokens.size() && tokens[i] == L"&&") {
+                i++;
+                if (i >= tokens.size()) {
+                    error_message = L"dangling && in conditional expression";
+                    return false;
+                }
+            }
+        }
+
+        if (!have_and_value) {
+            error_message = L"missing expression between logical operators";
+            return false;
+        }
+
+        if (!have_or_term) {
+            overall_value = and_value;
+            have_or_term = true;
+        } else {
+            overall_value = overall_value || and_value;
+        }
+
+        if (i < tokens.size() && tokens[i] == L"||") {
+            i++;
+            if (i >= tokens.size()) {
+                error_message = L"dangling || in conditional expression";
+                return false;
+            }
+        }
+    }
+
+    value = overall_value;
+    return true;
+}
+
+// -----------------------------------------------------------------------------
+// Formatted Output & System Builtin Execution
+// -----------------------------------------------------------------------------
+
+bool format_printf_time_argument(const std::wstring& arg_value, std::wstring& formatted_time) {
+    __time64_t timestamp = _time64(nullptr);
+
+    if (!arg_value.empty() && arg_value != L"-1") {
+        try {
+            timestamp = static_cast<__time64_t>(std::stoll(arg_value, nullptr, 0));
         } catch (...) {
             return false;
         }
-    };
+    }
 
-    auto join_array_values = [](const std::vector<std::wstring>& values, wchar_t separator) -> std::wstring {
-        std::wstring joined;
-        for (size_t i = 0; i < values.size(); ++i) {
-            joined += values[i];
-            if (i + 1 < values.size()) {
-                joined.push_back(separator);
-            }
+    struct tm local_tm;
+    if (_localtime64_s(&local_tm, &timestamp) != 0) {
+        return false;
+    }
+
+    wchar_t time_buffer[128];
+    size_t written = wcsftime(time_buffer, _countof(time_buffer), L"%Y-%m-%d %H:%M:%S", &local_tm);
+    if (written == 0) {
+        return false;
+    }
+
+    formatted_time.assign(time_buffer, written);
+    return true;
+}
+
+bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstring& output_str, std::wstring& error_msg) {
+    if (tokens.size() < 2) {
+        error_msg = L"ksh: printf: usage: printf [-v varname] format [arguments ...]";
+        return false;
+    }
+    
+    bool has_var = false;
+    std::wstring varname;
+    size_t format_idx = 1;
+    
+    if (tokens[1] == L"-v") {
+        if (tokens.size() < 4) {
+            error_msg = L"ksh: printf: usage: printf [-v varname] format [arguments ...]";
+            return false;
         }
-        return joined;
-    };
-
-    auto try_get_parameter_value = [&](const std::wstring& name, std::wstring& out_value, bool& is_set) {
-        out_value.clear();
-        is_set = false;
-
-        const std::vector<std::wstring>& script_args = current_script_args();
-        const std::wstring script_name = current_script_name();
-
-        if (name == L"#") {
-            out_value = std::to_wstring(script_args.size());
-            is_set = true;
-            return;
-        }
-
-        if (name == L"@") {
-            if (in_double_quotes) {
-                out_value = join_array_values(script_args, k_array_at_quoted_separator);
-            } else {
-                out_value = join_script_args(script_args);
-            }
-            is_set = true;
-            return;
-        }
-
-        if (name == L"*") {
-            wchar_t separator = L' ';
-            std::map<std::wstring, std::wstring>::const_iterator ifs_it = ksh_env.variables.find(L"IFS");
-            if (ifs_it != ksh_env.variables.end()) {
-                if (ifs_it->second.empty()) {
-                    separator = L'\0';
-                } else {
-                    separator = ifs_it->second[0];
-                }
-            }
-
-            if (separator == L'\0') {
-                out_value.clear();
-                for (const std::wstring& arg : script_args) {
-                    out_value += arg;
-                }
-            } else {
-                out_value = join_array_values(script_args, separator);
-            }
-            is_set = true;
-            return;
-        }
-
-        if (name == L"$") {
-            out_value = std::to_wstring(GetCurrentProcessId());
-            is_set = true;
-            return;
-        }
-
-        if (!name.empty() && std::all_of(name.begin(), name.end(), [](wchar_t ch) { return std::iswdigit(ch) != 0; })) {
-            unsigned long arg_index = 0;
-            if (!try_parse_unsigned_long_strict(name, arg_index)) {
-                return;
-            }
-            if (arg_index == 0) {
-                out_value = script_name;
-                is_set = true;
-                return;
-            }
-            if (arg_index <= script_args.size()) {
-                out_value = script_args[static_cast<size_t>(arg_index - 1)];
-                is_set = true;
-                return;
-            }
-            return;
-        }
-
-        std::wstring array_name;
-        std::wstring index_expr;
-        bool has_index = false;
-        bool is_key_expansion = false;
-        std::wstring name_to_use = name;
-        if (name.size() > 1 && name.front() == L'!') {
-            is_key_expansion = true;
-            name_to_use = name.substr(1);
-        }
-
-        bool handled_nameref_key = false;
-        std::wstring array_name_tmp;
-        std::wstring index_expr_tmp;
-        bool has_index_tmp = false;
-        if (parse_array_reference(name_to_use, array_name_tmp, index_expr_tmp, has_index_tmp)) {
-            if (is_key_expansion && !has_index_tmp) {
-                if (get_flag_value(ksh_env.nameref_flags, array_name_tmp)) {
-                    std::map<std::wstring, std::wstring>::const_iterator val_it = ksh_env.variables.find(array_name_tmp);
-                    if (val_it != ksh_env.variables.end()) {
-                        out_value = val_it->second;
-                        is_set = true;
-                        handled_nameref_key = true;
-                    }
-                }
-            }
-        }
-
-        if (!handled_nameref_key) {
-            name_to_use = resolve_variable_name(name_to_use);
-            if (parse_array_reference(name_to_use, array_name, index_expr, has_index)) {
-                std::map<std::wstring, std::map<std::wstring, std::wstring>>::const_iterator arr_it = ksh_env.arrays.find(array_name);
-                if (arr_it != ksh_env.arrays.end()) {
-                    is_set = true;
-
-                    if (is_key_expansion) {
-                        if (has_index && (index_expr == L"@" || index_expr == L"*")) {
-                            std::vector<std::wstring> keys;
-                            for (const auto& pair : arr_it->second) {
-                                keys.push_back(pair.first);
+        has_var = true;
+        varname = tokens[2];
+        format_idx = 3;
+    }
+    
+    std::wstring format = tokens[format_idx];
+    size_t arg_idx = format_idx + 1;
+    output_str.clear();
+    
+    bool first_pass = true;
+    while (first_pass || arg_idx < tokens.size()) {
+        first_pass = false;
+        
+        size_t last_consumed_arg_idx = arg_idx;
+        
+        for (size_t i = 0; i < format.size(); ) {
+            if (format[i] == L'\\') {
+                if (i + 1 < format.size()) {
+                    wchar_t next = format[i + 1];
+                    if (next == L'n') { output_str += L'\n'; i += 2; }
+                    else if (next == L't') { output_str += L'\t'; i += 2; }
+                    else if (next == L'r') { output_str += L'\r'; i += 2; }
+                    else if (next == L'a') { output_str += L'\a'; i += 2; }
+                    else if (next == L'b') { output_str += L'\b'; i += 2; }
+                    else if (next == L'f') { output_str += L'\f'; i += 2; }
+                    else if (next == L'v') { output_str += L'\v'; i += 2; }
+                    else if (next == L'\\') { output_str += L'\\'; i += 2; }
+                    else if (next == L'c') {
+                        if (has_var) {
+                            std::wstring assign_err;
+                            if (!assign_parameter_value(varname, output_str, false, false, assign_err)) {
+                                error_msg = L"ksh: printf: variable assignment failed: " + assign_err;
+                                return false;
                             }
-                            if (index_expr == L"@") {
-                                out_value = in_double_quotes
-                                    ? join_array_values(keys, k_array_at_quoted_separator)
-                                    : join_array_values(keys, L' ');
-                            } else {
-                                out_value = join_array_values(keys, L' ');
-                            }
-                        } else {
-                            out_value = array_name;
+                            output_str.clear();
                         }
-                        return;
-                    }
-
-                    if (!has_index) {
-                        std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(L"0");
-                        out_value = (val_it != arr_it->second.end()) ? val_it->second : L"";
-                        return;
-                    }
-
-                    if (index_expr == L"@") {
-                        std::vector<std::wstring> values = get_array_values_vector(array_name);
-                        out_value = in_double_quotes
-                            ? join_array_values(values, k_array_at_quoted_separator)
-                            : join_array_values(values, L' ');
-                        return;
-                    }
-
-                    if (index_expr == L"*") {
-                        std::vector<std::wstring> values = get_array_values_vector(array_name);
-                        out_value = join_array_values(values, L' ');
-                        return;
-                    }
-
-                    bool is_assoc = false;
-                    std::map<std::wstring, bool>::const_iterator assoc_it = ksh_env.associative_flags.find(array_name);
-                    if (assoc_it != ksh_env.associative_flags.end()) {
-                        is_assoc = assoc_it->second;
-                    }
-
-                    if (is_assoc) {
-                        std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(index_expr);
-                        if (val_it != arr_it->second.end()) {
-                            out_value = val_it->second;
-                        } else {
-                            out_value.clear();
-                        }
-                    } else {
-                        size_t idx = 0;
-                        if (parse_non_negative_index(index_expr, idx)) {
-                            std::wstring key = std::to_wstring(idx);
-                            std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(key);
-                            if (val_it != arr_it->second.end()) {
-                                out_value = val_it->second;
-                            } else {
-                                out_value.clear();
-                            }
-                        } else {
-                            is_set = false;
-                            out_value.clear();
-                        }
-                    }
-                    return;
-                }
-            }
-        }
-
-        std::wstring hook_val = get_variable_value_with_hooks(name_to_use, is_set);
-        if (is_set) {
-            out_value = hook_val;
-            return;
-        }
-
-        wchar_t small_buf[256];
-        DWORD ret = GetEnvironmentVariableW(name_to_use.c_str(), small_buf, _countof(small_buf));
-        if (ret > 0 && ret < _countof(small_buf)) {
-            out_value.assign(small_buf, ret);
-            is_set = true;
-        } else if (ret >= _countof(small_buf)) {
-            std::vector<wchar_t> dyn_buf(ret + 1);
-            DWORD dyn_ret = GetEnvironmentVariableW(name_to_use.c_str(), dyn_buf.data(), static_cast<DWORD>(dyn_buf.size()));
-            if (dyn_ret > 0 && dyn_ret < dyn_buf.size()) {
-                out_value.assign(dyn_buf.data(), dyn_ret);
-                is_set = true;
-            }
-        } else if (GetLastError() == ERROR_SUCCESS) {
-            out_value.clear();
-            is_set = true;
-        }
-    };
-
-    auto parse_braced_parameter_word = [](const std::wstring& text, size_t start_index, std::wstring& word, size_t& after_closing_brace) -> bool {
-        word.clear();
-        after_closing_brace = start_index;
-
-        int brace_depth = 0;
-        bool in_single_quotes = false;
-        bool in_double_quotes = false;
-        bool escaped = false;
-
-        size_t i = start_index;
-        while (i < text.size()) {
-            wchar_t ch = text[i];
-
-            if (escaped) {
-                word += ch;
-                escaped = false;
-                i++;
-                continue;
-            }
-
-            if (ch == L'\\' && !in_single_quotes) {
-                word += ch;
-                escaped = true;
-                i++;
-                continue;
-            }
-
-            if (ch == L'\'' && !in_double_quotes) {
-                in_single_quotes = !in_single_quotes;
-                word += ch;
-                i++;
-                continue;
-            }
-
-            if (ch == L'"' && !in_single_quotes) {
-                in_double_quotes = !in_double_quotes;
-                word += ch;
-                i++;
-                continue;
-            }
-
-            if (!in_single_quotes && !in_double_quotes) {
-                if (ch == L'{') {
-                    brace_depth++;
-                    word += ch;
-                    i++;
-                    continue;
-                }
-
-                if (ch == L'}') {
-                    if (brace_depth == 0) {
-                        after_closing_brace = i + 1;
                         return true;
                     }
-                    brace_depth--;
-                    word += ch;
+                    else if (next == L'0') {
+                        size_t oct_end = i + 2;
+                        while (oct_end < format.size() && oct_end < i + 5 && format[oct_end] >= L'0' && format[oct_end] <= L'7') {
+                            oct_end++;
+                        }
+                        if (oct_end > i + 2) {
+                            long val = std::wcstol(format.substr(i + 2, oct_end - (i + 2)).c_str(), nullptr, 8);
+                            output_str += static_cast<wchar_t>(val);
+                            i = oct_end;
+                        } else {
+                            output_str += L'\0';
+                            i += 2;
+                        }
+                    } else {
+                        output_str += next;
+                        i += 2;
+                    }
+                } else {
+                    output_str += L'\\';
                     i++;
+                }
+                continue;
+            }
+            
+            if (format[i] == L'%') {
+                if (i + 1 < format.size() && format[i + 1] == L'%') {
+                    output_str += L'%';
+                    i += 2;
+                    continue;
+                }
+                
+                size_t spec_start = i;
+                i++;
+                
+                std::wstring flags;
+                while (i < format.size() && (format[i] == L'-' || format[i] == L'+' || format[i] == L' ' || format[i] == L'#' || format[i] == L'0')) {
+                    flags += format[i];
+                    i++;
+                }
+                
+                std::wstring width_str;
+                if (i < format.size() && format[i] == L'*') {
+                    if (arg_idx < tokens.size()) {
+                        width_str = tokens[arg_idx++];
+                    }
+                    i++;
+                } else {
+                    while (i < format.size() && std::iswdigit(format[i])) {
+                        width_str += format[i];
+                        i++;
+                    }
+                }
+                
+                std::wstring prec_str;
+                bool has_prec = false;
+                if (i < format.size() && format[i] == L'.') {
+                    has_prec = true;
+                    i++;
+                    if (i < format.size() && format[i] == L'*') {
+                        if (arg_idx < tokens.size()) {
+                            prec_str = tokens[arg_idx++];
+                        }
+                        i++;
+                    } else {
+                        while (i < format.size() && std::iswdigit(format[i])) {
+                            prec_str += format[i];
+                            i++;
+                        }
+                    }
+                }
+                
+                if (i >= format.size()) {
+                    output_str += format.substr(spec_start);
+                    break;
+                }
+                
+                wchar_t type_char = format[i];
+                i++;
+                
+                std::wstring cur_arg = L"";
+                if (arg_idx < tokens.size()) {
+                    cur_arg = tokens[arg_idx++];
+                }
+                
+                std::wstring fmt_spec = L"%" + flags;
+                if (!width_str.empty()) fmt_spec += width_str;
+                if (has_prec) fmt_spec += L"." + prec_str;
+                
+                wchar_t buf[1024];
+                buf[0] = 0;
+                
+                if (type_char == L's') {
+                    fmt_spec += L"s";
+                    _snwprintf_s(buf, _countof(buf), _TRUNCATE, fmt_spec.c_str(), cur_arg.c_str());
+                    output_str += buf;
+                } else if (type_char == L'q') {
+                    std::wstring escaped = escape_for_double_quotes(cur_arg);
+                    output_str += escaped;
+                } else if (type_char == L'T') {
+                    std::wstring formatted_time;
+                    if (format_printf_time_argument(cur_arg, formatted_time)) {
+                        output_str += formatted_time;
+                    } else {
+                        output_str += cur_arg;
+                    }
+                } else if (type_char == L'c') {
+                    wchar_t ch_val = cur_arg.empty() ? L'\0' : cur_arg[0];
+                    output_str += ch_val;
+                } else if (type_char == L'd' || type_char == L'i') {
+                    fmt_spec += L"lld";
+                    long long val = 0;
+                    if (!cur_arg.empty()) {
+                        try { val = std::stoll(cur_arg, nullptr, 0); } catch(...) { val = 0; }
+                    }
+                    _snwprintf_s(buf, _countof(buf), _TRUNCATE, fmt_spec.c_str(), val);
+                    output_str += buf;
+                } else if (type_char == L'u' || type_char == L'o' || type_char == L'x' || type_char == L'X') {
+                    fmt_spec += L"ll";
+                    fmt_spec += type_char;
+                    unsigned long long val = 0;
+                    if (!cur_arg.empty()) {
+                        try { val = std::stoull(cur_arg, nullptr, 0); } catch(...) { val = 0; }
+                    }
+                    _snwprintf_s(buf, _countof(buf), _TRUNCATE, fmt_spec.c_str(), val);
+                    output_str += buf;
+                } else if (type_char == L'f' || type_char == L'e' || type_char == L'E' || type_char == L'g' || type_char == L'G') {
+                    fmt_spec += type_char;
+                    double val = 0.0;
+                    if (!cur_arg.empty()) {
+                        try { val = std::stod(cur_arg); } catch(...) { val = 0.0; }
+                    }
+                    _snwprintf_s(buf, _countof(buf), _TRUNCATE, fmt_spec.c_str(), val);
+                    output_str += buf;
+                } else {
+                    output_str += format.substr(spec_start, i - spec_start);
+                }
+                continue;
+            }
+            
+            output_str += format[i];
+            i++;
+        }
+        
+        if (arg_idx == last_consumed_arg_idx) {
+            break;
+        }
+    }
+    if (has_var) {
+        std::wstring assign_err;
+        if (!assign_parameter_value(varname, output_str, false, false, assign_err)) {
+            error_msg = L"ksh: printf: variable assignment failed: " + assign_err;
+            return false;
+        }
+        output_str.clear();
+    }
+    return true;
+}
+
+std::wstring decode_raw_bytes(const std::string& bytes) {
+    if (bytes.empty()) return L"";
+
+    bool is_utf16 = false;
+    if (bytes.size() >= 2) {
+        if (static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
+            is_utf16 = true;
+        } else if (bytes.size() % 2 == 0) {
+            size_t null_count = 0;
+            for (size_t i = 1; i < bytes.size(); i += 2) {
+                if (bytes[i] == '\0') null_count++;
+            }
+            if (null_count == bytes.size() / 2) {
+                is_utf16 = true;
+            }
+        }
+    }
+
+    if (is_utf16) {
+        std::wstring wstr;
+        size_t start = 0;
+        if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
+            start = 2;
+        }
+        wstr.resize((bytes.size() - start) / 2);
+        if (!wstr.empty()) {
+            memcpy(&wstr[0], bytes.data() + start, wstr.size() * 2);
+        }
+        return wstr;
+    }
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+    if (wlen > 0) {
+        std::wstring wstr(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, bytes.data(), static_cast<int>(bytes.size()), &wstr[0], wlen);
+        return wstr;
+    }
+
+    int alen = MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+    if (alen > 0) {
+        std::wstring wstr(alen, 0);
+        MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), &wstr[0], alen);
+        return wstr;
+    }
+
+    std::wstring wstr;
+    for (char c : bytes) {
+        wstr.push_back(static_cast<wchar_t>(c));
+    }
+    return wstr;
+}
+
+bool execute_builtin_read(const std::vector<std::wstring>& tokens) {
+    std::wstring prompt = L"";
+    bool silent = false;
+    bool raw = false;
+    bool array_mode = false;
+    bool use_coprocess_input = false;
+    int max_chars = -1;
+    double timeout_sec = -1.0;
+    wchar_t delim = L'\n';
+    std::vector<std::wstring> var_names;
+
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        std::wstring arg = tokens[i];
+        if (arg.size() > 1 && arg[0] == L'-') {
+            for (size_t j = 1; j < arg.size(); ++j) {
+                wchar_t flag = arg[j];
+                bool consumed_option_argument = false;
+                if (flag == L'r') {
+                    raw = true;
+                } else if (flag == L's') {
+                    silent = true;
+                } else if (flag == L'A') {
+                    array_mode = true;
+                } else if (flag == L'p') {
+                    const bool has_attached_prompt =
+                        j + 1 < arg.size() &&
+                        arg[j + 1] != L'r' && arg[j + 1] != L's' && arg[j + 1] != L'A' &&
+                        arg[j + 1] != L'p' && arg[j + 1] != L'n' && arg[j + 1] != L't' &&
+                        arg[j + 1] != L'd';
+                    if (!has_attached_prompt) {
+                        if (!g_coprocess.active) {
+                            std::wcerr << L"ksh: read -p: no active co-process\n";
+                            ksh_env.variables[L"?"] = L"1";
+                            return false;
+                        }
+                        use_coprocess_input = true;
+                    } else if (j + 1 < arg.size()) {
+                        prompt = arg.substr(j + 1);
+                        consumed_option_argument = true;
+                    } else if (i + 1 < tokens.size()) {
+                        prompt = tokens[++i];
+                        consumed_option_argument = true;
+                    } else {
+                        std::wcerr << L"ksh: read: -p requires an argument\n";
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                } else if (flag == L'n') {
+                    std::wstring n_val;
+                    if (j + 1 < arg.size()) {
+                        n_val = arg.substr(j + 1);
+                        consumed_option_argument = true;
+                    } else if (i + 1 < tokens.size()) {
+                        n_val = tokens[++i];
+                        consumed_option_argument = true;
+                    } else {
+                        std::wcerr << L"ksh: read: -n requires an argument\n";
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                    if (!try_parse_int_strict(n_val, max_chars)) {
+                        std::wcerr << L"ksh: read: invalid nchars\n";
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                } else if (flag == L't') {
+                    std::wstring t_val;
+                    if (j + 1 < arg.size()) {
+                        t_val = arg.substr(j + 1);
+                        consumed_option_argument = true;
+                    } else if (i + 1 < tokens.size()) {
+                        t_val = tokens[++i];
+                        consumed_option_argument = true;
+                    } else {
+                        std::wcerr << L"ksh: read: -t requires an argument\n";
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                    try {
+                        timeout_sec = std::stod(t_val);
+                    } catch (...) {
+                        std::wcerr << L"ksh: read: invalid timeout\n";
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                } else if (flag == L'd') {
+                    std::wstring d_val;
+                    if (j + 1 < arg.size()) {
+                        d_val = arg.substr(j + 1);
+                        consumed_option_argument = true;
+                    } else if (i + 1 < tokens.size()) {
+                        d_val = tokens[++i];
+                        consumed_option_argument = true;
+                    } else {
+                        std::wcerr << L"ksh: read: -d requires an argument\n";
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                    if (!d_val.empty()) {
+                        delim = d_val[0];
+                    }
+                } else {
+                    std::wcerr << L"ksh: read: invalid option: -" << flag << L"\n";
+                    ksh_env.variables[L"?"] = L"1";
+                    return false;
+                }
+                if (consumed_option_argument) {
+                    break;
+                }
+            }
+        } else {
+            var_names.push_back(arg);
+        }
+    }
+
+    if (var_names.empty()) {
+        if (array_mode) {
+            std::wcerr << L"ksh: read: -A requires an array name\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+        var_names.push_back(L"REPLY");
+    }
+
+    if (array_mode && var_names.size() != 1) {
+        std::wcerr << L"ksh: read: -A accepts exactly one array name\n";
+        ksh_env.variables[L"?"] = L"1";
+        return false;
+    }
+
+    for (const auto& name : var_names) {
+        if (!is_valid_shell_identifier(name)) {
+            std::wcerr << L"ksh: read: invalid variable name: " << name << L"\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+    }
+
+    if (!prompt.empty() && !use_coprocess_input) {
+        std::wcerr << prompt;
+        std::wcerr.flush();
+    }
+
+    std::wstring result;
+    int read_status = 0;
+    HANDLE hIn = use_coprocess_input
+        ? g_coprocess.output_read
+        : ((g_pipeline_stdin != INVALID_HANDLE_VALUE) ? g_pipeline_stdin : GetStdHandle(STD_INPUT_HANDLE));
+    DWORD mode;
+    bool is_console = !use_coprocess_input && GetConsoleMode(hIn, &mode) != FALSE;
+
+    auto start_time = std::chrono::steady_clock::now();
+    bool escape_next = false;
+
+    if (is_console) {
+        DWORD origMode = 0;
+        bool mode_set = false;
+        if (GetConsoleMode(hIn, &origMode)) {
+            DWORD newMode = origMode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+            if (SetConsoleMode(hIn, newMode)) {
+                mode_set = true;
+            }
+        }
+
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+
+        while (true) {
+            if (max_chars > 0 && static_cast<int>(result.length()) >= max_chars) {
+                break;
+            }
+
+            DWORD wait_ms = INFINITE;
+            if (timeout_sec >= 0.0) {
+                auto now = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double>(now - start_time).count();
+                double remaining = timeout_sec - elapsed;
+                if (remaining <= 0.0) {
+                    read_status = 142;
+                    break;
+                }
+                wait_ms = static_cast<DWORD>(remaining * 1000.0);
+            }
+
+            DWORD wait_res = WaitForSingleObject(hIn, wait_ms);
+            if (wait_res == WAIT_TIMEOUT) {
+                read_status = 142;
+                break;
+            }
+            if (wait_res != WAIT_OBJECT_0) {
+                read_status = 1;
+                break;
+            }
+
+            INPUT_RECORD ir;
+            DWORD records_read = 0;
+            if (!ReadConsoleInputW(hIn, &ir, 1, &records_read) || records_read == 0) {
+                read_status = 1;
+                break;
+            }
+
+            if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) {
+                continue;
+            }
+
+            wchar_t ch = ir.Event.KeyEvent.uChar.UnicodeChar;
+            WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
+
+            if (ch == 0) continue;
+            if (ch == 3) {
+                read_status = 130;
+                break;
+            }
+            if (ch == 26) {
+                break;
+            }
+
+            if (vk == VK_BACK || ch == L'\b') {
+                if (!result.empty()) {
+                    result.pop_back();
+                    if (!silent) {
+                        DWORD written;
+                        WriteConsoleW(hOut, L"\b \b", 3, &written, NULL);
+                    }
+                }
+                continue;
+            }
+
+            if (escape_next && (ch == L'\r' || ch == L'\n')) {
+                escape_next = false;
+                if (!silent) {
+                    DWORD written;
+                    WriteConsoleW(hOut, L"\r\n> ", 4, &written, NULL);
+                }
+                continue;
+            }
+
+            bool is_delim = false;
+            if (delim == L'\n' && (ch == L'\r' || ch == L'\n')) {
+                is_delim = true;
+            } else if (ch == delim) {
+                is_delim = true;
+            }
+
+            if (is_delim) {
+                if (!silent) {
+                    DWORD written;
+                    WriteConsoleW(hOut, L"\r\n", 2, &written, NULL);
+                }
+                break;
+            }
+
+            if (!raw && !escape_next && ch == L'\\') {
+                escape_next = true;
+                continue;
+            }
+
+            escape_next = false;
+            result.push_back(ch);
+
+            if (!silent) {
+                DWORD written;
+                WriteConsoleW(hOut, &ch, 1, &written, NULL);
+            }
+        }
+
+        if (mode_set) {
+            SetConsoleMode(hIn, origMode);
+        }
+    } else {
+        std::string raw_bytes;
+        while (true) {
+            if (max_chars > 0 && static_cast<int>(raw_bytes.length()) >= max_chars) {
+                break;
+            }
+
+            if (timeout_sec >= 0.0) {
+                auto now = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double>(now - start_time).count();
+                if (elapsed >= timeout_sec) {
+                    read_status = 142;
+                    break;
+                }
+
+                DWORD avail = 0;
+                if (PeekNamedPipe(hIn, NULL, 0, NULL, &avail, NULL) && avail == 0) {
+                    Sleep(10);
                     continue;
                 }
             }
 
-            word += ch;
-            i++;
+            char c_char;
+            DWORD bytesRead = 0;
+            if (!ReadFile(hIn, &c_char, 1, &bytesRead, NULL) || bytesRead == 0) {
+                if (use_coprocess_input) {
+                    if (!raw_bytes.empty()) {
+                        break;
+                    }
+
+                    DWORD exit_code = 1;
+                    if (g_coprocess.process != INVALID_HANDLE_VALUE) {
+                        GetExitCodeProcess(g_coprocess.process, &exit_code);
+                    }
+                    close_coprocess(false);
+                    ksh_env.variables[L"COPROC_ACTIVE"] = L"0";
+                    ksh_env.variables[L"?"] = std::to_wstring(exit_code == STILL_ACTIVE ? 1 : exit_code);
+                    return false;
+                }
+                read_status = 1;
+                break;
+            }
+
+            raw_bytes.push_back(c_char);
+
+            bool is_delim = false;
+            if (delim == L'\n') {
+                if (c_char == '\n') {
+                    is_delim = true;
+                }
+            } else {
+                if (static_cast<wchar_t>(c_char) == delim) {
+                    is_delim = true;
+                }
+            }
+
+            if (is_delim) {
+                if (raw_bytes.size() >= 2 && raw_bytes[raw_bytes.size() - 2] == '\n' && raw_bytes.back() == '\0') {
+                    // Handled
+                } else if (delim == L'\n') {
+                    char next_c;
+                    DWORD peekRead = 0;
+                    if (PeekNamedPipe(hIn, &next_c, 1, &peekRead, NULL, NULL) && peekRead > 0 && next_c == '\0') {
+                        ReadFile(hIn, &next_c, 1, &peekRead, NULL);
+                        raw_bytes.push_back(next_c);
+                    }
+                }
+                break;
+            }
+        }
+        result = decode_raw_bytes(raw_bytes);
+    }
+
+    if (read_status != 0 && read_status != 130) {
+        ksh_env.variables[L"?"] = std::to_wstring(read_status);
+        return false;
+    }
+    if (read_status == 130) {
+        ksh_env.variables[L"?"] = L"130";
+        return false;
+    }
+
+    std::wstring ifs = effective_ifs_value();
+    auto is_ifs = [&](wchar_t ch) {
+        return ifs.find(ch) != std::wstring::npos;
+    };
+
+    std::vector<std::wstring> words;
+    std::wstring current_word;
+    size_t char_idx = 0;
+
+    while (char_idx < result.length() && is_ifs(result[char_idx])) {
+        char_idx++;
+    }
+
+    while (char_idx < result.length()) {
+        if (words.size() + 1 == var_names.size()) {
+            std::wstring remainder = result.substr(char_idx);
+            while (!remainder.empty() && is_ifs(remainder.back())) {
+                remainder.pop_back();
+            }
+            words.push_back(remainder);
+            break;
+        }
+
+        if (is_ifs(result[char_idx])) {
+            words.push_back(current_word);
+            current_word.clear();
+            while (char_idx < result.length() && is_ifs(result[char_idx])) {
+                char_idx++;
+            }
+        } else {
+            current_word.push_back(result[char_idx]);
+            char_idx++;
+        }
+    }
+    if (words.size() < var_names.size() && !current_word.empty()) {
+        words.push_back(current_word);
+    }
+
+    while (words.size() < var_names.size()) {
+        words.push_back(L"");
+    }
+
+    if (array_mode) {
+        const std::wstring& array_name = var_names[0];
+        std::wstring resolved_array_name = resolve_variable_name(array_name);
+        if (is_executing_function_scope()) {
+            snapshot_local_variable_if_needed(resolved_array_name);
+        }
+        if (get_flag_value(ksh_env.readonly_flags, resolved_array_name)) {
+            std::wcerr << L"ksh: read: variable is read-only: " << resolved_array_name << L"\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+        assign_array_parameter(resolved_array_name, words);
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    bool assign_ok = true;
+    for (size_t i = 0; i < var_names.size(); ++i) {
+        std::wstring err;
+        if (!assign_parameter_value(var_names[i], words[i], false, is_executing_function_scope(), err)) {
+            std::wcerr << L"ksh: read: " << err << L"\n";
+            assign_ok = false;
+        }
+    }
+
+    ksh_env.variables[L"?"] = assign_ok ? L"0" : L"1";
+    return assign_ok;
+}
+
+bool execute_builtin_getconf(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output) {
+    if (tokens.size() < 2) {
+        std::wcerr << L"getconf: usage: getconf [-v specification] system_var [pathname] or getconf -a\n";
+        ksh_env.variables[L"?"] = L"1";
+        return true;
+    }
+
+    static const std::unordered_map<std::wstring, std::wstring> kStaticGetconfValues = {
+        {L"CHAR_BIT", L"8"},
+        {L"INT_MAX", L"2147483647"},
+        {L"LONG_MAX", L"2147483647"},
+        {L"ULONG_MAX", L"4294967295"},
+        {L"PAGE_SIZE", L"4096"},
+        {L"ARG_MAX", L"32767"},
+        {L"PATH_MAX", L"260"}
+    };
+
+    auto get_runtime_getconf_value = [](const std::wstring& name, std::wstring& value_out) -> bool {
+        if (name == L"PATH") {
+            wchar_t windir[MAX_PATH];
+            DWORD windir_len = GetEnvironmentVariableW(L"windir", windir, MAX_PATH);
+            if (windir_len > 0 && windir_len < MAX_PATH) {
+                value_out = std::wstring(windir) + L"\\System32;" + std::wstring(windir);
+            } else {
+                value_out = L"C:\\Windows\\System32;C:\\Windows";
+            }
+            return true;
+        }
+
+        if (name == L"TMPDIR") {
+            wchar_t tmp[MAX_PATH];
+            DWORD tmp_len = GetTempPathW(MAX_PATH, tmp);
+            if (tmp_len > 0 && tmp_len < MAX_PATH) {
+                value_out = tmp;
+            } else {
+                value_out = L"C:\\Temp";
+            }
+            return true;
+        }
+
+        std::unordered_map<std::wstring, std::wstring>::const_iterator it = kStaticGetconfValues.find(name);
+        if (it != kStaticGetconfValues.end()) {
+            value_out = it->second;
+            return true;
         }
 
         return false;
     };
 
-    auto match_parameter_pattern = [](const std::wstring& pattern, const std::wstring& candidate) -> bool {
-        const bool case_sensitive = pattern_match_case_sensitive();
-        unsigned long long step_budget = kMaxPatternMatchSteps;
-        return match_glob_pattern_recursive(pattern, 0, candidate, 0, case_sensitive, step_budget);
+    static const std::vector<std::wstring> kGetconfListOrder = {
+        L"CHAR_BIT",
+        L"INT_MAX",
+        L"LONG_MAX",
+        L"ULONG_MAX",
+        L"PAGE_SIZE",
+        L"ARG_MAX",
+        L"PATH_MAX",
+        L"PATH",
+        L"TMPDIR"
     };
 
-    auto apply_parameter_pattern_removal = [&](const std::wstring& value, const std::wstring& raw_pattern, bool prefix_mode, bool longest_match) -> std::wstring {
-        std::wstring expanded_pattern = expand_substitutions_left_to_right(raw_pattern);
-        if (g_expansion_error) {
-            return L"";
+    if (tokens[1] == L"-a") {
+        for (const std::wstring& key : kGetconfListOrder) {
+            std::wstring value;
+            if (!get_runtime_getconf_value(key, value)) {
+                continue;
+            }
+            if (!write_output(key + L" = " + value + L"\n")) {
+                ksh_env.variables[L"?"] = L"1";
+                return true;
+            }
+        }
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    std::wstring var = tokens[1];
+    std::wstring value;
+    if (get_runtime_getconf_value(var, value)) {
+        if (!write_output(value + L"\n")) {
+            ksh_env.variables[L"?"] = L"1";
+            return true;
+        }
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    } else {
+        std::wcerr << L"getconf: unknown variable: " << var << L"\n";
+        ksh_env.variables[L"?"] = L"1";
+        return true;
+    }
+}
+
+bool execute_builtin_pathchk(const std::vector<std::wstring>& tokens) {
+    if (tokens.size() < 2) {
+        std::wcerr << L"pathchk: usage: pathchk [-p] [-P] pathname...\n";
+        ksh_env.variables[L"?"] = L"1";
+        return true;
+    }
+
+    bool posix_portable = false;
+    bool check_empty_components = false;
+    size_t start_idx = 1;
+
+    while (start_idx < tokens.size() && tokens[start_idx].size() > 1 && tokens[start_idx][0] == L'-') {
+        std::wstring arg = tokens[start_idx];
+        for (size_t j = 1; j < arg.size(); ++j) {
+            if (arg[j] == L'p') posix_portable = true;
+            else if (arg[j] == L'P') check_empty_components = true;
+            else {
+                std::wcerr << L"pathchk: invalid option: -" << arg[j] << L"\n";
+                ksh_env.variables[L"?"] = L"1";
+                return true;
+            }
+        }
+        start_idx++;
+    }
+
+    if (start_idx >= tokens.size()) {
+        std::wcerr << L"pathchk: missing pathname\n";
+        ksh_env.variables[L"?"] = L"1";
+        return true;
+    }
+
+    bool all_ok = true;
+    for (size_t i = start_idx; i < tokens.size(); ++i) {
+        std::wstring path = tokens[i];
+
+        if (path.empty()) {
+            std::wcerr << L"pathchk: empty pathname is invalid\n";
+            all_ok = false;
+            continue;
         }
 
-        if (expanded_pattern.empty()) {
-            return value;
-        }
-
-        if (prefix_mode) {
-            if (longest_match) {
-                for (size_t len = value.size() + 1; len > 0; --len) {
-                    size_t prefix_len = len - 1;
-                    if (match_parameter_pattern(expanded_pattern, value.substr(0, prefix_len))) {
-                        return value.substr(prefix_len);
-                    }
+        std::vector<std::wstring> components;
+        std::wstring current;
+        for (wchar_t ch : path) {
+            if (ch == L'\\' || ch == L'/') {
+                if (!current.empty()) {
+                    components.push_back(current);
+                    current.clear();
+                } else if (check_empty_components) {
+                    std::wcerr << L"pathchk: '" << path << L"': empty component is not portable\n";
+                    all_ok = false;
                 }
             } else {
-                for (size_t prefix_len = 0; prefix_len <= value.size(); ++prefix_len) {
-                    if (match_parameter_pattern(expanded_pattern, value.substr(0, prefix_len))) {
-                        return value.substr(prefix_len);
-                    }
-                }
+                current.push_back(ch);
             }
-            return value;
+        }
+        if (!current.empty()) {
+            components.push_back(current);
         }
 
-        if (longest_match) {
-            for (size_t start = 0; start <= value.size(); ++start) {
-                if (match_parameter_pattern(expanded_pattern, value.substr(start))) {
-                    return value.substr(0, start);
+        if (posix_portable) {
+            if (path.size() > 256) {
+                std::wcerr << L"pathchk: '" << path << L"': pathname length exceeds POSIX limit (256)\n";
+                all_ok = false;
+            }
+            for (const auto& comp : components) {
+                if (comp.size() > 14) {
+                    std::wcerr << L"pathchk: '" << path << L"': component '" << comp << L"' length exceeds POSIX limit (14)\n";
+                    all_ok = false;
+                }
+                for (wchar_t ch : comp) {
+                    bool ok_char = (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z') ||
+                                   (ch >= L'0' && ch <= L'9') || ch == L'.' || ch == L'_' || ch == L'-';
+                    if (!ok_char) {
+                        std::wcerr << L"pathchk: '" << path << L"': character '" << ch << L"' in '" << comp << L"' is not portable\n";
+                        all_ok = false;
+                    }
                 }
             }
         } else {
-            for (size_t start = value.size() + 1; start > 0; --start) {
-                size_t suffix_start = start - 1;
-                if (match_parameter_pattern(expanded_pattern, value.substr(suffix_start))) {
-                    return value.substr(0, suffix_start);
-                }
+            if (path.size() > 260) {
+                std::wcerr << L"pathchk: '" << path << L"': pathname length exceeds Windows limit (260)\n";
+                all_ok = false;
             }
-        }
-
-        return value;
-    };
-
-    auto apply_parameter_substitution = [&](const std::wstring& value, const std::wstring& raw_pattern, const std::wstring& raw_replacement, bool replace_all) -> std::wstring {
-        std::wstring expanded_pattern = expand_substitutions_left_to_right(raw_pattern);
-        if (g_expansion_error) {
-            return L"";
-        }
-
-        std::wstring replacement = expand_substitutions_left_to_right(raw_replacement);
-        if (g_expansion_error) {
-            return L"";
-        }
-
-        if (expanded_pattern.empty()) {
-            return value;
-        }
-
-        auto find_match = [&](size_t start_index, size_t& match_start, size_t& match_length) -> bool {
-            for (size_t begin = start_index; begin <= value.size(); ++begin) {
-                for (size_t end = begin; end <= value.size(); ++end) {
-                    if (match_parameter_pattern(expanded_pattern, value.substr(begin, end - begin))) {
-                        match_start = begin;
-                        match_length = end - begin;
-                        return true;
+            for (const auto& comp : components) {
+                if (comp.size() > 255) {
+                    std::wcerr << L"pathchk: '" << path << L"': component '" << comp << L"' length exceeds Windows limit (255)\n";
+                    all_ok = false;
+                }
+                for (size_t char_idx = 0; char_idx < comp.size(); ++char_idx) {
+                    wchar_t ch = comp[char_idx];
+                    if (ch == L':' && char_idx == 1 && comp.size() == 2 && i == start_idx) {
+                        continue;
+                    }
+                    if (ch == L'<' || ch == L'>' || ch == L':' || ch == L'"' || ch == L'|' || ch == L'?' || ch == L'*') {
+                        std::wcerr << L"pathchk: '" << path << L"': component '" << comp << L"' contains invalid character '" << ch << L"'\n";
+                        all_ok = false;
                     }
                 }
             }
-            return false;
-        };
-
-        std::wstring result;
-        size_t cursor = 0;
-        bool replaced = false;
-        while (cursor <= value.size()) {
-            size_t match_start = 0;
-            size_t match_length = 0;
-            if (!find_match(cursor, match_start, match_length)) {
-                result += value.substr(cursor);
-                break;
-            }
-
-            replaced = true;
-            result += value.substr(cursor, match_start - cursor);
-            result += replacement;
-
-            if (match_length == 0) {
-                if (match_start < value.size()) {
-                    result.push_back(value[match_start]);
-                }
-                cursor = match_start + 1;
-            } else {
-                cursor = match_start + match_length;
-            }
-
-            if (!replace_all) {
-                result += value.substr(cursor);
-                break;
-            }
-        }
-
-        return replaced ? result : value;
-    };
-
-    next_index = dollar_index + 1;
-
-    auto fail_bad_substitution = [&]() -> std::wstring {
-        std::wcerr << L"ksh: bad substitution: missing }\n";
-        ksh_env.variables[L"?"] = L"1";
-        g_expansion_error = true;
-        return L"";
-    };
-
-    if (next_index >= input.length()) {
-        return L"$";
-    }
-
-    wchar_t marker = input[next_index];
-    if (marker == L'#') {
-        next_index++;
-        std::wstring value;
-        bool is_set = false;
-        try_get_parameter_value(L"#", value, is_set);
-        return value;
-    }
-    if (marker == L'@') {
-        next_index++;
-        std::wstring value;
-        bool is_set = false;
-        try_get_parameter_value(L"@", value, is_set);
-        return value;
-    }
-    if (marker == L'*') {
-        next_index++;
-        std::wstring value;
-        bool is_set = false;
-        try_get_parameter_value(L"*", value, is_set);
-        return value;
-    }
-    if (marker == L'$') {
-        next_index++;
-        std::wstring value;
-        bool is_set = false;
-        try_get_parameter_value(L"$", value, is_set);
-        return value;
-    }
-    if (marker == L'?') {
-        next_index++;
-        std::wstring value;
-        bool is_set = false;
-        try_get_parameter_value(L"?", value, is_set);
-        if (is_set) {
-            return value;
-        }
-        return L"0";
-    }
-    if (std::iswdigit(marker)) {
-        std::wstring index_text;
-        while (next_index < input.length() && std::iswdigit(input[next_index])) {
-            index_text += input[next_index];
-            next_index++;
-        }
-        std::wstring value;
-        bool is_set = false;
-        try_get_parameter_value(index_text, value, is_set);
-        if (is_set) {
-            return value;
-        }
-        return L"";
-    }
-
-    bool braced = false;
-    bool closing_brace_consumed = false;
-    bool length_operator = false;
-    std::wstring var_name;
-    if (marker == L'{') {
-        braced = true;
-        next_index++;
-
-        if (next_index < input.length() && input[next_index] == L'#') {
-            length_operator = true;
-            next_index++;
-        }
-
-        if (next_index < input.length() && input[next_index] == L'!') {
-            var_name += L'!';
-            next_index++;
         }
     }
 
-    if (next_index < input.length() && (input[next_index] == L'@' || input[next_index] == L'#' || input[next_index] == L'*')) {
-        var_name += input[next_index];
-        next_index++;
-    } else if (next_index < input.length() && input[next_index] == L'.') {
-        var_name += input[next_index];
-        next_index++;
-    }
-
-    while (next_index < input.length() && (std::iswalnum(input[next_index]) || input[next_index] == L'_' || input[next_index] == L'.')) {
-        var_name += input[next_index];
-        next_index++;
-    }
-
-    if (braced && next_index < input.length() && input[next_index] == L'[') {
-        size_t bracket_end = input.find(L']', next_index + 1);
-        if (bracket_end == std::wstring::npos) {
-            return fail_bad_substitution();
-        }
-
-        var_name += input.substr(next_index, bracket_end - next_index + 1);
-        next_index = bracket_end + 1;
-    }
-
-    if (length_operator) {
-        std::wstring resolved_value;
-        bool resolved_is_set = false;
-
-        if (var_name.empty()) {
-            return fail_bad_substitution();
-        }
-
-        std::wstring resolved_var_name = resolve_variable_name(var_name);
-
-        std::wstring array_name;
-        std::wstring index_expr;
-        bool has_index = false;
-        if (parse_array_reference(resolved_var_name, array_name, index_expr, has_index)) {
-            std::map<std::wstring, std::map<std::wstring, std::wstring>>::const_iterator arr_it = ksh_env.arrays.find(array_name);
-            if (arr_it != ksh_env.arrays.end()) {
-                if (has_index && (index_expr == L"@" || index_expr == L"*")) {
-                    resolved_value = std::to_wstring(arr_it->second.size());
-                    resolved_is_set = true;
-                } else if (has_index) {
-                    bool is_assoc = false;
-                    std::map<std::wstring, bool>::const_iterator assoc_it = ksh_env.associative_flags.find(array_name);
-                    if (assoc_it != ksh_env.associative_flags.end()) {
-                        is_assoc = assoc_it->second;
-                    }
-
-                    if (is_assoc) {
-                        std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(index_expr);
-                        if (val_it != arr_it->second.end()) {
-                            resolved_value = std::to_wstring(val_it->second.size());
-                        } else {
-                            resolved_value = L"0";
-                        }
-                        resolved_is_set = true;
-                    } else {
-                        size_t idx = 0;
-                        if (parse_non_negative_index(index_expr, idx)) {
-                            std::wstring key = std::to_wstring(idx);
-                            std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(key);
-                            if (val_it != arr_it->second.end()) {
-                                resolved_value = std::to_wstring(val_it->second.size());
-                            } else {
-                                resolved_value = L"0";
-                            }
-                            resolved_is_set = true;
-                        } else {
-                            resolved_value = L"0";
-                            resolved_is_set = true;
-                        }
-                    }
-                } else {
-                    std::map<std::wstring, std::wstring>::const_iterator val_it = arr_it->second.find(L"0");
-                    resolved_value = (val_it != arr_it->second.end()) ? std::to_wstring(val_it->second.size()) : L"0";
-                    resolved_is_set = true;
-                }
-            }
-        }
-
-        if (!resolved_is_set) {
-            try_get_parameter_value(resolved_var_name, resolved_value, resolved_is_set);
-            if (resolved_is_set) {
-                resolved_value = std::to_wstring(resolved_value.size());
-            }
-        }
-
-        if (!resolved_is_set) {
-            resolved_value = L"0";
-        }
-
-        if (braced) {
-            if (next_index >= input.length() || input[next_index] != L'}') {
-                return fail_bad_substitution();
-            }
-            next_index++;
-            closing_brace_consumed = true;
-        }
-
-        return resolved_value;
-    }
-
-    if (braced && next_index < input.length() && input[next_index] == L':' && (next_index + 1) < input.length()) {
-        wchar_t op = input[next_index + 1];
-        if (op != L'-' && op != L'=' && op != L'+' && op != L'?') {
-            size_t after_offset = next_index + 1;
-            size_t colon_or_brace = after_offset;
-            int inner_brace_depth = 0;
-            while (colon_or_brace < input.length()) {
-                if (input[colon_or_brace] == L'{') inner_brace_depth++;
-                if (input[colon_or_brace] == L'}') {
-                    if (inner_brace_depth == 0) break;
-                    inner_brace_depth--;
-                }
-                if (input[colon_or_brace] == L':' && inner_brace_depth == 0) {
-                    break;
-                }
-                colon_or_brace++;
-            }
-
-            if (colon_or_brace == input.length()) {
-                return fail_bad_substitution();
-            }
-
-            std::wstring offset_str = input.substr(after_offset, colon_or_brace - after_offset);
-            std::wstring length_str;
-            bool has_length = false;
-
-            if (input[colon_or_brace] == L':') {
-                has_length = true;
-                size_t length_start = colon_or_brace + 1;
-                size_t closing_brace = length_start;
-                int inner_brace_depth2 = 0;
-                while (closing_brace < input.length()) {
-                    if (input[closing_brace] == L'{') inner_brace_depth2++;
-                    if (input[closing_brace] == L'}') {
-                        if (inner_brace_depth2 == 0) break;
-                        inner_brace_depth2--;
-                    }
-                    closing_brace++;
-                }
-                if (closing_brace == input.length()) {
-                    return fail_bad_substitution();
-                }
-                length_str = input.substr(length_start, closing_brace - length_start);
-                next_index = closing_brace + 1;
-            } else {
-                next_index = colon_or_brace + 1;
-            }
-
-            closing_brace_consumed = true;
-
-            std::wstring expanded_offset = expand_substitutions_left_to_right(offset_str);
-            if (g_expansion_error) return L"";
-            std::wstring evaluated_offset = evaluate_arithmetic(expanded_offset);
-            int offset = 0;
-            if (!try_parse_int_strict(evaluated_offset, offset)) {
-                std::wcerr << L"ksh: bad substitution: invalid offset\n";
-                ksh_env.variables[L"?"] = L"1";
-                g_expansion_error = true;
-                return L"";
-            }
-
-            int length = -1;
-            if (has_length) {
-                std::wstring expanded_length = expand_substitutions_left_to_right(length_str);
-                if (g_expansion_error) return L"";
-                std::wstring evaluated_length = evaluate_arithmetic(expanded_length);
-                if (!try_parse_int_strict(evaluated_length, length)) {
-                    std::wcerr << L"ksh: bad substitution: invalid length\n";
-                    ksh_env.variables[L"?"] = L"1";
-                    g_expansion_error = true;
-                    return L"";
-                }
-            }
-
-            std::wstring existing_value;
-            bool is_set = false;
-            try_get_parameter_value(var_name, existing_value, is_set);
-            if (!is_set) {
-                if (g_nounset_enabled) {
-                    std::wcerr << L"ksh: " << var_name << L": parameter not set\n";
-                    ksh_env.variables[L"?"] = L"1";
-                    g_expansion_error = true;
-                }
-                return L"";
-            }
-
-            int val_len = static_cast<int>(existing_value.length());
-            if (offset < 0) {
-                offset = val_len + offset;
-                if (offset < 0) offset = 0;
-            }
-            if (offset > val_len) {
-                return L"";
-            }
-
-            if (length < 0) {
-                return existing_value.substr(offset);
-            } else {
-                if (offset + length > val_len) {
-                    length = val_len - offset;
-                }
-                return existing_value.substr(offset, length);
-            }
-        }
-        if (op == L'-' || op == L'=' || op == L'+' || op == L'?') {
-            std::wstring parameter_word;
-            size_t after_word = next_index + 2;
-            if (!parse_braced_parameter_word(input, next_index + 2, parameter_word, after_word)) {
-                return fail_bad_substitution();
-            }
-
-            next_index = after_word;
-            closing_brace_consumed = true;
-
-            std::wstring existing_value;
-            bool is_set = false;
-            try_get_parameter_value(var_name, existing_value, is_set);
-            bool is_null_or_unset = (!is_set || existing_value.empty());
-
-            if (op == L'-') {
-                if (is_null_or_unset) {
-                    return expand_substitutions_left_to_right(parameter_word);
-                }
-                return existing_value;
-            }
-
-            if (op == L'=') {
-                if (!is_null_or_unset) {
-                    return existing_value;
-                }
-
-                std::wstring assigned_value = expand_substitutions_left_to_right(parameter_word);
-                if (g_expansion_error) {
-                    return L"";
-                }
-
-                if (!is_assignable_parameter_name(var_name)) {
-                    std::wcerr << L"ksh: bad substitution for := operator\n";
-                    ksh_env.variables[L"?"] = L"1";
-                    g_expansion_error = true;
-                    return L"";
-                }
-
-                ksh_env.variables[var_name] = assigned_value;
-                SetEnvironmentVariableW(var_name.c_str(), assigned_value.c_str());
-                return assigned_value;
-            }
-
-            if (op == L'+') {
-                if (is_null_or_unset) {
-                    return L"";
-                }
-                return expand_substitutions_left_to_right(parameter_word);
-            }
-
-            if (is_null_or_unset) {
-                std::wstring message = expand_substitutions_left_to_right(parameter_word);
-                if (message.empty()) {
-                    message = L"parameter '" + var_name + L"' is unset or empty";
-                }
-                std::wcerr << L"ksh: " << message << L"\n";
-                ksh_env.variables[L"?"] = L"1";
-                g_expansion_error = true;
-                return L"";
-            }
-
-            return existing_value;
-        }
-    }
-
-    if (braced && next_index < input.length() && (input[next_index] == L'#' || input[next_index] == L'%')) {
-        const bool prefix_mode = input[next_index] == L'#';
-        bool longest_match = false;
-        size_t pattern_start = next_index + 1;
-        if (pattern_start < input.length() && input[pattern_start] == input[next_index]) {
-            longest_match = true;
-            pattern_start++;
-        }
-
-        std::wstring pattern_word;
-        size_t after_word = pattern_start;
-        if (!parse_braced_parameter_word(input, pattern_start, pattern_word, after_word)) {
-            return fail_bad_substitution();
-        }
-
-        next_index = after_word;
-        closing_brace_consumed = true;
-
-        std::wstring existing_value;
-        bool is_set = false;
-        try_get_parameter_value(var_name, existing_value, is_set);
-        if (!is_set) {
-            return L"";
-        }
-
-        return apply_parameter_pattern_removal(existing_value, pattern_word, prefix_mode, longest_match);
-    }
-
-    if (braced && next_index < input.length() && input[next_index] == L'/') {
-        bool replace_all = false;
-        size_t pattern_start = next_index + 1;
-        if (pattern_start < input.length() && input[pattern_start] == L'/') {
-            replace_all = true;
-            pattern_start++;
-        }
-
-        std::wstring pattern_word;
-        std::wstring replacement_word;
-        size_t i = pattern_start;
-        int brace_depth = 0;
-        bool in_single_quotes = false;
-        bool inner_in_double_quotes = false;
-        bool escaped = false;
-        bool saw_separator = false;
-
-        while (i < input.length()) {
-            wchar_t ch = input[i];
-
-            if (escaped) {
-                (saw_separator ? replacement_word : pattern_word) += ch;
-                escaped = false;
-                i++;
-                continue;
-            }
-
-            if (ch == L'\\' && !in_single_quotes) {
-                (saw_separator ? replacement_word : pattern_word) += ch;
-                escaped = true;
-                i++;
-                continue;
-            }
-
-            if (ch == L'\'' && !inner_in_double_quotes) {
-                in_single_quotes = !in_single_quotes;
-                (saw_separator ? replacement_word : pattern_word) += ch;
-                i++;
-                continue;
-            }
-
-            if (ch == L'"' && !in_single_quotes) {
-                inner_in_double_quotes = !inner_in_double_quotes;
-                (saw_separator ? replacement_word : pattern_word) += ch;
-                i++;
-                continue;
-            }
-
-            if (!in_single_quotes && !inner_in_double_quotes) {
-                if (ch == L'{') {
-                    brace_depth++;
-                    (saw_separator ? replacement_word : pattern_word) += ch;
-                    i++;
-                    continue;
-                }
-
-                if (ch == L'}') {
-                    if (brace_depth == 0) {
-                        next_index = i + 1;
-                        closing_brace_consumed = true;
-
-                        std::wstring existing_value;
-                        bool is_set = false;
-                        try_get_parameter_value(var_name, existing_value, is_set);
-                        if (!is_set) {
-                            return L"";
-                        }
-
-                        return apply_parameter_substitution(existing_value, pattern_word, replacement_word, replace_all);
-                    }
-
-                    brace_depth--;
-                    (saw_separator ? replacement_word : pattern_word) += ch;
-                    i++;
-                    continue;
-                }
-
-                if (ch == L'/' && brace_depth == 0 && !saw_separator) {
-                    saw_separator = true;
-                    i++;
-                    continue;
-                }
-            }
-
-            (saw_separator ? replacement_word : pattern_word) += ch;
-            i++;
-        }
-
-        return fail_bad_substitution();
-    }
-
-    if (braced && !closing_brace_consumed) {
-        if (next_index >= input.length() || input[next_index] != L'}') {
-            return fail_bad_substitution();
-        }
-        next_index++;
-        closing_brace_consumed = true;
-    }
-
-    if (var_name.empty()) {
-        if (braced) {
-            std::wcerr << L"ksh: bad substitution\n";
-            ksh_env.variables[L"?"] = L"1";
-            g_expansion_error = true;
-            return L"";
-        }
-        return L"$";
-    }
-
-    std::wstring resolved_value;
-    bool resolved_is_set = false;
-    try_get_parameter_value(var_name, resolved_value, resolved_is_set);
-    if (resolved_is_set) {
-        return resolved_value;
-    }
-    if (g_nounset_enabled) {
-        std::wcerr << L"ksh: " << var_name << L": parameter not set\n";
-        ksh_env.variables[L"?"] = L"1";
-        g_expansion_error = true;
-    }
-    return L"";
+    ksh_env.variables[L"?"] = all_ok ? L"0" : L"1";
+    return true;
 }
 
-std::wstring expand_substitutions_left_to_right(const std::wstring& input) {
-    ScopedExpansionDepth depth_guard;
-    if (!depth_guard.active()) {
-        std::wcerr << L"ksh: expansion nesting depth exceeded limit\n";
-        ksh_env.variables[L"?"] = L"1";
-        g_expansion_error = true;
-        return L"";
+/******************************************************************************
+** End of ksh_builtins.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_executor.cpp
+******************************************************************************/
+
+
+// Script context section: current script name and argument helpers.
+const std::vector<std::wstring>& current_script_args() {
+    static const std::vector<std::wstring> empty_args;
+    if (g_script_context_stack.empty()) {
+        return empty_args;
     }
-
-    std::wstring result;
-    size_t i = 0;
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-
-    while (i < input.length()) {
-        wchar_t ch = input[i];
-
-        if (escaped) {
-            result += ch;
-            escaped = false;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            result += ch;
-            escaped = true;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            result += ch;
-            i++;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            result += ch;
-            i++;
-            continue;
-        }
-
-        if (ch != L'$' || in_single_quotes) {
-            result += ch;
-            i++;
-            continue;
-        }
-
-        if ((i + 1) < input.length() && input[i + 1] == L'(') {
-            if ((i + 2) < input.length() && input[i + 2] == L'(') {
-                std::wstring arith_content;
-                size_t next_index = i + 3;
-                if (!parse_arithmetic_substitution_content(input, i + 3, arith_content, next_index)) {
-                    result += L"$((";
-                    i += 3;
-                    continue;
-                }
-
-                std::wstring expanded_arith = expand_substitutions_left_to_right(arith_content);
-                result += evaluate_arithmetic(expanded_arith);
-                i = next_index;
-                continue;
-            }
-
-            std::wstring cmd_content;
-            size_t next_index = i + 2;
-            if (!parse_command_substitution_content(input, i + 2, cmd_content, next_index)) {
-                result += L"$(";
-                i += 2;
-                continue;
-            }
-
-            std::wstring expanded_command = expand_substitutions_left_to_right(cmd_content);
-            std::vector<std::wstring> substitution_tokens = ksh_tokenize_preserve_quotes(expanded_command);
-            const bool use_capture_sink = can_capture_builtin_command_substitution(substitution_tokens);
-            std::wstring sub_output = execute_command_substitution(expanded_command, use_capture_sink);
-
-            result += sub_output;
-            i = next_index;
-            continue;
-        }
-
-        size_t next_index = i + 1;
-        result += expand_variable_reference(input, i, next_index, in_double_quotes);
-        if (next_index <= i) {
-            next_index = i + 1;
-        }
-        i = next_index;
-    }
-
-    return result;
+    return g_script_context_stack.back().args;
 }
 
-std::wstring evaluate_command_substitutions(const std::wstring& input) {
-    ScopedExpansionDepth depth_guard;
-    if (!depth_guard.active()) {
-        g_expansion_error = true;
-        std::wcerr << L"ksh: maximum expansion nesting depth exceeded\n";
+std::wstring current_script_name() {
+    if (g_script_context_stack.empty()) {
         return L"";
     }
-
-    std::wstring output;
-    size_t i = 0;
-
-    while (i < input.size()) {
-        if (input[i] == L'$' && (i + 1) < input.size() && input[i + 1] == L'(' && !((i + 2) < input.size() && input[i + 2] == L'(')) {
-            std::wstring cmd_content;
-            size_t next_index = i + 2;
-            if (!parse_command_substitution_content(input, i + 2, cmd_content, next_index)) {
-                output += L"$(";
-                i += 2;
-                continue;
-            }
-
-            std::wstring nested = evaluate_command_substitutions(cmd_content);
-            if (g_expansion_error) {
-                return L"";
-            }
-            std::vector<std::wstring> substitution_tokens = ksh_tokenize_preserve_quotes(nested);
-            const bool use_capture_sink = can_capture_builtin_command_substitution(substitution_tokens);
-            std::wstring sub_output = execute_command_substitution(nested, use_capture_sink);
-
-            output += sub_output;
-            i = next_index;
-            continue;
-        }
-
-        output += input[i];
-        i++;
-    }
-
-    return output;
+    return g_script_context_stack.back().script_name;
 }
 
-// Expand ksh93 variables, arrays, and $((arithmetic))
-std::vector<std::wstring> expand_globs_for_tokens(const std::vector<std::wstring>& tokens, const std::vector<std::wstring>& preserved_tokens);
-
-std::wstring join_fields_with_internal_separator(const std::vector<std::wstring>& fields) {
+std::wstring join_script_args(const std::vector<std::wstring>& args) {
     std::wstring joined;
-    for (size_t i = 0; i < fields.size(); ++i) {
-        if (i > 0) {
-            joined.push_back(k_array_at_quoted_separator);
+    for (size_t i = 0; i < args.size(); ++i) {
+        joined += args[i];
+        if (i + 1 < args.size()) {
+            joined += L" ";
         }
-        joined += fields[i];
     }
     return joined;
 }
 
-std::wstring effective_ifs_value() {
-    std::map<std::wstring, std::wstring>::const_iterator it = ksh_env.variables.find(L"IFS");
-    if (it != ksh_env.variables.end()) {
-        return it->second;
-    }
-    return L" \t\n";
-}
-
-std::vector<std::wstring> split_fields_by_ifs(const std::wstring& input) {
-    std::vector<std::wstring> fields;
-    std::wstring current;
-    const std::wstring ifs = effective_ifs_value();
-
-    bool in_quotes = false;
-    bool in_single_quotes = false;
-    bool in_array_def = false;
-    bool escaped = false;
-    bool ended_with_internal_separator = false;
-
-    auto is_ifs_delimiter = [&](wchar_t ch) {
-        return ifs.find(ch) != std::wstring::npos;
-    };
-
-    for (size_t i = 0; i < input.length(); ++i) {
-        wchar_t c = input[i];
-
-        if (c == k_array_at_quoted_separator) {
-            fields.push_back(current);
-            current.clear();
-            ended_with_internal_separator = true;
-            continue;
-        }
-
-        ended_with_internal_separator = false;
-
-        if (escaped) {
-            current += c;
-            escaped = false;
-            continue;
-        }
-
-        if (c == L'\\' && !in_single_quotes) {
-            current += c;
-            escaped = true;
-            continue;
-        }
-
-        if (c == L'"' && !in_array_def && !in_single_quotes) {
-            in_quotes = !in_quotes;
-            current += c;
-            continue;
-        }
-
-        if (c == L'\'' && !in_array_def && !in_quotes) {
-            in_single_quotes = !in_single_quotes;
-            current += c;
-            continue;
-        }
-
-        if (c == L'(' && i > 0 && input[i - 1] == L'=') {
-            in_array_def = true;
-            current += c;
-            continue;
-        }
-
-        if (c == L')' && in_array_def) {
-            in_array_def = false;
-            current += c;
-            continue;
-        }
-
-        if (!in_quotes && !in_single_quotes && !in_array_def && is_ifs_delimiter(c)) {
-            if (!current.empty()) {
-                fields.push_back(current);
-                current.clear();
-            }
-            continue;
-        }
-
-        current += c;
+std::wstring quote_command_argument(const std::wstring& arg) {
+    if (arg.empty()) {
+        return L"\"\"";
     }
 
-    if (!current.empty() || ended_with_internal_separator) {
-        fields.push_back(current);
-    }
-
-    return fields;
-}
-
-std::wstring remove_quotes_and_escapes_from_token(const std::wstring& token) {
-    std::wstring result;
-    bool in_double_quotes = false;
-    bool in_single_quotes = false;
-
-    for (size_t i = 0; i < token.size(); ++i) {
-        wchar_t ch = token[i];
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            if (i + 1 >= token.size()) {
-                result += ch;
-                continue;
-            }
-
-            wchar_t next = token[i + 1];
-            if (!in_double_quotes) {
-                if (std::iswspace(next) || next == L'\\' || next == L'"' || next == L'\'' || next == L'$' ||
-                    next == L'`' || next == L'|' || next == L'&' || next == L';' || next == L'<' ||
-                    next == L'>' || next == L'(' || next == L')') {
-                    result += next;
-                    i++;
-                    continue;
-                }
-
-                result += ch;
-                continue;
-            }
-
-            if (next == L'\\' || next == L'"' || next == L'$' || next == L'`' || next == L'\n') {
-                result += next;
-                i++;
-                continue;
-            }
-
-            result += ch;
-            continue;
-        }
-
-        result += ch;
-    }
-
-    return result;
-}
-
-std::vector<std::wstring> remove_quotes_and_escapes_from_tokens(const std::vector<std::wstring>& tokens) {
-    std::vector<std::wstring> stripped;
-    stripped.reserve(tokens.size());
-    for (const std::wstring& token : tokens) {
-        stripped.push_back(remove_quotes_and_escapes_from_token(token));
-    }
-    return stripped;
-}
-
-std::wstring expand_tilde(const std::wstring& input) {
-    if (input.empty() || input[0] != L'~') {
-        return input;
-    }
-    
-    size_t slash_pos = input.find_first_of(L"/\\");
-    std::wstring username = (slash_pos == std::wstring::npos) ? input.substr(1) : input.substr(1, slash_pos - 1);
-    std::wstring rest = (slash_pos == std::wstring::npos) ? L"" : input.substr(slash_pos);
-    
-    std::wstring home_dir;
-    if (username.empty()) {
-        wchar_t user_profile[MAX_PATH];
-        if (GetEnvironmentVariableW(L"USERPROFILE", user_profile, MAX_PATH) > 0) {
-            home_dir = user_profile;
-        } else if (GetEnvironmentVariableW(L"HOME", user_profile, MAX_PATH) > 0) {
-            home_dir = user_profile;
-        } else {
-            home_dir = L"C:\\";
-        }
-    } else {
-        std::wstring target = L"C:\\Users\\" + username;
-        DWORD attr = GetFileAttributesW(target.c_str());
-        if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
-            home_dir = target;
-        } else {
-            return input;
-        }
-    }
-    return home_dir + rest;
-}
-
-std::vector<std::wstring> expand_tilde_for_tokens(const std::vector<std::wstring>& tokens) {
-    std::vector<std::wstring> res;
-    res.reserve(tokens.size());
-    for (const std::wstring& t : tokens) {
-        res.push_back(expand_tilde(t));
-    }
-    return res;
-}
-
-std::wstring ksh_expand(const std::wstring& input) {
-    g_expansion_error = false;
-    std::wstring tilde_expanded = expand_tilde(input);
-    std::wstring expanded = expand_substitutions_left_to_right(tilde_expanded);
-    if (g_expansion_error) {
-        return L"";
-    }
-
-    std::vector<std::wstring> fields = split_fields_by_ifs(expanded);
-    fields = expand_globs_for_tokens(fields, fields);
-    std::vector<std::wstring> stripped = remove_quotes_and_escapes_from_tokens(fields);
-    return join_fields_with_internal_separator(stripped);
-}
-
-std::wstring expand_ansi_c_quoting(const std::wstring& input, size_t& i) {
-    std::wstring result;
-    // input[i] is '$', input[i+1] is '\''
-    i += 2; // consume '$' and '\''
-    while (i < input.length()) {
-        wchar_t c = input[i];
-        if (c == L'\'') {
-            i++; // consume closing '\''
+    bool needs_quotes = false;
+    for (wchar_t ch : arg) {
+        if (std::iswspace(ch) || ch == L'"') {
+            needs_quotes = true;
             break;
         }
-        if (c == L'\\') {
-            i++; // consume '\\'
-            if (i >= input.length()) {
-                result += L'\\';
-                break;
-            }
-            wchar_t escape_char = input[i];
-            if (escape_char == L'a') {
-                result += L'\a';
-                i++;
-            } else if (escape_char == L'b') {
-                result += L'\b';
-                i++;
-            } else if (escape_char == L'e' || escape_char == L'E') {
-                result += L'\x1b';
-                i++;
-            } else if (escape_char == L'f') {
-                result += L'\f';
-                i++;
-            } else if (escape_char == L'n') {
-                result += L'\n';
-                i++;
-            } else if (escape_char == L'r') {
-                result += L'\r';
-                i++;
-            } else if (escape_char == L't') {
-                result += L'\t';
-                i++;
-            } else if (escape_char == L'v') {
-                result += L'\v';
-                i++;
-            } else if (escape_char == L'\\') {
-                result += L'\\';
-                i++;
-            } else if (escape_char == L'\'') {
-                result += L'\'';
-                i++;
-            } else if (escape_char == L'"') {
-                result += L'"';
-                i++;
-            } else if (escape_char == L'?') {
-                result += L'?';
-                i++;
-            } else if (escape_char == L'x') {
-                i++; // consume 'x'
-                std::wstring hex_str;
-                for (int count = 0; count < 2 && i < input.length(); ++count) {
-                    if (std::iswxdigit(input[i])) {
-                        hex_str.push_back(input[i]);
-                        i++;
-                    } else {
-                        break;
-                    }
-                }
-                if (!hex_str.empty()) {
-                    unsigned long val = 0;
-                    for (wchar_t digit : hex_str) {
-                        val *= 16;
-                        if (digit >= L'0' && digit <= L'9') val += (digit - L'0');
-                        else if (digit >= L'a' && digit <= L'f') val += (digit - L'a' + 10);
-                        else if (digit >= L'A' && digit <= L'F') val += (digit - L'A' + 10);
-                    }
-                    result += static_cast<wchar_t>(val);
-                } else {
-                    result += L'x';
-                }
-            } else if (escape_char == L'u') {
-                i++; // consume 'u'
-                std::wstring hex_str;
-                for (int count = 0; count < 4 && i < input.length(); ++count) {
-                    if (std::iswxdigit(input[i])) {
-                        hex_str.push_back(input[i]);
-                        i++;
-                    } else {
-                        break;
-                    }
-                }
-                if (!hex_str.empty()) {
-                    unsigned long val = 0;
-                    for (wchar_t digit : hex_str) {
-                        val *= 16;
-                        if (digit >= L'0' && digit <= L'9') val += (digit - L'0');
-                        else if (digit >= L'a' && digit <= L'f') val += (digit - L'a' + 10);
-                        else if (digit >= L'A' && digit <= L'F') val += (digit - L'A' + 10);
-                    }
-                    result += static_cast<wchar_t>(val);
-                } else {
-                    result += L'u';
-                }
-            } else if (escape_char == L'U') {
-                i++; // consume 'U'
-                std::wstring hex_str;
-                for (int count = 0; count < 8 && i < input.length(); ++count) {
-                    if (std::iswxdigit(input[i])) {
-                        hex_str.push_back(input[i]);
-                        i++;
-                    } else {
-                        break;
-                    }
-                }
-                if (!hex_str.empty()) {
-                    unsigned long val = 0;
-                    for (wchar_t digit : hex_str) {
-                        val *= 16;
-                        if (digit >= L'0' && digit <= L'9') val += (digit - L'0');
-                        else if (digit >= L'a' && digit <= L'f') val += (digit - L'a' + 10);
-                        else if (digit >= L'A' && digit <= L'F') val += (digit - L'A' + 10);
-                    }
-                    result += static_cast<wchar_t>(val);
-                } else {
-                    result += L'U';
-                }
-            } else if (escape_char == L'c') {
-                i++; // consume 'c'
-                if (i < input.length()) {
-                    wchar_t ctrl_char = input[i];
-                    result += static_cast<wchar_t>(ctrl_char & 0x1F);
-                    i++;
-                } else {
-                    result += L'c';
-                }
-            } else if (escape_char >= L'0' && escape_char <= L'7') {
-                std::wstring oct_str;
-                for (int count = 0; count < 3 && i < input.length(); ++count) {
-                    if (input[i] >= L'0' && input[i] <= L'7') {
-                        oct_str.push_back(input[i]);
-                        i++;
-                    } else {
-                        break;
-                    }
-                }
-                unsigned long val = 0;
-                for (wchar_t digit : oct_str) {
-                    val = val * 8 + (digit - L'0');
-                }
-                result += static_cast<wchar_t>(val);
-            } else {
-                result += escape_char;
-                i++;
-            }
-        } else {
-            result += c;
-            i++;
-        }
     }
-    return result;
-}
 
-std::wstring escape_for_double_quotes(const std::wstring& str) {
-    std::wstring result;
-    result += L'"';
-    for (wchar_t ch : str) {
-        if (ch == L'\\' || ch == L'"' || ch == L'$' || ch == L'`' || ch == L'\n') {
-            result += L'\\';
-        }
-        result += ch;
+    if (!needs_quotes) {
+        return arg;
     }
-    result += L'"';
-    return result;
-}
 
-// Advanced ksh93 Tokenizer handling quotes and compound array blocks
-std::vector<std::wstring> ksh_tokenize(const std::wstring& input) {
-    std::vector<std::wstring> tokens;
-    std::wstring current;
-    bool in_quotes = false;
-    bool in_single_quotes = false;
-    bool in_array_def = false;
-    bool escaped = false;
+    std::wstring escaped;
+    escaped.reserve(arg.size() + 8);
+    escaped.push_back(L'"');
 
-    for (size_t i = 0; i < input.length(); ) {
-        wchar_t c = input[i];
-
-        if (c == k_array_at_quoted_separator) {
-            if (!current.empty()) {
-                tokens.push_back(current);
-                current.clear();
-            }
-            i++;
+    size_t backslash_run = 0;
+    for (wchar_t ch : arg) {
+        if (ch == L'\\') {
+            backslash_run++;
             continue;
         }
 
-        if (escaped) {
-            current += c;
-            escaped = false;
-            i++;
+        if (ch == L'"') {
+            escaped.append(backslash_run * 2 + 1, L'\\');
+            escaped.push_back(L'"');
+            backslash_run = 0;
             continue;
         }
 
-        if (c == L'\\' && !in_single_quotes) {
-            current += c;
-            escaped = true;
-            i++;
-            continue;
+        if (backslash_run > 0) {
+            escaped.append(backslash_run, L'\\');
+            backslash_run = 0;
         }
 
-        if (c == L'$' && i + 1 < input.length() && input[i + 1] == L'\'' && !in_quotes && !in_single_quotes && !in_array_def) {
-            current += expand_ansi_c_quoting(input, i);
-            continue;
-        }
-
-        if (c == L'"' && !in_array_def && !in_single_quotes) {
-            in_quotes = !in_quotes;
-            i++;
-        } else if (c == L'\'' && !in_array_def && !in_quotes) {
-            in_single_quotes = !in_single_quotes;
-            i++;
-        } else if (c == L'(' && i > 0 && input[i-1] == L'=') {
-            in_array_def = true;
-            current += c;
-            i++;
-        } else if (c == L')' && in_array_def) {
-            in_array_def = false;
-            current += c;
-            i++;
-        } else if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
-            if (!current.empty()) {
-                tokens.push_back(current);
-                current.clear();
-            }
-            i++;
-        } else {
-            current += c;
-            i++;
-        }
-    }
-    if (!current.empty()) {
-        tokens.push_back(current);
-    }
-    return tokens;
-}
-
-std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input) {
-    std::vector<std::wstring> tokens;
-    std::wstring current;
-    bool in_quotes = false;
-    bool in_single_quotes = false;
-    bool in_array_def = false;
-    bool escaped = false;
-
-    for (size_t i = 0; i < input.length(); ) {
-        wchar_t c = input[i];
-
-        if (c == k_array_at_quoted_separator) {
-            if (!current.empty()) {
-                tokens.push_back(current);
-                current.clear();
-            }
-            i++;
-            continue;
-        }
-
-        if (escaped) {
-            current += c;
-            escaped = false;
-            i++;
-            continue;
-        }
-
-        if (c == L'\\' && !in_single_quotes) {
-            current += c;
-            escaped = true;
-            i++;
-            continue;
-        }
-
-        if (c == L'$' && i + 1 < input.length() && input[i + 1] == L'\'' && !in_quotes && !in_single_quotes && !in_array_def) {
-            current += escape_for_double_quotes(expand_ansi_c_quoting(input, i));
-            continue;
-        }
-
-        if (c == L'"' && !in_array_def && !in_single_quotes) {
-            in_quotes = !in_quotes;
-            current += c;
-            i++;
-            continue;
-        }
-
-        if (c == L'\'' && !in_array_def && !in_quotes) {
-            in_single_quotes = !in_single_quotes;
-            current += c;
-            i++;
-            continue;
-        }
-
-        if (c == L'(' && i > 0 && input[i - 1] == L'=') {
-            in_array_def = true;
-            current += c;
-            i++;
-            continue;
-        }
-
-        if (c == L')' && in_array_def) {
-            in_array_def = false;
-            current += c;
-            i++;
-            continue;
-        }
-
-        if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
-            if (!current.empty()) {
-                tokens.push_back(current);
-                current.clear();
-            }
-            i++;
-            continue;
-        }
-
-        current += c;
-        i++;
+        escaped.push_back(ch);
     }
 
-    if (!current.empty()) {
-        tokens.push_back(current);
+    if (backslash_run > 0) {
+        escaped.append(backslash_run * 2, L'\\');
     }
 
-    return tokens;
-}
-
-bool is_path_separator(wchar_t ch) {
-    return ch == L'/' || ch == L'\\';
-}
-
-bool has_glob_metacharacters(const std::wstring& value) {
-    if (value.find_first_of(L"*?[") != std::wstring::npos) {
-        return true;
-    }
-    return value.find(L"+(") != std::wstring::npos ||
-           value.find(L"@(") != std::wstring::npos ||
-           value.find(L"!(") != std::wstring::npos;
-}
-
-bool has_unquoted_glob_metacharacters(const std::wstring& token) {
-    bool in_double_quotes = false;
-    bool in_single_quotes = false;
-    bool escaped = false;
-
-    for (size_t i = 0; i < token.size(); ++i) {
-        wchar_t ch = token[i];
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            continue;
-        }
-
-        if (!in_double_quotes && !in_single_quotes) {
-            if (ch == L'*' || ch == L'?' || ch == L'[') {
-                return true;
-            }
-            if (ch == L'+' || ch == L'@' || ch == L'!') {
-                if (i + 1 < token.size() && token[i + 1] == L'(') {
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
-bool match_glob_character_class(const std::wstring& pattern, size_t class_start, wchar_t candidate, size_t& consumed_length, bool case_sensitive) {
-    consumed_length = 0;
-    if (class_start >= pattern.size() || pattern[class_start] != L'[') {
-        return false;
-    }
-
-    size_t i = class_start + 1;
-    bool negate = false;
-    if (i < pattern.size() && (pattern[i] == L'!' || pattern[i] == L'^')) {
-        negate = true;
-        i++;
-    }
-
-    bool matched = false;
-    bool saw_item = false;
-    while (i < pattern.size() && pattern[i] != L']') {
-        wchar_t left = pattern[i];
-        if ((i + 2) < pattern.size() && pattern[i + 1] == L'-' && pattern[i + 2] != L']') {
-            wchar_t right = pattern[i + 2];
-            if (case_sensitive) {
-                if (left <= candidate && candidate <= right) {
-                    matched = true;
-                }
-            } else {
-                wchar_t lower_candidate = static_cast<wchar_t>(std::towlower(candidate));
-                wchar_t lower_left = static_cast<wchar_t>(std::towlower(left));
-                wchar_t lower_right = static_cast<wchar_t>(std::towlower(right));
-                if (lower_left <= lower_candidate && lower_candidate <= lower_right) {
-                    matched = true;
-                }
-            }
-            i += 3;
-            saw_item = true;
-            continue;
-        }
-
-        if (case_sensitive ? (left == candidate) : (std::towlower(left) == std::towlower(candidate))) {
-            matched = true;
-        }
-        i++;
-        saw_item = true;
-    }
-
-    if (i >= pattern.size() || pattern[i] != L']' || !saw_item) {
-        return false;
-    }
-
-    consumed_length = (i - class_start) + 1;
-    return negate ? !matched : matched;
-}
-
-bool parse_extended_glob(const std::wstring& pattern, size_t ext_start, size_t& ext_end, std::vector<std::wstring>& sub_patterns) {
-    if (ext_start + 2 >= pattern.size() || pattern[ext_start + 1] != L'(') {
-        return false;
-    }
-
-    size_t i = ext_start + 2;
-    int paren_level = 1;
-    std::wstring current;
-    std::vector<std::wstring> parts;
-
-    bool in_double_quotes = false;
-    bool in_single_quotes = false;
-    bool escaped = false;
-
-    while (i < pattern.size()) {
-        wchar_t ch = pattern[i];
-
-        if (escaped) {
-            current += L'\\';
-            current += ch;
-            escaped = false;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-            i++;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            current += ch;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            current += ch;
-            i++;
-            continue;
-        }
-
-        if (!in_double_quotes && !in_single_quotes) {
-            if (ch == L'(') {
-                paren_level++;
-            } else if (ch == L')') {
-                paren_level--;
-                if (paren_level == 0) {
-                    parts.push_back(current);
-                    ext_end = i;
-                    sub_patterns = parts;
-                    return true;
-                }
-            } else if (ch == L'|' && paren_level == 1) {
-                parts.push_back(current);
-                current.clear();
-                i++;
-                continue;
-            }
-        }
-
-        current += ch;
-        i++;
-    }
-
-    return false;
-}
-
-bool match_glob_pattern_recursive(
-    const std::wstring& pattern,
-    size_t pattern_index,
-    const std::wstring& candidate,
-    size_t candidate_index,
-    bool case_sensitive,
-    unsigned long long& step_budget) {
-    if (step_budget == 0) {
-        return false;
-    }
-    step_budget--;
-
-    while (pattern_index < pattern.size()) {
-        wchar_t p = pattern[pattern_index];
-
-        bool is_ext_glob = false;
-        if (pattern_index + 1 < pattern.size() && pattern[pattern_index + 1] == L'(') {
-            if (p == L'+' || p == L'*' || p == L'?' || p == L'@' || p == L'!') {
-                is_ext_glob = true;
-            }
-        }
-
-        if (is_ext_glob) {
-            size_t ext_end = 0;
-            std::vector<std::wstring> sub_patterns;
-            if (parse_extended_glob(pattern, pattern_index, ext_end, sub_patterns)) {
-                std::wstring remaining_pattern = pattern.substr(ext_end + 1);
-                wchar_t op = p;
-
-                if (op == L'?') {
-                    if (match_glob_pattern_recursive(remaining_pattern, 0, candidate, candidate_index, case_sensitive, step_budget)) {
-                        return true;
-                    }
-                    for (const auto& sub : sub_patterns) {
-                        std::wstring temp = sub + remaining_pattern;
-                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-
-                if (op == L'@') {
-                    for (const auto& sub : sub_patterns) {
-                        std::wstring temp = sub + remaining_pattern;
-                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-
-                if (op == L'*') {
-                    if (match_glob_pattern_recursive(remaining_pattern, 0, candidate, candidate_index, case_sensitive, step_budget)) {
-                        return true;
-                    }
-                    std::wstring ext_glob_part = pattern.substr(pattern_index, ext_end - pattern_index + 1);
-                    for (const auto& sub : sub_patterns) {
-                        std::wstring temp = sub + ext_glob_part + remaining_pattern;
-                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-
-                if (op == L'+') {
-                    std::wstring star_glob_part = L"*" + pattern.substr(pattern_index + 1, ext_end - pattern_index);
-                    for (const auto& sub : sub_patterns) {
-                        std::wstring temp = sub + star_glob_part + remaining_pattern;
-                        if (match_glob_pattern_recursive(temp, 0, candidate, candidate_index, case_sensitive, step_budget)) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-
-                if (op == L'!') {
-                    size_t max_L = candidate.size() - candidate_index;
-                    for (size_t L = 0; L <= max_L; ++L) {
-                        std::wstring candidate_prefix = candidate.substr(candidate_index, L);
-                        bool matches_any = false;
-                        for (const auto& sub : sub_patterns) {
-                            unsigned long long local_budget = step_budget;
-                            if (match_glob_pattern_recursive(sub, 0, candidate_prefix, 0, case_sensitive, local_budget)) {
-                                matches_any = true;
-                                break;
-                            }
-                        }
-
-                        if (!matches_any) {
-                            if (match_glob_pattern_recursive(remaining_pattern, 0, candidate, candidate_index + L, case_sensitive, step_budget)) {
-                                return true;
-                            }
-                        }
-                    }
-                    return false;
-                }
-            }
-        }
-
-        if (p == L'*') {
-            while (pattern_index < pattern.size() && pattern[pattern_index] == L'*') {
-                pattern_index++;
-            }
-            if (pattern_index == pattern.size()) {
-                return true;
-            }
-            while (candidate_index <= candidate.size()) {
-                if (match_glob_pattern_recursive(pattern, pattern_index, candidate, candidate_index, case_sensitive, step_budget)) {
-                    return true;
-                }
-                if (candidate_index == candidate.size()) {
-                    break;
-                }
-                candidate_index++;
-            }
-            return false;
-        }
-
-        if (candidate_index >= candidate.size()) {
-            return false;
-        }
-
-        if (p == L'?') {
-            pattern_index++;
-            candidate_index++;
-            continue;
-        }
-
-        if (p == L'[') {
-            size_t consumed = 0;
-            if (!match_glob_character_class(pattern, pattern_index, candidate[candidate_index], consumed, case_sensitive)) {
-                return false;
-            }
-            pattern_index += consumed;
-            candidate_index++;
-            continue;
-        }
-
-        if (case_sensitive ? (p != candidate[candidate_index]) : (std::towlower(p) != std::towlower(candidate[candidate_index]))) {
-            return false;
-        }
-        pattern_index++;
-        candidate_index++;
-    }
-
-    return candidate_index == candidate.size();
-}
-
-bool match_glob_pattern(const std::wstring& pattern, const std::wstring& candidate) {
-    if (!candidate.empty() && candidate[0] == L'.' && (pattern.empty() || pattern[0] != L'.')) {
-        return false;
-    }
-
-    const bool case_sensitive = pattern_match_case_sensitive();
-    unsigned long long step_budget = kMaxPatternMatchSteps;
-    return match_glob_pattern_recursive(pattern, 0, candidate, 0, case_sensitive, step_budget);
-}
-
-std::wstring join_path_for_glob(const std::wstring& base, const std::wstring& name) {
-    if (base.empty()) {
-        return name;
-    }
-    if (base == L".") {
-        return L".\\" + name;
-    }
-    if (base.back() == L'\\' || base.back() == L'/') {
-        return base + name;
-    }
-    return base + L"\\" + name;
-}
-
-std::wstring normalize_relative_glob_result(const std::wstring& value) {
-    if (value.rfind(L".\\", 0) == 0) {
-        return value.substr(2);
-    }
-    return value;
-}
-
-void expand_glob_token(const std::wstring& pattern, std::vector<std::wstring>& matches) {
-    matches.clear();
-
-    std::wstring normalized = pattern;
-    std::replace(normalized.begin(), normalized.end(), L'/', L'\\');
-
-    std::vector<std::wstring> segments;
-    std::wstring current_segment;
-    for (wchar_t ch : normalized) {
-        if (is_path_separator(ch)) {
-            if (!current_segment.empty()) {
-                segments.push_back(current_segment);
-                current_segment.clear();
-            }
-            continue;
-        }
-        current_segment += ch;
-    }
-    if (!current_segment.empty()) {
-        segments.push_back(current_segment);
-    }
-
-    if (segments.empty()) {
-        return;
-    }
-
-    bool absolute_drive = normalized.size() >= 2 && std::iswalpha(normalized[0]) && normalized[1] == L':';
-    bool rooted = !normalized.empty() && is_path_separator(normalized[0]);
-
-    std::vector<std::wstring> candidates;
-    if (absolute_drive) {
-        std::wstring base;
-        base += normalized[0];
-        base += L':';
-        base += L'\\';
-        candidates.push_back(base);
-    } else if (rooted) {
-        candidates.push_back(L"\\");
-    } else {
-        candidates.push_back(L".");
-    }
-
-    for (size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
-        const std::wstring& segment = segments[segment_index];
-        const bool needs_glob = has_glob_metacharacters(segment);
-        const bool is_last = segment_index + 1 == segments.size();
-
-        std::vector<std::wstring> next_candidates;
-        for (const std::wstring& base : candidates) {
-            if (!needs_glob) {
-                std::wstring next_path = join_path_for_glob(base, segment);
-                DWORD attrs = GetFileAttributesW(next_path.c_str());
-                if (attrs == INVALID_FILE_ATTRIBUTES) {
-                    continue;
-                }
-                if (!is_last && ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0)) {
-                    continue;
-                }
-                next_candidates.push_back(next_path);
-                continue;
-            }
-
-            std::wstring probe = join_path_for_glob(base, L"*");
-            WIN32_FIND_DATAW find_data;
-            HANDLE handle = FindFirstFileW(probe.c_str(), &find_data);
-            if (handle == INVALID_HANDLE_VALUE) {
-                continue;
-            }
-
-            do {
-                std::wstring name = find_data.cFileName;
-                if (name == L"." || name == L"..") {
-                    continue;
-                }
-                if (!match_glob_pattern(segment, name)) {
-                    continue;
-                }
-                if (!is_last && ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)) {
-                    continue;
-                }
-
-                next_candidates.push_back(join_path_for_glob(base, name));
-            } while (FindNextFileW(handle, &find_data));
-
-            FindClose(handle);
-        }
-
-        candidates.swap(next_candidates);
-        if (candidates.empty()) {
-            return;
-        }
-    }
-
-    std::sort(candidates.begin(), candidates.end(), [](const std::wstring& left, const std::wstring& right) {
-        return _wcsicmp(left.c_str(), right.c_str()) < 0;
-    });
-
-    for (const std::wstring& candidate : candidates) {
-        matches.push_back(normalize_relative_glob_result(candidate));
-    }
-}
-
-std::vector<std::wstring> expand_globs_for_tokens(const std::vector<std::wstring>& tokens, const std::vector<std::wstring>& preserved_tokens) {
-    std::vector<std::wstring> expanded;
-    expanded.reserve(tokens.size());
-
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        const std::wstring& token = tokens[i];
-        const std::wstring& preserved = (i < preserved_tokens.size()) ? preserved_tokens[i] : token;
-
-        if (!has_unquoted_glob_metacharacters(preserved) || !has_glob_metacharacters(token)) {
-            expanded.push_back(token);
-            continue;
-        }
-
-        std::vector<std::wstring> matches;
-        expand_glob_token(token, matches);
-        if (matches.empty()) {
-            // Keep unmatched wildcard tokens literal for compatibility.
-            expanded.push_back(token);
-            continue;
-        }
-
-        expanded.insert(expanded.end(), std::make_move_iterator(matches.begin()), std::make_move_iterator(matches.end()));
-    }
-
-    return expanded;
-}
-
-bool is_valid_shell_identifier(const std::wstring& name) {
-    if (name.empty()) {
-        return false;
-    }
-    if (name[0] == L'.') {
-        if (name.size() < 2) return false;
-        return std::all_of(name.begin() + 1, name.end(), [](wchar_t ch) {
-            return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.';
-        });
-    }
-    if (!(std::iswalpha(name[0]) || name[0] == L'_')) {
-        return false;
-    }
-    return std::all_of(name.begin(), name.end(), [](wchar_t ch) {
-        return std::iswalnum(ch) != 0 || ch == L'_' || ch == L'.';
-    });
-}
-
-bool parse_array_reference_expression(const std::wstring& expression, std::wstring& base_name, std::wstring& index_text, bool& has_index) {
-    base_name.clear();
-    index_text.clear();
-    has_index = false;
-
-    size_t open = expression.find(L'[');
-    if (open == std::wstring::npos) {
-        base_name = expression;
-        return is_valid_shell_identifier(base_name);
-    }
-
-    if (open == 0) {
-        return false;
-    }
-
-    int depth = 0;
-    size_t match_pos = std::wstring::npos;
-    for (size_t i = open; i < expression.size(); ++i) {
-        if (expression[i] == L'[') {
-            depth++;
-        } else if (expression[i] == L']') {
-            depth--;
-            if (depth == 0) {
-                match_pos = i;
-                break;
-            }
-        }
-    }
-
-    if (match_pos == std::wstring::npos || match_pos != expression.size() - 1) {
-        return false;
-    }
-
-    base_name = expression.substr(0, open);
-    if (!is_valid_shell_identifier(base_name)) {
-        return false;
-    }
-
-    index_text = expression.substr(open + 1, expression.size() - open - 2);
-    if (index_text.empty()) {
-        return false;
-    }
-
-    has_index = true;
-    return true;
-}
-
-bool parse_non_negative_index(const std::wstring& text, size_t& out_index) {
-    if (text.empty()) {
-        return false;
-    }
-
-    try {
-        size_t consumed = 0;
-        unsigned long long parsed = std::stoull(text, &consumed);
-        if (consumed != text.size()) {
-            return false;
-        }
-        out_index = static_cast<size_t>(parsed);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-bool parse_array_literal(const std::wstring& value, std::vector<std::wstring>& elements) {
-    elements.clear();
-    std::wstring trimmed = trim_copy(value);
-    if (trimmed.size() < 2 || trimmed.front() != L'(' || trimmed.back() != L')') {
-        return false;
-    }
-
-    std::wstring inner = trim_copy(trimmed.substr(1, trimmed.size() - 2));
-    if (inner.empty()) {
-        return true;
-    }
-
-    std::vector<std::wstring> tokens = ksh_tokenize(inner);
-    size_t next_positional_index = 0;
-
-    for (const std::wstring& token : tokens) {
-        if (token.empty()) {
-            continue;
-        }
-
-        size_t close_bracket = token.find(L']');
-        if (token[0] == L'[' && close_bracket != std::wstring::npos && (close_bracket + 1) < token.size() && token[close_bracket + 1] == L'=') {
-            std::wstring index_text = token.substr(1, close_bracket - 1);
-            size_t explicit_index = 0;
-            if (!parse_non_negative_index(index_text, explicit_index)) {
-                return false;
-            }
-            if (explicit_index >= kMaxArrayIndex) {
-                return false;
-            }
-
-            std::wstring explicit_value = token.substr(close_bracket + 2);
-            if (elements.size() <= explicit_index) {
-                elements.resize(explicit_index + 1);
-            }
-            elements[explicit_index] = explicit_value;
-            if (next_positional_index <= explicit_index) {
-                next_positional_index = explicit_index + 1;
-            }
-            continue;
-        }
-
-        if (elements.size() <= next_positional_index) {
-            elements.resize(next_positional_index + 1);
-        }
-        elements[next_positional_index] = token;
-        next_positional_index++;
-    }
-
-    return true;
-}
-
-std::vector<std::wstring> get_array_values_vector(const std::wstring& name) {
-    std::vector<std::wstring> result;
-    std::map<std::wstring, std::map<std::wstring, std::wstring>>::const_iterator it = ksh_env.arrays.find(name);
-    if (it == ksh_env.arrays.end()) {
-        return result;
-    }
-
-    const std::map<std::wstring, std::wstring>& m = it->second;
-    bool is_assoc = false;
-    std::map<std::wstring, bool>::const_iterator assoc_it = ksh_env.associative_flags.find(name);
-    if (assoc_it != ksh_env.associative_flags.end()) {
-        is_assoc = assoc_it->second;
-    }
-
-    if (is_assoc) {
-        for (const auto& pair : m) {
-            result.push_back(pair.second);
-        }
-    } else {
-        size_t max_idx = 0;
-        bool has_any = false;
-        std::vector<std::pair<size_t, std::wstring>> parsed;
-        for (const auto& pair : m) {
-            size_t idx = 0;
-            if (parse_non_negative_index(pair.first, idx)) {
-                parsed.push_back({idx, pair.second});
-                if (idx > max_idx) {
-                    max_idx = idx;
-                }
-                has_any = true;
-            }
-        }
-        if (has_any) {
-            result.resize(max_idx + 1);
-            for (const auto& p : parsed) {
-                result[p.first] = p.second;
-            }
-        }
-    }
-    return result;
-}
-
-bool parse_associative_array_literal(const std::wstring& value, std::map<std::wstring, std::wstring>& elements) {
-    elements.clear();
-    std::wstring trimmed = trim_copy(value);
-    if (trimmed.size() < 2 || trimmed.front() != L'(' || trimmed.back() != L')') {
-        return false;
-    }
-
-    std::wstring inner = trim_copy(trimmed.substr(1, trimmed.size() - 2));
-    if (inner.empty()) {
-        return true;
-    }
-
-    std::vector<std::wstring> tokens = ksh_tokenize(inner);
-
-    for (const std::wstring& token : tokens) {
-        if (token.empty()) {
-            continue;
-        }
-
-        size_t close_bracket = token.find(L']');
-        if (token[0] == L'[' && close_bracket != std::wstring::npos && (close_bracket + 1) < token.size() && token[close_bracket + 1] == L'=') {
-            std::wstring key = token.substr(1, close_bracket - 1);
-            std::wstring explicit_value = token.substr(close_bracket + 2);
-            elements[key] = explicit_value;
-        } else {
-            return false;
-        }
-    }
-    return true;
-}
-
-void assign_scalar_parameter(const std::wstring& name, const std::wstring& value) {
-    ensure_registry_namespaces_registered();
-    const size_t namespace_separator = name.find(L'.');
-    if (namespace_separator != std::wstring::npos) {
-        const std::wstring namespace_name = name.substr(0, namespace_separator);
-        std::map<std::wstring, CustomTypeDefinition>::const_iterator namespace_it = g_custom_types.find(namespace_name);
-        if (namespace_it != g_custom_types.end() && namespace_it->second.is_dynamic_namespace && namespace_it->second.property_setter) {
-            if (!namespace_it->second.property_setter(name, value)) {
-                ksh_env.variables[L"?"] = L"1";
-            } else {
-                ksh_env.variables[L"?"] = L"0";
-            }
-            return;
-        }
-    }
-
-    bool exists = ksh_env.variables.find(name) != ksh_env.variables.end();
-    if (!exists && g_shell_functions.find(name + L".init") != g_shell_functions.end() &&
-        g_active_init_hooks.find(name) == g_active_init_hooks.end()) {
-        
-        g_active_init_hooks.insert(name);
-        bool dummy = false;
-        execute_defined_function(name + L".init", {}, dummy);
-        g_active_init_hooks.erase(name);
-    }
-
-    std::wstring assigned_value = value;
-    if (g_shell_functions.find(name + L".set") != g_shell_functions.end() &&
-        g_active_set_hooks.find(name) == g_active_set_hooks.end()) {
-        
-        g_active_set_hooks.insert(name);
-        
-        std::wstring old_sh_val;
-        bool had_sh_val = false;
-        auto sh_it = ksh_env.variables.find(L".sh.value");
-        if (sh_it != ksh_env.variables.end()) {
-            old_sh_val = sh_it->second;
-            had_sh_val = true;
-        }
-        
-        ksh_env.variables[L".sh.value"] = value;
-        
-        bool dummy = false;
-        execute_defined_function(name + L".set", {}, dummy);
-        
-        assigned_value = ksh_env.variables[L".sh.value"];
-        
-        if (had_sh_val) {
-            ksh_env.variables[L".sh.value"] = old_sh_val;
-        } else {
-            ksh_env.variables.erase(L".sh.value");
-        }
-        
-        g_active_set_hooks.erase(name);
-    }
-
-    const bool uppercase_mode = get_flag_value(ksh_env.uppercase_flags, name);
-    const bool lowercase_mode = get_flag_value(ksh_env.lowercase_flags, name);
-    if (uppercase_mode) {
-        assigned_value = to_upper_copy(assigned_value);
-    } else if (lowercase_mode) {
-        assigned_value = to_lower_copy(assigned_value);
-    }
-
-    std::map<std::wstring, wchar_t>::const_iterator justify_mode_it = ksh_env.justify_modes.find(name);
-    if (justify_mode_it != ksh_env.justify_modes.end()) {
-        std::map<std::wstring, int>::const_iterator justify_width_it = ksh_env.justify_widths.find(name);
-        int justify_width = (justify_width_it != ksh_env.justify_widths.end()) ? justify_width_it->second : 0;
-        if (justify_width > 0) {
-            const size_t width = static_cast<size_t>(justify_width);
-            if (justify_mode_it->second == L'L') {
-                if (assigned_value.size() > width) {
-                    assigned_value = assigned_value.substr(0, width);
-                } else if (assigned_value.size() < width) {
-                    assigned_value.append(width - assigned_value.size(), L' ');
-                }
-            } else if (justify_mode_it->second == L'R') {
-                if (assigned_value.size() > width) {
-                    assigned_value = assigned_value.substr(assigned_value.size() - width);
-                } else if (assigned_value.size() < width) {
-                    assigned_value.insert(0, width - assigned_value.size(), L' ');
-                }
-            } else if (justify_mode_it->second == L'Z') {
-                if (assigned_value.size() > width) {
-                    assigned_value = assigned_value.substr(assigned_value.size() - width);
-                } else if (assigned_value.size() < width) {
-                    size_t pad_count = width - assigned_value.size();
-                    if (!assigned_value.empty() && (assigned_value[0] == L'+' || assigned_value[0] == L'-')) {
-                        assigned_value.insert(1, pad_count, L'0');
-                    } else {
-                        assigned_value.insert(0, pad_count, L'0');
-                    }
-                }
-            }
-        }
-    }
-
-    ksh_env.variables[name] = assigned_value;
-    ksh_env.registry_metadata.erase(name);
-    ksh_env.arrays.erase(name);
-    ksh_env.associative_flags.erase(name);
-    SetEnvironmentVariableW(name.c_str(), assigned_value.c_str());
-}
-
-void assign_array_parameter(const std::wstring& name, const std::vector<std::wstring>& values) {
-    std::map<std::wstring, std::wstring> map_values;
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (!values[i].empty()) {
-            map_values[std::to_wstring(i)] = values[i];
-        }
-    }
-    ksh_env.arrays[name] = std::move(map_values);
-    ksh_env.variables.erase(name);
-    ksh_env.registry_metadata.erase(name);
-    ksh_env.justify_modes.erase(name);
-    ksh_env.justify_widths.erase(name);
-    SetEnvironmentVariableW(name.c_str(), nullptr);
-}
-
-bool try_read_environment_variable(const std::wstring& name, std::wstring& value) {
-    value.clear();
-    DWORD required = GetEnvironmentVariableW(name.c_str(), nullptr, 0);
-    if (required == 0) {
-        return false;
-    }
-
-    std::vector<wchar_t> buffer(required);
-    DWORD written = GetEnvironmentVariableW(name.c_str(), buffer.data(), required);
-    if (written == 0 || written >= required) {
-        return false;
-    }
-
-    value.assign(buffer.data(), written);
-    return true;
-}
-
-std::wstring resolve_variable_name(const std::wstring& name, int depth) {
-    if (name.empty() || depth > 10) {
-        return name;
-    }
-
-    std::wstring base_name;
-    std::wstring index_text;
-    bool has_index = false;
-    if (parse_array_reference_expression(name, base_name, index_text, has_index)) {
-        if (has_index) {
-            std::wstring resolved_base = resolve_variable_name(base_name, depth + 1);
-            return resolved_base + L"[" + index_text + L"]";
-        }
-    }
-
-    std::map<std::wstring, bool>::const_iterator nameref_it = ksh_env.nameref_flags.find(name);
-    if (nameref_it != ksh_env.nameref_flags.end() && nameref_it->second) {
-        std::map<std::wstring, std::wstring>::const_iterator val_it = ksh_env.variables.find(name);
-        if (val_it != ksh_env.variables.end()) {
-            return resolve_variable_name(val_it->second, depth + 1);
-        }
-    }
-
-    return name;
+    escaped.push_back(L'"');
+    return escaped;
 }
 
 int count_unquoted_brace_delta(const std::wstring& line) {
@@ -10536,961 +13309,6 @@ bool capture_function_definition(
 
     line_index = probe + 1;
     return true;
-}
-
-bool assign_parameter_value(const std::wstring& lhs, const std::wstring& rhs, bool array_hint, bool local_scope, std::wstring& error_message, bool is_nameref) {
-    error_message.clear();
-
-    if (is_nameref) {
-        std::wstring base_name;
-        std::wstring index_text;
-        bool has_index = false;
-        if (!parse_array_reference_expression(lhs, base_name, index_text, has_index)) {
-            error_message = L"invalid assignment target: " + lhs;
-            return false;
-        }
-
-        if (has_index) {
-            error_message = L"cannot define array element as a nameref: " + lhs;
-            return false;
-        }
-
-        if (local_scope) {
-            snapshot_local_variable_if_needed(base_name);
-        }
-
-        if (get_flag_value(ksh_env.readonly_flags, base_name)) {
-            error_message = L"variable is read-only: " + base_name;
-            return false;
-        }
-
-        ksh_env.variables[base_name] = rhs;
-        ksh_env.arrays.erase(base_name);
-        ksh_env.associative_flags.erase(base_name);
-        set_flag_value(ksh_env.nameref_flags, base_name, true);
-        return true;
-    }
-
-    std::wstring resolved_lhs = resolve_variable_name(lhs);
-
-    std::wstring base_name;
-    std::wstring index_text;
-    bool has_index = false;
-    if (!parse_array_reference_expression(resolved_lhs, base_name, index_text, has_index)) {
-        error_message = L"invalid assignment target: " + lhs;
-        return false;
-    }
-
-    if (!has_index) {
-        ensure_registry_namespaces_registered();
-        const size_t namespace_separator = base_name.find(L'.');
-        if (namespace_separator != std::wstring::npos) {
-            const std::wstring namespace_name = base_name.substr(0, namespace_separator);
-            std::map<std::wstring, CustomTypeDefinition>::const_iterator namespace_it = g_custom_types.find(namespace_name);
-            if (namespace_it != g_custom_types.end() && namespace_it->second.is_dynamic_namespace && namespace_it->second.property_setter) {
-                if (!namespace_it->second.property_setter(base_name, rhs)) {
-                    error_message = L"failed to set Registry property: " + base_name;
-                    return false;
-                }
-                ksh_env.variables[L"?"] = L"0";
-                return true;
-            }
-        }
-    }
-
-    if (local_scope) {
-        snapshot_local_variable_if_needed(base_name);
-    }
-
-    if (get_flag_value(ksh_env.readonly_flags, base_name)) {
-        error_message = L"variable is read-only: " + base_name;
-        return false;
-    }
-
-    const bool integer_mode = get_flag_value(ksh_env.integer_flags, base_name);
-
-    if (integer_mode && (has_index || array_hint)) {
-        error_message = L"integer variable cannot be assigned as an array: " + base_name;
-        return false;
-    }
-
-    const bool is_assoc = get_flag_value(ksh_env.associative_flags, base_name);
-
-    if (is_assoc) {
-        if (integer_mode) {
-            error_message = L"integer variable cannot be assigned as an array: " + base_name;
-            return false;
-        }
-
-        if (has_index) {
-            if (index_text.empty()) {
-                error_message = L"associative array key cannot be empty";
-                return false;
-            }
-            ksh_env.arrays[base_name][index_text] = rhs;
-            ksh_env.variables.erase(base_name);
-            return true;
-        }
-
-        std::wstring trimmed_rhs = trim_copy(rhs);
-        if (!trimmed_rhs.empty() && trimmed_rhs.front() == L'(' && trimmed_rhs.back() == L')') {
-            std::map<std::wstring, std::wstring> assoc_elements;
-            if (parse_associative_array_literal(rhs, assoc_elements)) {
-                ksh_env.arrays[base_name] = std::move(assoc_elements);
-                ksh_env.variables.erase(base_name);
-                return true;
-            } else {
-                error_message = L"invalid associative array literal assignment";
-                return false;
-            }
-        }
-
-        ksh_env.arrays[base_name][L"0"] = rhs;
-        ksh_env.variables.erase(base_name);
-        return true;
-    }
-
-    std::vector<std::wstring> literal_values;
-    const bool rhs_is_array_literal = parse_array_literal(rhs, literal_values);
-
-    if (integer_mode && rhs_is_array_literal) {
-        error_message = L"integer variable cannot be assigned an array literal: " + base_name;
-        return false;
-    }
-
-    if (has_index) {
-        size_t index = 0;
-        if (!parse_non_negative_index(index_text, index)) {
-            error_message = L"array index must be a non-negative integer";
-            return false;
-        }
-        if (index >= kMaxArrayIndex) {
-            error_message = L"array index exceeds maximum allowed value";
-            return false;
-        }
-
-        std::map<std::wstring, std::wstring>& target_array = ksh_env.arrays[base_name];
-        target_array[std::to_wstring(index)] = rhs;
-        ksh_env.variables.erase(base_name);
-        return true;
-    }
-
-    if (array_hint || rhs_is_array_literal) {
-        if (!rhs_is_array_literal && array_hint) {
-            literal_values.push_back(rhs);
-        }
-        assign_array_parameter(base_name, literal_values);
-        sync_exported_environment_variable(base_name);
-        return true;
-    }
-
-    std::wstring scalar_value = rhs;
-    if (integer_mode) {
-        scalar_value = evaluate_arithmetic(rhs);
-    }
-
-    // Enforce per-session variable table cap (new entries only).
-    const bool scalar_exists = ksh_env.variables.find(base_name) != ksh_env.variables.end();
-    const bool array_exists  = ksh_env.arrays.find(base_name)    != ksh_env.arrays.end();
-    if (!scalar_exists && !array_exists) {
-        const size_t total = ksh_env.variables.size() + ksh_env.arrays.size();
-        if (total >= kMaxShellVariables) {
-            error_message = L"shell variable table limit reached, cannot create: " + base_name;
-            return false;
-        }
-    }
-
-    assign_scalar_parameter(base_name, scalar_value);
-    sync_exported_environment_variable(base_name);
-    return true;
-}
-
-bool extract_ksh_conditional_block(const std::wstring& expanded_input, std::wstring& condition, std::wstring& error_message) {
-    condition.clear();
-    error_message.clear();
-
-    size_t start = expanded_input.find(L"[[");
-    if (start == std::wstring::npos) {
-        error_message = L"missing opening [[";
-        return false;
-    }
-
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-    size_t i = start + 2;
-    size_t closing = std::wstring::npos;
-
-    while (i < expanded_input.size()) {
-        wchar_t ch = expanded_input[i];
-
-        if (escaped) {
-            escaped = false;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            i++;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            i++;
-            continue;
-        }
-
-        if (!in_single_quotes && !in_double_quotes && ch == L']' && (i + 1) < expanded_input.size() && expanded_input[i + 1] == L']') {
-            closing = i;
-            break;
-        }
-
-        i++;
-    }
-
-    if (closing == std::wstring::npos) {
-        error_message = L"missing closing ]]";
-        return false;
-    }
-
-    condition = trim_copy(expanded_input.substr(start + 2, closing - (start + 2)));
-
-    std::wstring trailing = trim_copy(expanded_input.substr(closing + 2));
-    if (!trailing.empty()) {
-        error_message = L"unexpected tokens after ]]";
-        return false;
-    }
-
-    return true;
-}
-
-bool tokenize_ksh_conditional(const std::wstring& condition, std::vector<std::wstring>& tokens, std::wstring& error_message) {
-    tokens.clear();
-    error_message.clear();
-
-    std::wstring current;
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
-    bool escaped = false;
-    bool in_token = false;
-
-    auto flush_current = [&]() {
-        if (in_token) {
-            tokens.push_back(current);
-            current.clear();
-            in_token = false;
-        }
-    };
-
-    for (size_t i = 0; i < condition.size(); ) {
-        wchar_t ch = condition[i];
-
-        if (escaped) {
-            current += ch;
-            in_token = true;
-            escaped = false;
-            i++;
-            continue;
-        }
-
-        if (ch == L'\\' && !in_single_quotes) {
-            escaped = true;
-            i++;
-            continue;
-        }
-
-        if (ch == L'$' && i + 1 < condition.length() && condition[i + 1] == L'\'' && !in_double_quotes && !in_single_quotes) {
-            current += expand_ansi_c_quoting(condition, i);
-            in_token = true;
-            continue;
-        }
-
-        if (ch == L'\'' && !in_double_quotes) {
-            in_single_quotes = !in_single_quotes;
-            in_token = true;
-            i++;
-            continue;
-        }
-
-        if (ch == L'"' && !in_single_quotes) {
-            in_double_quotes = !in_double_quotes;
-            in_token = true;
-            i++;
-            continue;
-        }
-
-        if (!in_single_quotes && !in_double_quotes && std::iswspace(ch)) {
-            flush_current();
-            i++;
-            continue;
-        }
-
-        current += ch;
-        in_token = true;
-        i++;
-    }
-
-    if (escaped) {
-        error_message = L"unfinished escape sequence";
-        return false;
-    }
-    if (in_single_quotes || in_double_quotes) {
-        error_message = L"unterminated quoted string";
-        return false;
-    }
-
-    flush_current();
-    return true;
-}
-
-bool try_parse_strict_double(const std::wstring& token, double& value) {
-    if (token.empty()) {
-        return false;
-    }
-
-    wchar_t* end_ptr = nullptr;
-    value = std::wcstod(token.c_str(), &end_ptr);
-    return end_ptr != token.c_str() && end_ptr != nullptr && *end_ptr == L'\0';
-}
-
-bool evaluate_file_unary_operator(const std::wstring& op, const std::wstring& path, bool& result) {
-    result = false;
-
-    DWORD attrs = GetFileAttributesW(path.c_str());
-    const bool exists = attrs != INVALID_FILE_ATTRIBUTES;
-
-    if (op == L"-e" || op == L"-a") {
-        result = exists;
-        return true;
-    }
-
-    if (op == L"-f") {
-        result = exists && ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0);
-        return true;
-    }
-
-    if (op == L"-d") {
-        result = exists && ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0);
-        return true;
-    }
-
-    if (op == L"-h" || op == L"-L") {
-        result = exists && ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
-        return true;
-    }
-
-    if (op == L"-s") {
-        if (!exists || ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0)) {
-            result = false;
-            return true;
-        }
-
-        WIN32_FILE_ATTRIBUTE_DATA file_data;
-        if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &file_data)) {
-            result = false;
-            return true;
-        }
-
-        ULONGLONG size = (static_cast<ULONGLONG>(file_data.nFileSizeHigh) << 32) | file_data.nFileSizeLow;
-        result = size > 0;
-        return true;
-    }
-
-    if (op == L"-r") {
-        result = _waccess(path.c_str(), 4) == 0;
-        return true;
-    }
-
-    if (op == L"-w") {
-        result = _waccess(path.c_str(), 2) == 0;
-        return true;
-    }
-
-    if (op == L"-x") {
-        result = _waccess(path.c_str(), 0) == 0;
-        return true;
-    }
-
-    return false;
-}
-
-bool evaluate_file_comparison_operator(const std::wstring& left, const std::wstring& op, const std::wstring& right, bool& result, std::wstring& error_message) {
-    error_message.clear();
-
-    if (op == L"-ef") {
-        wchar_t left_full[MAX_PATH];
-        wchar_t right_full[MAX_PATH];
-        DWORD left_len = GetFullPathNameW(left.c_str(), MAX_PATH, left_full, nullptr);
-        DWORD right_len = GetFullPathNameW(right.c_str(), MAX_PATH, right_full, nullptr);
-        if (left_len == 0 || right_len == 0) {
-            result = false;
-            return true;
-        }
-        result = _wcsicmp(left_full, right_full) == 0;
-        return true;
-    }
-
-    if (op == L"-nt" || op == L"-ot") {
-        WIN32_FILE_ATTRIBUTE_DATA left_data;
-        WIN32_FILE_ATTRIBUTE_DATA right_data;
-        if (!GetFileAttributesExW(left.c_str(), GetFileExInfoStandard, &left_data) ||
-            !GetFileAttributesExW(right.c_str(), GetFileExInfoStandard, &right_data)) {
-            result = false;
-            return true;
-        }
-
-        LONG cmp = CompareFileTime(&left_data.ftLastWriteTime, &right_data.ftLastWriteTime);
-        result = (op == L"-nt") ? (cmp > 0) : (cmp < 0);
-        return true;
-    }
-
-    return false;
-}
-
-bool evaluate_ksh_simple_condition(const std::vector<std::wstring>& tokens, size_t begin, size_t end, bool& result, std::wstring& error_message) {
-    error_message.clear();
-    result = false;
-
-    if (begin >= end) {
-        error_message = L"missing conditional expression";
-        return false;
-    }
-
-    size_t negate_count = 0;
-    while (begin < end && tokens[begin] == L"!") {
-        negate_count++;
-        begin++;
-    }
-
-    if (begin >= end) {
-        error_message = L"missing conditional expression after !";
-        return false;
-    }
-
-    size_t count = end - begin;
-
-    if (count == 1) {
-        result = !tokens[begin].empty();
-    } else if (count == 2) {
-        const std::wstring op = tokens[begin];
-        const std::wstring operand = tokens[begin + 1];
-        if (op == L"-n") {
-            result = !operand.empty();
-        } else if (op == L"-z") {
-            result = operand.empty();
-        } else if (evaluate_file_unary_operator(op, operand, result)) {
-            // File test operator evaluated.
-        } else {
-            error_message = L"unsupported unary operator: " + op;
-            return false;
-        }
-    } else if (count == 3) {
-        const std::wstring left = tokens[begin];
-        const std::wstring op = tokens[begin + 1];
-        const std::wstring right = tokens[begin + 2];
-
-        if (op == L"==" || op == L"=") {
-            result = match_glob_pattern(right, left);
-        } else if (op == L"!=") {
-            result = !match_glob_pattern(right, left);
-        } else if (op == L"=~") {
-            if (!is_regex_enabled()) {
-                error_message = L"regex matching is disabled";
-                return false;
-            }
-            if (right.size() > kMaxRegexPatternLength) {
-                error_message = L"regex pattern exceeds limit";
-                return false;
-            }
-            if (left.size() > kMaxRegexInputLength) {
-                error_message = L"regex input exceeds limit";
-                return false;
-            }
-            try {
-                std::wregex rx(right);
-                std::wsmatch match;
-                result = std::regex_search(left, match, rx);
-                if (result) {
-                    ksh_env.arrays[L".sh.match"].clear();
-                    for (size_t group_idx = 0; group_idx < match.size(); ++group_idx) {
-                        std::wstring idx_str = std::to_wstring(group_idx);
-                        ksh_env.arrays[L".sh.match"][idx_str] = match[group_idx].str();
-                    }
-                } else {
-                    ksh_env.arrays[L".sh.match"].clear();
-                }
-            } catch (...) {
-                ksh_env.arrays[L".sh.match"].clear();
-                error_message = L"invalid regex pattern";
-                return false;
-            }
-        } else if (op == L"<") {
-            result = left < right;
-        } else if (op == L">") {
-            result = left > right;
-        } else if (op == L"-eq" || op == L"-ne" || op == L"-gt" || op == L"-ge" || op == L"-lt" || op == L"-le") {
-            double left_num = 0.0;
-            double right_num = 0.0;
-            if (!try_parse_strict_double(left, left_num) || !try_parse_strict_double(right, right_num)) {
-                error_message = L"numeric comparison requires numeric operands";
-                return false;
-            }
-
-            if (op == L"-eq") result = (left_num == right_num);
-            if (op == L"-ne") result = (left_num != right_num);
-            if (op == L"-gt") result = (left_num > right_num);
-            if (op == L"-ge") result = (left_num >= right_num);
-            if (op == L"-lt") result = (left_num < right_num);
-            if (op == L"-le") result = (left_num <= right_num);
-        } else {
-            bool file_result = false;
-            if (evaluate_file_comparison_operator(left, op, right, file_result, error_message)) {
-                result = file_result;
-            } else {
-                error_message = L"unsupported binary operator: " + op;
-                return false;
-            }
-        }
-    } else {
-        error_message = L"unable to parse conditional expression";
-        return false;
-    }
-
-    if ((negate_count % 2) == 1) {
-        result = !result;
-    }
-    return true;
-}
-
-bool is_test_open_paren(const std::wstring& token) {
-    return token == L"(" || token == L"\\(";
-}
-
-bool is_test_close_paren(const std::wstring& token) {
-    return token == L")" || token == L"\\)";
-}
-
-bool is_supported_unary_condition_operator(const std::wstring& op) {
-    return op == L"-n" || op == L"-z" || op == L"-e" || op == L"-a" || op == L"-f" || op == L"-d" ||
-           op == L"-h" || op == L"-L" || op == L"-s" || op == L"-r" || op == L"-w" || op == L"-x";
-}
-
-bool is_supported_binary_condition_operator(const std::wstring& op) {
-    return op == L"==" || op == L"=" || op == L"!=" || op == L"=~" || op == L"<" || op == L">" ||
-           op == L"-eq" || op == L"-ne" || op == L"-gt" || op == L"-ge" || op == L"-lt" || op == L"-le" ||
-           op == L"-ef" || op == L"-nt" || op == L"-ot";
-}
-
-bool evaluate_test_condition_or(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message);
-
-bool evaluate_test_condition_primary(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
-    if (index >= tokens.size()) {
-        error_message = L"missing conditional expression";
-        return false;
-    }
-
-    if (is_test_open_paren(tokens[index])) {
-        index++;
-        if (!evaluate_test_condition_or(tokens, index, result, error_message)) {
-            return false;
-        }
-        if (index >= tokens.size() || !is_test_close_paren(tokens[index])) {
-            error_message = L"missing closing parenthesis in test expression";
-            return false;
-        }
-        index++;
-        return true;
-    }
-
-    if (is_test_close_paren(tokens[index])) {
-        error_message = L"unexpected closing parenthesis in test expression";
-        return false;
-    }
-
-    size_t start = index;
-    size_t consume = 1;
-
-    if ((index + 1) < tokens.size() && is_supported_unary_condition_operator(tokens[index])) {
-        consume = 2;
-    } else if ((index + 2) < tokens.size() && is_supported_binary_condition_operator(tokens[index + 1])) {
-        consume = 3;
-    }
-
-    if ((start + consume) > tokens.size()) {
-        error_message = L"missing operand in conditional expression";
-        return false;
-    }
-
-    if (!evaluate_ksh_simple_condition(tokens, start, start + consume, result, error_message)) {
-        return false;
-    }
-
-    index += consume;
-    return true;
-}
-
-bool evaluate_test_condition_not(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
-    if (index < tokens.size() && tokens[index] == L"!") {
-        index++;
-        if (!evaluate_test_condition_not(tokens, index, result, error_message)) {
-            return false;
-        }
-        result = !result;
-        return true;
-    }
-
-    return evaluate_test_condition_primary(tokens, index, result, error_message);
-}
-
-bool evaluate_test_condition_and(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
-    if (!evaluate_test_condition_not(tokens, index, result, error_message)) {
-        return false;
-    }
-
-    while (index < tokens.size() && tokens[index] == L"-a") {
-        index++;
-        bool rhs = false;
-        if (!evaluate_test_condition_not(tokens, index, rhs, error_message)) {
-            if (error_message.empty()) {
-                error_message = L"missing expression after -a";
-            }
-            return false;
-        }
-        result = result && rhs;
-    }
-
-    return true;
-}
-
-bool evaluate_test_condition_or(const std::vector<std::wstring>& tokens, size_t& index, bool& result, std::wstring& error_message) {
-    if (!evaluate_test_condition_and(tokens, index, result, error_message)) {
-        return false;
-    }
-
-    while (index < tokens.size() && tokens[index] == L"-o") {
-        index++;
-        bool rhs = false;
-        if (!evaluate_test_condition_and(tokens, index, rhs, error_message)) {
-            if (error_message.empty()) {
-                error_message = L"missing expression after -o";
-            }
-            return false;
-        }
-        result = result || rhs;
-    }
-
-    return true;
-}
-
-bool evaluate_test_condition_expression(const std::vector<std::wstring>& tokens, bool& result, std::wstring& error_message) {
-    result = false;
-    error_message.clear();
-
-    if (tokens.empty()) {
-        error_message = L"missing conditional expression";
-        return false;
-    }
-
-    size_t index = 0;
-    if (!evaluate_test_condition_or(tokens, index, result, error_message)) {
-        return false;
-    }
-
-    if (index != tokens.size()) {
-        error_message = L"unexpected token in test expression: " + tokens[index];
-        return false;
-    }
-
-    return true;
-}
-
-bool evaluate_ksh_conditional(const std::wstring& condition_str, bool& value, std::wstring& error_message) {
-    value = false;
-    error_message.clear();
-
-    std::vector<std::wstring> tokens;
-    if (!tokenize_ksh_conditional(condition_str, tokens, error_message)) {
-        return false;
-    }
-
-    if (tokens.empty()) {
-        error_message = L"empty conditional expression";
-        return false;
-    }
-
-    bool overall_value = false;
-    bool have_or_term = false;
-    size_t i = 0;
-
-    while (i < tokens.size()) {
-        bool and_value = true;
-        bool have_and_value = false;
-
-        while (i < tokens.size() && tokens[i] != L"||") {
-            size_t segment_start = i;
-            while (i < tokens.size() && tokens[i] != L"&&" && tokens[i] != L"||") {
-                i++;
-            }
-
-            bool segment_value = false;
-            if (!evaluate_ksh_simple_condition(tokens, segment_start, i, segment_value, error_message)) {
-                return false;
-            }
-
-            if (!have_and_value) {
-                and_value = segment_value;
-                have_and_value = true;
-            } else {
-                and_value = and_value && segment_value;
-            }
-
-            if (i < tokens.size() && tokens[i] == L"&&") {
-                i++;
-                if (i >= tokens.size()) {
-                    error_message = L"dangling && in conditional expression";
-                    return false;
-                }
-            }
-        }
-
-        if (!have_and_value) {
-            error_message = L"missing expression between logical operators";
-            return false;
-        }
-
-        if (!have_or_term) {
-            overall_value = and_value;
-            have_or_term = true;
-        } else {
-            overall_value = overall_value || and_value;
-        }
-
-        if (i < tokens.size() && tokens[i] == L"||") {
-            i++;
-            if (i >= tokens.size()) {
-                error_message = L"dangling || in conditional expression";
-                return false;
-            }
-        }
-    }
-
-    value = overall_value;
-    return true;
-}
-
-bool execute_native_or_fallback(const std::wstring& full_command, const RedirectionSpec* redir = nullptr, DWORD* exit_code_out = nullptr) {
-    struct ScopedForegroundProcessGuard {
-        ScopedForegroundProcessGuard() {
-            InterlockedExchange(&g_foreground_process_active, 1);
-        }
-        ~ScopedForegroundProcessGuard() {
-            InterlockedExchange(&g_foreground_process_active, 0);
-        }
-    } fg_guard;
-
-    const bool perf_trace = is_performance_telemetry_enabled();
-    const ULONGLONG overall_start = perf_trace ? GetTickCount64() : 0;
-
-    STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-
-    HANDLE std_in = nullptr;
-    HANDLE std_out = nullptr;
-    HANDLE std_err = nullptr;
-    bool close_in = false;
-    bool close_out = false;
-    bool close_err = false;
-
-    if (!setup_redirection_handles(redir, std_in, std_out, std_err, close_in, close_out, close_err)) {
-        if (exit_code_out != nullptr) {
-            *exit_code_out = 1;
-        }
-        std::wcerr << L"ksh: redirection setup failed\n";
-        return false;
-    }
-
-    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir));
-    if (use_redirected_stdio) {
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = std_in;
-        si.hStdOutput = std_out;
-        si.hStdError = std_err;
-    }
-
-    std::vector<HANDLE> inherited_handles;
-    if (use_redirected_stdio) {
-        inherited_handles = { std_in, std_out, std_err };
-    }
-    if (create_process_with_handle_list(full_command, si, inherited_handles, 0, pi)) {
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        register_child_process_times(pi.hProcess);
-        DWORD code = 0;
-        GetExitCodeProcess(pi.hProcess, &code);
-        if (exit_code_out != nullptr) {
-            *exit_code_out = code;
-        }
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        if (perf_trace) {
-            log_performance_trace(L"process.foreground.native", GetTickCount64() - overall_start, L"exit=" + std::to_wstring(code));
-        }
-        return true;
-    }
-
-    // Fallback to cmd.exe for Windows built-in shell commands
-    std::wstring cmd_name = get_command_name(full_command);
-    if (!is_windows_internal_command(cmd_name)) {
-        if (exit_code_out != nullptr) {
-            *exit_code_out = 127;
-        }
-        std::wcerr << L"ksh: " << cmd_name << L": command not found\n";
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        return false;
-    }
-
-    std::wstring cmd_call;
-    if (!build_cmd_shell_command_line(full_command, cmd_call)) {
-        if (exit_code_out != nullptr) {
-            *exit_code_out = 1;
-        }
-        std::wcerr << L"ksh: failed to start command\n";
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        return false;
-    }
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-    if (use_redirected_stdio) {
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = std_in;
-        si.hStdOutput = std_out;
-        si.hStdError = std_err;
-    }
-    if (create_process_with_handle_list(cmd_call, si, inherited_handles, 0, pi)) {
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        register_child_process_times(pi.hProcess);
-        DWORD code = 0;
-        GetExitCodeProcess(pi.hProcess, &code);
-        if (exit_code_out != nullptr) {
-            *exit_code_out = code;
-        }
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        if (perf_trace) {
-            log_performance_trace(L"process.foreground.cmd_fallback", GetTickCount64() - overall_start, L"exit=" + std::to_wstring(code));
-        }
-        return true;
-    }
-
-    if (exit_code_out != nullptr) {
-        *exit_code_out = 1;
-    }
-    std::wcerr << L"ksh: failed to start command\n";
-
-    close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-    if (perf_trace) {
-        log_performance_trace(L"process.foreground.failed", GetTickCount64() - overall_start);
-    }
-    return false;
-}
-
-bool launch_process(const std::wstring& full_command, HANDLE& process_handle, DWORD& pid, const RedirectionSpec* redir = nullptr) {
-    const bool perf_trace = is_performance_telemetry_enabled();
-    const ULONGLONG overall_start = perf_trace ? GetTickCount64() : 0;
-
-    process_handle = nullptr;
-    pid = 0;
-
-    STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-
-    HANDLE std_in = nullptr;
-    HANDLE std_out = nullptr;
-    HANDLE std_err = nullptr;
-    bool close_in = false;
-    bool close_out = false;
-    bool close_err = false;
-
-    if (!setup_redirection_handles(redir, std_in, std_out, std_err, close_in, close_out, close_err)) {
-        return false;
-    }
-
-    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir));
-    if (use_redirected_stdio) {
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = std_in;
-        si.hStdOutput = std_out;
-        si.hStdError = std_err;
-    }
-
-    std::vector<HANDLE> inherited_handles;
-    if (use_redirected_stdio) {
-        inherited_handles = { std_in, std_out, std_err };
-    }
-    if (create_process_with_handle_list(full_command, si, inherited_handles, 0, pi)) {
-        process_handle = pi.hProcess;
-        pid = pi.dwProcessId;
-        CloseHandle(pi.hThread);
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        if (perf_trace) {
-            log_performance_trace(L"process.background.native", GetTickCount64() - overall_start, L"pid=" + std::to_wstring(pid));
-        }
-        return true;
-    }
-
-    std::wstring cmd_name = get_command_name(full_command);
-    if (!is_windows_internal_command(cmd_name)) {
-        std::wcerr << L"ksh: " << cmd_name << L": command not found\n";
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        return false;
-    }
-
-    std::wstring cmd_call;
-    if (!build_cmd_shell_command_line(full_command, cmd_call)) {
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        return false;
-    }
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-    if (use_redirected_stdio) {
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = std_in;
-        si.hStdOutput = std_out;
-        si.hStdError = std_err;
-    }
-    if (create_process_with_handle_list(cmd_call, si, inherited_handles, 0, pi)) {
-        process_handle = pi.hProcess;
-        pid = pi.dwProcessId;
-        CloseHandle(pi.hThread);
-        close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-        if (perf_trace) {
-            log_performance_trace(L"process.background.cmd_fallback", GetTickCount64() - overall_start, L"pid=" + std::to_wstring(pid));
-        }
-        return true;
-    }
-
-    close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
-    if (perf_trace) {
-        log_performance_trace(L"process.background.failed", GetTickCount64() - overall_start);
-    }
-    return false;
 }
 
 bool is_script_empty_or_comment_line(const std::wstring& trimmed) {
@@ -13196,6 +15014,213 @@ bool execute_script_lines_range(
     return true;
 }
 
+std::wstring decode_script_text(const std::vector<char>& bytes) {
+    if (bytes.empty()) {
+        return L"";
+    }
+
+    if (bytes.size() >= 3 &&
+        static_cast<unsigned char>(bytes[0]) == 0xEF &&
+        static_cast<unsigned char>(bytes[1]) == 0xBB &&
+        static_cast<unsigned char>(bytes[2]) == 0xBF) {
+        return decode_multibyte(std::string(bytes.begin() + 3, bytes.end()), CP_UTF8);
+    }
+
+    if (bytes.size() >= 2 &&
+        static_cast<unsigned char>(bytes[0]) == 0xFF &&
+        static_cast<unsigned char>(bytes[1]) == 0xFE) {
+        const size_t byte_count = bytes.size() - 2;
+        const size_t wchar_count = byte_count / sizeof(wchar_t);
+        std::wstring text(wchar_count, L'\0');
+        if (wchar_count > 0) {
+            std::memcpy(&text[0], bytes.data() + 2, wchar_count * sizeof(wchar_t));
+        }
+        return text;
+    }
+
+    if (bytes.size() >= 2 &&
+        static_cast<unsigned char>(bytes[0]) == 0xFE &&
+        static_cast<unsigned char>(bytes[1]) == 0xFF) {
+        std::wstring text;
+        for (size_t i = 2; i + 1 < bytes.size(); i += 2) {
+            const unsigned char hi = static_cast<unsigned char>(bytes[i]);
+            const unsigned char lo = static_cast<unsigned char>(bytes[i + 1]);
+            wchar_t ch = static_cast<wchar_t>((hi << 8) | lo);
+            text.push_back(ch);
+        }
+        return text;
+    }
+
+    std::wstring utf8 = decode_multibyte(std::string(bytes.begin(), bytes.end()), CP_UTF8);
+    if (!utf8.empty()) {
+        return utf8;
+    }
+    return decode_multibyte(std::string(bytes.begin(), bytes.end()), CP_ACP);
+}
+
+std::vector<std::wstring> split_script_lines(const std::wstring& text) {
+    std::vector<std::wstring> lines;
+    std::wstring current;
+    for (wchar_t ch : text) {
+        if (ch == L'\r') {
+            continue;
+        }
+        if (ch == L'\n') {
+            lines.push_back(current);
+            current.clear();
+            continue;
+        }
+        current.push_back(ch);
+    }
+    if (!current.empty()) {
+        lines.push_back(current);
+    }
+    return lines;
+}
+
+std::vector<std::wstring> split_top_level_script_commands(const std::wstring& line) {
+    std::vector<std::wstring> commands;
+    std::wstring current;
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
+    bool escaped = false;
+    int paren_depth = 0;
+
+    for (size_t i = 0; i < line.size(); ++i) {
+        const wchar_t ch = line[i];
+        if (escaped) {
+            current += ch;
+            escaped = false;
+            continue;
+        }
+        if (ch == L'\\' && !in_single_quotes) {
+            current += ch;
+            escaped = true;
+            continue;
+        }
+        if (ch == L'\'' && !in_double_quotes) {
+            in_single_quotes = !in_single_quotes;
+            current += ch;
+            continue;
+        }
+        if (ch == L'"' && !in_single_quotes) {
+            in_double_quotes = !in_double_quotes;
+            current += ch;
+            continue;
+        }
+        if (!in_single_quotes && !in_double_quotes) {
+            if (ch == L'(') {
+                ++paren_depth;
+            } else if (ch == L')' && paren_depth > 0) {
+                --paren_depth;
+            }
+            if (ch == L';' && paren_depth == 0) {
+                if (i + 2 < line.size() && line[i + 1] == L';' && line[i + 2] == L'&') {
+                    current += L";;&";
+                    i += 2;
+                    continue;
+                }
+                if (i + 1 < line.size() && (line[i + 1] == L';' || line[i + 1] == L'&')) {
+                    current += L';';
+                    current += line[i + 1];
+                    ++i;
+                    continue;
+                }
+                const std::wstring command = trim_copy(current);
+                if (!command.empty()) {
+                    commands.push_back(command);
+                }
+                current.clear();
+                continue;
+            }
+        }
+        current += ch;
+    }
+
+    const std::wstring command = trim_copy(current);
+    if (!command.empty()) {
+        commands.push_back(command);
+    }
+    return commands;
+}
+
+std::vector<std::wstring> prepare_script_lines(const std::wstring& text) {
+    const std::vector<std::wstring> physical_lines = split_script_lines(text);
+    std::vector<std::wstring> logical_lines;
+    std::wstring continued;
+
+    for (const std::wstring& physical_line : physical_lines) {
+        std::wstring line = physical_line;
+        size_t trailing = line.size();
+        while (trailing > 0 && (line[trailing - 1] == L' ' || line[trailing - 1] == L'\t')) {
+            --trailing;
+        }
+        const bool escaped_newline = trailing > 0 && line[trailing - 1] == L'\\';
+        const std::wstring line_trimmed = trim_copy(line);
+        const size_t line_command_end = line_trimmed.find_first_of(L" \t");
+        const bool is_cd_path = line_trimmed.substr(0, line_command_end) == L"cd" &&
+            line_trimmed.size() > line_command_end;
+        if (escaped_newline && !is_cd_path) {
+            line.erase(trailing - 1);
+            continued += line;
+            continue;
+        }
+
+        if (!continued.empty()) {
+            line = continued + line;
+            continued.clear();
+        }
+
+        const std::wstring trimmed = trim_copy(line);
+        const bool trailing_pipe = !trimmed.empty() && trimmed.back() == L'|';
+        if (trailing_pipe) {
+            continued = line + L' ';
+            continue;
+        }
+
+        const std::wstring lowered_line = to_lower_copy(trimmed);
+        if (starts_with_for_control_keyword(trimmed)) {
+            const size_t do_pos = lowered_line.find(L"; do");
+            const size_t done_pos = lowered_line.rfind(L"; done");
+            if (do_pos != std::wstring::npos && done_pos != std::wstring::npos && done_pos > do_pos) {
+                logical_lines.push_back(trim_copy(trimmed.substr(0, do_pos)));
+                logical_lines.push_back(L"do");
+                const std::wstring body = trim_copy(trimmed.substr(do_pos + 5, done_pos - (do_pos + 5)));
+                const std::vector<std::wstring> body_commands = split_top_level_script_commands(body);
+                logical_lines.insert(logical_lines.end(), body_commands.begin(), body_commands.end());
+                logical_lines.push_back(L"done" + trimmed.substr(done_pos + 6));
+                continue;
+            }
+        }
+
+        const std::vector<std::wstring> commands = split_top_level_script_commands(line);
+        for (const std::wstring& command : commands) {
+            std::wstring compact = trim_copy(command);
+            std::wstring lowered = to_lower_copy(compact);
+            if (starts_with_for_control_keyword(compact)) {
+                const size_t do_pos = lowered.find(L"; do");
+                const size_t done_pos = lowered.rfind(L"; done");
+                if (do_pos != std::wstring::npos && done_pos != std::wstring::npos && done_pos > do_pos) {
+                    logical_lines.push_back(trim_copy(compact.substr(0, do_pos)));
+                    logical_lines.push_back(L"do");
+                    const std::wstring body = trim_copy(compact.substr(do_pos + 5, done_pos - (do_pos + 5)));
+                    const std::vector<std::wstring> body_commands = split_top_level_script_commands(body);
+                    logical_lines.insert(logical_lines.end(), body_commands.begin(), body_commands.end());
+                    logical_lines.push_back(L"done" + compact.substr(done_pos + 6));
+                    continue;
+                }
+            }
+            logical_lines.push_back(compact);
+        }
+    }
+
+    if (!continued.empty()) {
+        const std::vector<std::wstring> commands = split_top_level_script_commands(continued);
+        logical_lines.insert(logical_lines.end(), commands.begin(), commands.end());
+    }
+    return logical_lines;
+}
+
 bool execute_script_file(const std::wstring& script_path, const std::vector<std::wstring>& script_args, bool& should_exit_shell) {
     ScriptContext context;
     context.script_name = script_path;
@@ -13288,962 +15313,6 @@ bool execute_defined_function(const std::wstring& function_name, const std::vect
 
     return true;
 }
-
-std::wstring decode_raw_bytes(const std::string& bytes) {
-    if (bytes.empty()) return L"";
-
-    bool is_utf16 = false;
-    if (bytes.size() >= 2) {
-        if (static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
-            is_utf16 = true;
-        } else if (bytes.size() % 2 == 0) {
-            size_t null_count = 0;
-            for (size_t i = 1; i < bytes.size(); i += 2) {
-                if (bytes[i] == '\0') null_count++;
-            }
-            if (null_count == bytes.size() / 2) {
-                is_utf16 = true;
-            }
-        }
-    }
-
-    if (is_utf16) {
-        std::wstring wstr;
-        size_t start = 0;
-        if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
-            start = 2;
-        }
-        wstr.resize((bytes.size() - start) / 2);
-        if (!wstr.empty()) {
-            memcpy(&wstr[0], bytes.data() + start, wstr.size() * 2);
-        }
-        return wstr;
-    }
-
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
-    if (wlen > 0) {
-        std::wstring wstr(wlen, 0);
-        MultiByteToWideChar(CP_UTF8, 0, bytes.data(), static_cast<int>(bytes.size()), &wstr[0], wlen);
-        return wstr;
-    }
-
-    int alen = MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
-    if (alen > 0) {
-        std::wstring wstr(alen, 0);
-        MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), &wstr[0], alen);
-        return wstr;
-    }
-
-    std::wstring wstr;
-    for (char c : bytes) {
-        wstr.push_back(static_cast<wchar_t>(c));
-    }
-    return wstr;
-}
-
-// Builtin input and help handlers.
-bool execute_builtin_read(const std::vector<std::wstring>& tokens) {
-    std::wstring prompt = L"";
-    bool silent = false;
-    bool raw = false;
-    bool array_mode = false;
-    bool use_coprocess_input = false;
-    int max_chars = -1;
-    double timeout_sec = -1.0;
-    wchar_t delim = L'\n';
-    std::vector<std::wstring> var_names;
-
-    for (size_t i = 1; i < tokens.size(); ++i) {
-        std::wstring arg = tokens[i];
-        if (arg.size() > 1 && arg[0] == L'-') {
-            for (size_t j = 1; j < arg.size(); ++j) {
-                wchar_t flag = arg[j];
-                bool consumed_option_argument = false;
-                if (flag == L'r') {
-                    raw = true;
-                } else if (flag == L's') {
-                    silent = true;
-                } else if (flag == L'A') {
-                    array_mode = true;
-                } else if (flag == L'p') {
-                    const bool has_attached_prompt =
-                        j + 1 < arg.size() &&
-                        arg[j + 1] != L'r' && arg[j + 1] != L's' && arg[j + 1] != L'A' &&
-                        arg[j + 1] != L'p' && arg[j + 1] != L'n' && arg[j + 1] != L't' &&
-                        arg[j + 1] != L'd';
-                    if (!has_attached_prompt) {
-                        if (!g_coprocess.active) {
-                            std::wcerr << L"ksh: read -p: no active co-process\n";
-                            ksh_env.variables[L"?"] = L"1";
-                            return false;
-                        }
-                        use_coprocess_input = true;
-                    } else if (j + 1 < arg.size()) {
-                        prompt = arg.substr(j + 1);
-                        consumed_option_argument = true;
-                    } else if (i + 1 < tokens.size()) {
-                        prompt = tokens[++i];
-                        consumed_option_argument = true;
-                    } else {
-                        std::wcerr << L"ksh: read: -p requires an argument\n";
-                        ksh_env.variables[L"?"] = L"1";
-                        return false;
-                    }
-                } else if (flag == L'n') {
-                    std::wstring n_val;
-                    if (j + 1 < arg.size()) {
-                        n_val = arg.substr(j + 1);
-                        consumed_option_argument = true;
-                    } else if (i + 1 < tokens.size()) {
-                        n_val = tokens[++i];
-                        consumed_option_argument = true;
-                    } else {
-                        std::wcerr << L"ksh: read: -n requires an argument\n";
-                        ksh_env.variables[L"?"] = L"1";
-                        return false;
-                    }
-                    if (!try_parse_int_strict(n_val, max_chars)) {
-                        std::wcerr << L"ksh: read: invalid nchars\n";
-                        ksh_env.variables[L"?"] = L"1";
-                        return false;
-                    }
-                } else if (flag == L't') {
-                    std::wstring t_val;
-                    if (j + 1 < arg.size()) {
-                        t_val = arg.substr(j + 1);
-                        consumed_option_argument = true;
-                    } else if (i + 1 < tokens.size()) {
-                        t_val = tokens[++i];
-                        consumed_option_argument = true;
-                    } else {
-                        std::wcerr << L"ksh: read: -t requires an argument\n";
-                        ksh_env.variables[L"?"] = L"1";
-                        return false;
-                    }
-                    try {
-                        timeout_sec = std::stod(t_val);
-                    } catch (...) {
-                        std::wcerr << L"ksh: read: invalid timeout\n";
-                        ksh_env.variables[L"?"] = L"1";
-                        return false;
-                    }
-                } else if (flag == L'd') {
-                    std::wstring d_val;
-                    if (j + 1 < arg.size()) {
-                        d_val = arg.substr(j + 1);
-                        consumed_option_argument = true;
-                    } else if (i + 1 < tokens.size()) {
-                        d_val = tokens[++i];
-                        consumed_option_argument = true;
-                    } else {
-                        std::wcerr << L"ksh: read: -d requires an argument\n";
-                        ksh_env.variables[L"?"] = L"1";
-                        return false;
-                    }
-                    if (!d_val.empty()) {
-                        delim = d_val[0];
-                    }
-                } else {
-                    std::wcerr << L"ksh: read: invalid option: -" << flag << L"\n";
-                    ksh_env.variables[L"?"] = L"1";
-                    return false;
-                }
-                if (consumed_option_argument) {
-                    break;
-                }
-            }
-        } else {
-            var_names.push_back(arg);
-        }
-    }
-
-    if (var_names.empty()) {
-        if (array_mode) {
-            std::wcerr << L"ksh: read: -A requires an array name\n";
-            ksh_env.variables[L"?"] = L"1";
-            return false;
-        }
-        var_names.push_back(L"REPLY");
-    }
-
-    if (array_mode && var_names.size() != 1) {
-        std::wcerr << L"ksh: read: -A accepts exactly one array name\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    for (const auto& name : var_names) {
-        if (!is_valid_shell_identifier(name)) {
-            std::wcerr << L"ksh: read: invalid variable name: " << name << L"\n";
-            ksh_env.variables[L"?"] = L"1";
-            return false;
-        }
-    }
-
-    if (!prompt.empty() && !use_coprocess_input) {
-        std::wcerr << prompt;
-        std::wcerr.flush();
-    }
-
-    std::wstring result;
-    int read_status = 0;
-    HANDLE hIn = use_coprocess_input
-        ? g_coprocess.output_read
-        : ((g_pipeline_stdin != INVALID_HANDLE_VALUE) ? g_pipeline_stdin : GetStdHandle(STD_INPUT_HANDLE));
-    DWORD mode;
-    bool is_console = !use_coprocess_input && GetConsoleMode(hIn, &mode) != FALSE;
-
-    auto start_time = std::chrono::steady_clock::now();
-    bool escape_next = false;
-
-    if (is_console) {
-        DWORD origMode = 0;
-        bool mode_set = false;
-        if (GetConsoleMode(hIn, &origMode)) {
-            DWORD newMode = origMode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
-            if (SetConsoleMode(hIn, newMode)) {
-                mode_set = true;
-            }
-        }
-
-        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-
-        while (true) {
-            if (max_chars > 0 && static_cast<int>(result.length()) >= max_chars) {
-                break;
-            }
-
-            DWORD wait_ms = INFINITE;
-            if (timeout_sec >= 0.0) {
-                auto now = std::chrono::steady_clock::now();
-                double elapsed = std::chrono::duration<double>(now - start_time).count();
-                double remaining = timeout_sec - elapsed;
-                if (remaining <= 0.0) {
-                    read_status = 142;
-                    break;
-                }
-                wait_ms = static_cast<DWORD>(remaining * 1000.0);
-            }
-
-            DWORD wait_res = WaitForSingleObject(hIn, wait_ms);
-            if (wait_res == WAIT_TIMEOUT) {
-                read_status = 142;
-                break;
-            }
-            if (wait_res != WAIT_OBJECT_0) {
-                read_status = 1;
-                break;
-            }
-
-            INPUT_RECORD ir;
-            DWORD records_read = 0;
-            if (!ReadConsoleInputW(hIn, &ir, 1, &records_read) || records_read == 0) {
-                read_status = 1;
-                break;
-            }
-
-            if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) {
-                continue;
-            }
-
-            wchar_t ch = ir.Event.KeyEvent.uChar.UnicodeChar;
-            WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
-
-            if (ch == 0) continue;
-            if (ch == 3) {
-                read_status = 130;
-                break;
-            }
-            if (ch == 26) {
-                break;
-            }
-
-            if (vk == VK_BACK || ch == L'\b') {
-                if (!result.empty()) {
-                    result.pop_back();
-                    if (!silent) {
-                        DWORD written;
-                        WriteConsoleW(hOut, L"\b \b", 3, &written, NULL);
-                    }
-                }
-                continue;
-            }
-
-            if (escape_next && (ch == L'\r' || ch == L'\n')) {
-                escape_next = false;
-                if (!silent) {
-                    DWORD written;
-                    WriteConsoleW(hOut, L"\r\n> ", 4, &written, NULL);
-                }
-                continue;
-            }
-
-            bool is_delim = false;
-            if (delim == L'\n' && (ch == L'\r' || ch == L'\n')) {
-                is_delim = true;
-            } else if (ch == delim) {
-                is_delim = true;
-            }
-
-            if (is_delim) {
-                if (!silent) {
-                    DWORD written;
-                    WriteConsoleW(hOut, L"\r\n", 2, &written, NULL);
-                }
-                break;
-            }
-
-            if (!raw && !escape_next && ch == L'\\') {
-                escape_next = true;
-                continue;
-            }
-
-            escape_next = false;
-            result.push_back(ch);
-
-            if (!silent) {
-                DWORD written;
-                WriteConsoleW(hOut, &ch, 1, &written, NULL);
-            }
-        }
-
-        if (mode_set) {
-            SetConsoleMode(hIn, origMode);
-        }
-    } else {
-        std::string raw_bytes;
-        while (true) {
-            if (max_chars > 0 && static_cast<int>(raw_bytes.length()) >= max_chars) {
-                break;
-            }
-
-            if (timeout_sec >= 0.0) {
-                auto now = std::chrono::steady_clock::now();
-                double elapsed = std::chrono::duration<double>(now - start_time).count();
-                if (elapsed >= timeout_sec) {
-                    read_status = 142;
-                    break;
-                }
-
-                DWORD avail = 0;
-                if (PeekNamedPipe(hIn, NULL, 0, NULL, &avail, NULL) && avail == 0) {
-                    Sleep(10);
-                    continue;
-                }
-            }
-
-            char c_char;
-            DWORD bytesRead = 0;
-            if (!ReadFile(hIn, &c_char, 1, &bytesRead, NULL) || bytesRead == 0) {
-                if (use_coprocess_input) {
-                    if (!raw_bytes.empty()) {
-                        break;
-                    }
-
-                    DWORD exit_code = 1;
-                    if (g_coprocess.process != INVALID_HANDLE_VALUE) {
-                        GetExitCodeProcess(g_coprocess.process, &exit_code);
-                    }
-                    close_coprocess(false);
-                    ksh_env.variables[L"COPROC_ACTIVE"] = L"0";
-                    ksh_env.variables[L"?"] = std::to_wstring(exit_code == STILL_ACTIVE ? 1 : exit_code);
-                    return false;
-                }
-                read_status = 1;
-                break;
-            }
-
-            raw_bytes.push_back(c_char);
-
-            bool is_delim = false;
-            if (delim == L'\n') {
-                if (c_char == '\n') {
-                    is_delim = true;
-                }
-            } else {
-                if (static_cast<wchar_t>(c_char) == delim) {
-                    is_delim = true;
-                }
-            }
-
-            if (is_delim) {
-                if (raw_bytes.size() >= 2 && raw_bytes[raw_bytes.size() - 2] == '\n' && raw_bytes.back() == '\0') {
-                    // Handled
-                } else if (delim == L'\n') {
-                    char next_c;
-                    DWORD peekRead = 0;
-                    if (PeekNamedPipe(hIn, &next_c, 1, &peekRead, NULL, NULL) && peekRead > 0 && next_c == '\0') {
-                        ReadFile(hIn, &next_c, 1, &peekRead, NULL);
-                        raw_bytes.push_back(next_c);
-                    }
-                }
-                break;
-            }
-        }
-        result = decode_raw_bytes(raw_bytes);
-    }
-
-    if (read_status != 0 && read_status != 130) {
-        ksh_env.variables[L"?"] = std::to_wstring(read_status);
-        return false;
-    }
-    if (read_status == 130) {
-        ksh_env.variables[L"?"] = L"130";
-        return false;
-    }
-
-    std::wstring ifs = effective_ifs_value();
-    auto is_ifs = [&](wchar_t ch) {
-        return ifs.find(ch) != std::wstring::npos;
-    };
-
-    std::vector<std::wstring> words;
-    std::wstring current_word;
-    size_t char_idx = 0;
-
-    while (char_idx < result.length() && is_ifs(result[char_idx])) {
-        char_idx++;
-    }
-
-    while (char_idx < result.length()) {
-        if (words.size() + 1 == var_names.size()) {
-            std::wstring remainder = result.substr(char_idx);
-            while (!remainder.empty() && is_ifs(remainder.back())) {
-                remainder.pop_back();
-            }
-            words.push_back(remainder);
-            break;
-        }
-
-        if (is_ifs(result[char_idx])) {
-            words.push_back(current_word);
-            current_word.clear();
-            while (char_idx < result.length() && is_ifs(result[char_idx])) {
-                char_idx++;
-            }
-        } else {
-            current_word.push_back(result[char_idx]);
-            char_idx++;
-        }
-    }
-    if (words.size() < var_names.size() && !current_word.empty()) {
-        words.push_back(current_word);
-    }
-
-    while (words.size() < var_names.size()) {
-        words.push_back(L"");
-    }
-
-    if (array_mode) {
-        const std::wstring& array_name = var_names[0];
-        std::wstring resolved_array_name = resolve_variable_name(array_name);
-        if (is_executing_function_scope()) {
-            snapshot_local_variable_if_needed(resolved_array_name);
-        }
-        if (get_flag_value(ksh_env.readonly_flags, resolved_array_name)) {
-            std::wcerr << L"ksh: read: variable is read-only: " << resolved_array_name << L"\n";
-            ksh_env.variables[L"?"] = L"1";
-            return false;
-        }
-        assign_array_parameter(resolved_array_name, words);
-        ksh_env.variables[L"?"] = L"0";
-        return true;
-    }
-
-    bool assign_ok = true;
-    for (size_t i = 0; i < var_names.size(); ++i) {
-        std::wstring err;
-        if (!assign_parameter_value(var_names[i], words[i], false, is_executing_function_scope(), err)) {
-            std::wcerr << L"ksh: read: " << err << L"\n";
-            assign_ok = false;
-        }
-    }
-
-    ksh_env.variables[L"?"] = assign_ok ? L"0" : L"1";
-    return assign_ok;
-}
-
-bool execute_builtin_help(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output) {
-    if (tokens.size() > 2) {
-        std::wcerr << L"ksh: help: too many arguments. Usage: help [command]\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    if (tokens.size() == 2) {
-        std::wstring target = tokens[1];
-
-        if (target == L"cd") {
-            if (!write_help_lines(write_output, kHelpCdCommandLines) || !write_help_lines(write_output, kHelpCdCommandLinesTail)) {
-                ksh_env.variables[L"?"] = L"1";
-                return false;
-            }
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-
-        if (target == L"kill") {
-            if (!write_help_lines(write_output, kHelpKillCommandLines) || !write_help_lines(write_output, kHelpKillCommandLinesTail)) {
-                ksh_env.variables[L"?"] = L"1";
-                return false;
-            }
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-
-        if (target == L"prompt" || target == L"PS1") {
-            if (!write_help_lines(write_output, kHelpPromptCommandLines) || !write_help_lines(write_output, kHelpPromptCommandLinesTail)) {
-                ksh_env.variables[L"?"] = L"1";
-                return false;
-            }
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-
-        if (target == L"break" || target == L"continue") {
-            if (!write_output(target + L"\n") || !write_help_lines(write_output, kHelpLoopKeywordLines)) {
-                ksh_env.variables[L"?"] = L"1";
-                return false;
-            }
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-
-        const std::wstring lowered_target = to_lower_copy(target);
-        if (lowered_target == L"all" || lowered_target == L"full" || lowered_target == L"reference") {
-            write_full_help_text(write_output);
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-
-        if (write_help_topic(target, write_output)) {
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-        
-        if (const BuiltinCommandHelp* entry = find_builtin_command_help(target)) {
-            write_output(std::wstring(entry->name) + L" - " + entry->description + L"\n");
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-
-        std::map<std::wstring, ShellFunctionDefinition>::const_iterator fn_it = g_shell_functions.find(target);
-        if (fn_it != g_shell_functions.end()) {
-            std::wstring body = L"function " + target + L"\n{\n";
-            for (const auto& line : fn_it->second.body_lines) {
-                body += L"    " + line + L"\n";
-            }
-            body += L"}\n";
-            write_output(body);
-            ksh_env.variables[L"?"] = L"0";
-            return true;
-        }
-
-        std::wcerr << L"ksh: help: no help found for: " << target << L"\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-    write_output(L"\n");
-    write_help_topic_index(write_output);
-    write_output(L"\nCrossShellKSH Commands:\n");
-    if (!write_grouped_builtin_help(write_output, false)) {
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    write_output(L"\nPrompt customization:\n");
-    write_output(L"  Set PS1 in ~/.kshrc to customize prompt order/content.\n");
-    write_output(L"  Tokens: %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent\n");
-    if (!write_help_lines(write_output, kHelpPromptCustomizationShortLines)) {
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    write_output(L"\n");
-    
-    ksh_env.variables[L"?"] = L"0";
-    return true;
-}
-
-bool parse_custom_type_definition(const std::wstring& type_name, const std::wstring& body, CustomTypeDefinition& def) {
-    def.name = type_name;
-    std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(body);
-    
-    size_t i = 0;
-    while (i < tokens.size()) {
-        if (tokens[i] == L";" || tokens[i] == L"\n") {
-            i++;
-            continue;
-        }
-        
-        std::wstring type_kw = tokens[i];
-        bool is_integer = false;
-        bool is_array = false;
-        bool is_associative = false;
-        std::wstring member_type_name = L"";
-        
-        if (type_kw == L"integer") {
-            is_integer = true;
-            i++;
-        } else if (type_kw == L"typeset") {
-            i++;
-            while (i < tokens.size() && tokens[i][0] == L'-') {
-                std::wstring opt = tokens[i];
-                for (size_t j = 1; j < opt.size(); ++j) {
-                    if (opt[j] == L'i') is_integer = true;
-                    else if (opt[j] == L'a') is_array = true;
-                    else if (opt[j] == L'A') is_associative = true;
-                }
-                i++;
-            }
-        } else if (g_custom_types.find(type_kw) != g_custom_types.end()) {
-            member_type_name = type_kw;
-            i++;
-        } else {
-            // Default variable type
-        }
-        
-        while (i < tokens.size() && tokens[i] != L";" && tokens[i] != L"\n" &&
-               tokens[i] != L"integer" && tokens[i] != L"typeset" &&
-               g_custom_types.find(tokens[i]) == g_custom_types.end()) {
-            
-            std::wstring token = tokens[i];
-            i++;
-            
-            std::wstring name = token;
-            std::wstring def_val = L"";
-            size_t eq = token.find(L'=');
-            if (eq != std::wstring::npos) {
-                name = token.substr(0, eq);
-                def_val = remove_quotes_and_escapes_from_token(token.substr(eq + 1));
-            }
-            
-            if (name.empty()) continue;
-            
-            CustomTypeMember m;
-            m.name = name;
-            m.is_integer = is_integer;
-            m.is_array = is_array;
-            m.is_associative = is_associative;
-            m.type_name = member_type_name;
-            m.default_value = def_val;
-            
-            def.members.push_back(m);
-        }
-    }
-    return true;
-}
-
-void instantiate_custom_type(const std::wstring& type_name, const std::wstring& var_prefix) {
-    auto it = g_custom_types.find(type_name);
-    if (it == g_custom_types.end()) return;
-    
-    for (const auto& member : it->second.members) {
-        std::wstring full_member_name = var_prefix + L"." + member.name;
-        if (!member.type_name.empty()) {
-            instantiate_custom_type(member.type_name, full_member_name);
-        } else {
-            std::wstring val = member.default_value;
-            if (val.empty() && member.is_integer) {
-                val = L"0";
-            }
-            
-            if (member.is_integer) {
-                set_flag_value(ksh_env.integer_flags, full_member_name, true);
-            }
-            if (member.is_array) {
-                ksh_env.arrays[full_member_name].clear();
-            } else if (member.is_associative) {
-                ksh_env.arrays[full_member_name].clear();
-                ksh_env.associative_flags[full_member_name] = true;
-            } else {
-                ksh_env.variables[full_member_name] = val;
-                SetEnvironmentVariableW(full_member_name.c_str(), val.c_str());
-            }
-        }
-    }
-}
-
-#include <set>
-#include <fstream>
-
-thread_local std::set<DWORD> g_registered_child_pids;
-thread_local ULONGLONG g_child_user_time = 0;
-thread_local ULONGLONG g_child_kernel_time = 0;
-thread_local int g_umask = 022; // default umask (octal)
-
-void register_child_process_times(HANDLE hProcess) {
-    if (hProcess == nullptr || hProcess == INVALID_HANDLE_VALUE) return;
-    DWORD pid = GetProcessId(hProcess);
-    if (pid == 0) return;
-    
-    // Check if already registered
-    if (g_registered_child_pids.find(pid) != g_registered_child_pids.end()) {
-        return;
-    }
-    
-    FILETIME creationTime, exitTime, kernelTime, userTime;
-    if (GetProcessTimes(hProcess, &creationTime, &exitTime, &kernelTime, &userTime)) {
-        ULARGE_INTEGER uUser, uKernel;
-        uUser.LowPart = userTime.dwLowDateTime;
-        uUser.HighPart = userTime.dwHighDateTime;
-        uKernel.LowPart = kernelTime.dwLowDateTime;
-        uKernel.HighPart = kernelTime.dwHighDateTime;
-        
-        g_child_user_time += uUser.QuadPart;
-        g_child_kernel_time += uKernel.QuadPart;
-        g_registered_child_pids.insert(pid);
-    }
-}
-
-bool format_printf_time_argument(const std::wstring& arg_value, std::wstring& formatted_time) {
-    __time64_t timestamp = _time64(nullptr);
-
-    if (!arg_value.empty() && arg_value != L"-1") {
-        try {
-            timestamp = static_cast<__time64_t>(std::stoll(arg_value, nullptr, 0));
-        } catch (...) {
-            return false;
-        }
-    }
-
-    struct tm local_tm;
-    if (_localtime64_s(&local_tm, &timestamp) != 0) {
-        return false;
-    }
-
-    wchar_t time_buffer[128];
-    size_t written = wcsftime(time_buffer, _countof(time_buffer), L"%Y-%m-%d %H:%M:%S", &local_tm);
-    if (written == 0) {
-        return false;
-    }
-
-    formatted_time.assign(time_buffer, written);
-    return true;
-}
-
-bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstring& output_str, std::wstring& error_msg) {
-    if (tokens.size() < 2) {
-        error_msg = L"ksh: printf: usage: printf [-v varname] format [arguments ...]";
-        return false;
-    }
-    
-    bool has_var = false;
-    std::wstring varname;
-    size_t format_idx = 1;
-    
-    if (tokens[1] == L"-v") {
-        if (tokens.size() < 4) {
-            error_msg = L"ksh: printf: usage: printf [-v varname] format [arguments ...]";
-            return false;
-        }
-        has_var = true;
-        varname = tokens[2];
-        format_idx = 3;
-    }
-    
-    std::wstring format = tokens[format_idx];
-    size_t arg_idx = format_idx + 1;
-    output_str.clear();
-    
-    bool first_pass = true;
-    while (first_pass || arg_idx < tokens.size()) {
-        first_pass = false;
-        
-        size_t last_consumed_arg_idx = arg_idx;
-        
-        for (size_t i = 0; i < format.size(); ) {
-            if (format[i] == L'\\') {
-                if (i + 1 < format.size()) {
-                    wchar_t next = format[i + 1];
-                    if (next == L'n') { output_str += L'\n'; i += 2; }
-                    else if (next == L't') { output_str += L'\t'; i += 2; }
-                    else if (next == L'v') { output_str += L'\v'; i += 2; }
-                    else if (next == L'b') { output_str += L'\b'; i += 2; }
-                    else if (next == L'r') { output_str += L'\r'; i += 2; }
-                    else if (next == L'f') { output_str += L'\f'; i += 2; }
-                    else if (next == L'a') { output_str += L'\a'; i += 2; }
-                    else if (next == L'\\') { output_str += L'\\'; i += 2; }
-                    else if (next == L'0') {
-                        size_t digits = 0;
-                        int val = 0;
-                        size_t k = i + 2;
-                        while (k < format.size() && digits < 3 && format[k] >= L'0' && format[k] <= L'7') {
-                            val = val * 8 + (format[k] - L'0');
-                            digits++;
-                            k++;
-                        }
-                        output_str += static_cast<wchar_t>(val);
-                        i = k;
-                    }
-                    else {
-                        output_str += format[i];
-                        i++;
-                    }
-                } else {
-                    output_str += L'\\';
-                    i++;
-                }
-            }
-            else if (format[i] == L'%') {
-                if (i + 1 < format.size() && format[i + 1] == L'%') {
-                    output_str += L'%';
-                    i += 2;
-                    continue;
-                }
-                
-                std::wstring specifier_expr = L"%";
-                size_t k = i + 1;
-                while (k < format.size() && (format[k] == L'-' || format[k] == L'+' || format[k] == L' ' || format[k] == L'0' || format[k] == L'#')) {
-                    specifier_expr += format[k];
-                    k++;
-                }
-                while (k < format.size() && format[k] >= L'0' && format[k] <= L'9') {
-                    specifier_expr += format[k];
-                    k++;
-                }
-                if (k < format.size() && format[k] == L'.') {
-                    specifier_expr += L'.';
-                    k++;
-                    while (k < format.size() && format[k] >= L'0' && format[k] <= L'9') {
-                        specifier_expr += format[k];
-                        k++;
-                    }
-                }
-                
-                if (k >= format.size()) {
-                    output_str += specifier_expr;
-                    i = k;
-                    break;
-                }
-                
-                wchar_t spec = format[k];
-                specifier_expr += spec;
-                k++;
-                i = k;
-                
-                std::wstring arg_val;
-                if (arg_idx < tokens.size()) {
-                    arg_val = tokens[arg_idx++];
-                }
-                
-                if (spec == L's') {
-                    int len = _scwprintf(specifier_expr.c_str(), arg_val.c_str());
-                    if (len >= 0) {
-                        std::vector<wchar_t> temp_buf(len + 1);
-                        swprintf_s(temp_buf.data(), temp_buf.size(), specifier_expr.c_str(), arg_val.c_str());
-                        output_str += temp_buf.data();
-                    }
-                }
-                else if (spec == L'd' || spec == L'i' || spec == L'o' || spec == L'x' || spec == L'X' || spec == L'u') {
-                    long long val = 0;
-                    if (!arg_val.empty()) {
-                        try {
-                            if (arg_val[0] == L'\'' || arg_val[0] == L'"') {
-                                if (arg_val.size() > 1) {
-                                    val = static_cast<long long>(arg_val[1]);
-                                }
-                            } else {
-                                val = std::stoll(arg_val, nullptr, 0);
-                            }
-                        } catch (...) {
-                            val = 0;
-                        }
-                    }
-                    std::wstring mod_spec = specifier_expr;
-                    mod_spec.insert(mod_spec.size() - 1, L"ll");
-                    int len = _scwprintf(mod_spec.c_str(), val);
-                    if (len >= 0) {
-                        std::vector<wchar_t> temp_buf(len + 1);
-                        swprintf_s(temp_buf.data(), temp_buf.size(), mod_spec.c_str(), val);
-                        output_str += temp_buf.data();
-                    }
-                }
-                else if (spec == L'f' || spec == L'e' || spec == L'E' || spec == L'g' || spec == L'G') {
-                    double val = 0.0;
-                    if (!arg_val.empty()) {
-                        try {
-                            val = std::stod(arg_val);
-                        } catch (...) {
-                            val = 0.0;
-                        }
-                    }
-                    int len = _scwprintf(specifier_expr.c_str(), val);
-                    if (len >= 0) {
-                        std::vector<wchar_t> temp_buf(len + 1);
-                        swprintf_s(temp_buf.data(), temp_buf.size(), specifier_expr.c_str(), val);
-                        output_str += temp_buf.data();
-                    }
-                }
-                else if (spec == L'c') {
-                    wchar_t val = L'\0';
-                    if (!arg_val.empty()) {
-                        val = arg_val[0];
-                    }
-                    int len = _scwprintf(specifier_expr.c_str(), val);
-                    if (len >= 0) {
-                        std::vector<wchar_t> temp_buf(len + 1);
-                        swprintf_s(temp_buf.data(), temp_buf.size(), specifier_expr.c_str(), val);
-                        output_str += temp_buf.data();
-                    }
-                }
-                else if (spec == L'q') {
-                    output_str += quote_shell_argument(arg_val);
-                }
-                else if (spec == L'b') {
-                    std::wstring expanded_arg;
-                    for (size_t idx = 0; idx < arg_val.size(); ++idx) {
-                        if (arg_val[idx] == L'\\' && idx + 1 < arg_val.size()) {
-                            wchar_t next = arg_val[idx + 1];
-                            if (next == L'n') { expanded_arg += L'\n'; idx++; }
-                            else if (next == L't') { expanded_arg += L'\t'; idx++; }
-                            else if (next == L'v') { expanded_arg += L'\v'; idx++; }
-                            else if (next == L'b') { expanded_arg += L'\b'; idx++; }
-                            else if (next == L'r') { expanded_arg += L'\r'; idx++; }
-                            else if (next == L'f') { expanded_arg += L'\f'; idx++; }
-                            else if (next == L'a') { expanded_arg += L'\a'; idx++; }
-                            else if (next == L'\\') { expanded_arg += L'\\'; idx++; }
-                            else { expanded_arg += arg_val[idx]; }
-                        } else {
-                            expanded_arg += arg_val[idx];
-                        }
-                    }
-                    output_str += expanded_arg;
-                }
-                else if (spec == L'T') {
-                    std::wstring formatted_time;
-                    if (!format_printf_time_argument(arg_val, formatted_time)) {
-                        error_msg = L"ksh: printf: invalid time argument for %T";
-                        return false;
-                    }
-                    output_str += formatted_time;
-                }
-                else {
-                    output_str += specifier_expr;
-                }
-            }
-            else {
-                output_str += format[i];
-                i++;
-            }
-        }
-        
-        if (arg_idx == last_consumed_arg_idx) {
-            break;
-        }
-    }
-    if (has_var) {
-        std::wstring assign_err;
-        if (!assign_parameter_value(varname, output_str, false, false, assign_err)) {
-            error_msg = L"ksh: printf: variable assignment failed: " + assign_err;
-            return false;
-        }
-        output_str.clear();
-    }
-    return true;
-}
-
-bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit_shell, bool bypass_aliases = false, bool bypass_function_lookup = false);
 
 struct PipeRelayParams {
     HANDLE hChild;
@@ -14770,444 +15839,6 @@ void parse_and_replace_process_substitutions(std::wstring& line) {
     }
 }
 
-bool close_coprocess(bool terminate_process) {
-    if (!g_coprocess.active) {
-        return true;
-    }
-
-    if (terminate_process && g_coprocess.process != INVALID_HANDLE_VALUE) {
-        TerminateProcess(g_coprocess.process, 1);
-    }
-    if (g_coprocess.process != INVALID_HANDLE_VALUE) {
-        WaitForSingleObject(g_coprocess.process, 5000);
-        CloseHandle(g_coprocess.process);
-    }
-    if (g_coprocess.input_write != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_coprocess.input_write);
-    }
-    if (g_coprocess.output_read != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_coprocess.output_read);
-    }
-    if (!g_coprocess.temp_file_path.empty()) {
-        DeleteFileW(g_coprocess.temp_file_path.c_str());
-    }
-    g_coprocess = CoProcessState();
-    return true;
-}
-
-bool execute_builtin_coproc(const std::vector<std::wstring>& tokens) {
-    if (tokens.size() < 2) {
-        std::wcerr << L"ksh: coproc: usage: coproc command [argument ...]\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    close_coprocess(true);
-
-    SECURITY_ATTRIBUTES pipe_attributes;
-    pipe_attributes.nLength = sizeof(pipe_attributes);
-    pipe_attributes.lpSecurityDescriptor = nullptr;
-    pipe_attributes.bInheritHandle = TRUE;
-
-    HANDLE child_stdin = INVALID_HANDLE_VALUE;
-    HANDLE parent_stdin = INVALID_HANDLE_VALUE;
-    HANDLE parent_stdout = INVALID_HANDLE_VALUE;
-    HANDLE child_stdout = INVALID_HANDLE_VALUE;
-    if (!CreatePipe(&child_stdin, &parent_stdin, &pipe_attributes, 0) ||
-        !CreatePipe(&parent_stdout, &child_stdout, &pipe_attributes, 0)) {
-        if (child_stdin != INVALID_HANDLE_VALUE) CloseHandle(child_stdin);
-        if (parent_stdin != INVALID_HANDLE_VALUE) CloseHandle(parent_stdin);
-        if (parent_stdout != INVALID_HANDLE_VALUE) CloseHandle(parent_stdout);
-        if (child_stdout != INVALID_HANDLE_VALUE) CloseHandle(child_stdout);
-        std::wcerr << L"ksh: coproc: unable to create pipes\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    if (!SetHandleInformation(parent_stdin, HANDLE_FLAG_INHERIT, 0) ||
-        !SetHandleInformation(parent_stdout, HANDLE_FLAG_INHERIT, 0)) {
-        CloseHandle(child_stdin);
-        CloseHandle(parent_stdin);
-        CloseHandle(parent_stdout);
-        CloseHandle(child_stdout);
-        std::wcerr << L"ksh: coproc: unable to configure pipe inheritance\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    wchar_t ksh_path[MAX_PATH];
-    DWORD path_len = GetModuleFileNameW(nullptr, ksh_path, MAX_PATH);
-    if (path_len == 0 || path_len >= MAX_PATH) {
-        CloseHandle(child_stdin);
-        CloseHandle(parent_stdin);
-        CloseHandle(parent_stdout);
-        CloseHandle(child_stdout);
-        std::wcerr << L"ksh: coproc: unable to resolve shell path\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    std::vector<std::wstring> command_tokens(tokens.begin() + 1, tokens.end());
-    std::wstring command_to_run;
-    command_to_run.reserve(4096);
-
-    for (const auto& pair : ksh_env.variables) {
-        const std::wstring& name = pair.first;
-        if (!is_valid_shell_identifier(name) || name == L"RANDOM" || name == L"SECONDS" ||
-            name == L"LINENO" || name == L"PPID") {
-            continue;
-        }
-
-        std::wstring options;
-        if (get_flag_value(ksh_env.integer_flags, name)) options += L"i";
-        if (get_flag_value(ksh_env.uppercase_flags, name)) options += L"u";
-        if (get_flag_value(ksh_env.lowercase_flags, name)) options += L"l";
-        if (get_flag_value(ksh_env.readonly_flags, name)) options += L"r";
-        if (get_flag_value(ksh_env.exported, name)) options += L"x";
-
-        command_to_run += name + L"=" + quote_for_single_quoted_shell_literal(pair.second) + L";\n";
-        if (!options.empty()) {
-            command_to_run += L"typeset -" + options + L" " + name + L";\n";
-        }
-    }
-
-    for (const auto& arr_pair : ksh_env.arrays) {
-        const std::wstring& name = arr_pair.first;
-        if (!is_valid_shell_identifier(name)) {
-            continue;
-        }
-
-        if (get_flag_value(ksh_env.associative_flags, name)) {
-            command_to_run += L"typeset -A " + name + L";\n";
-        } else {
-            command_to_run += L"typeset -a " + name + L";\n";
-        }
-        for (const auto& elem : arr_pair.second) {
-            command_to_run += name + L"[" + elem.first + L"]=" +
-                quote_for_single_quoted_shell_literal(elem.second) + L";\n";
-        }
-    }
-
-    for (const auto& pair : g_aliases) {
-        command_to_run += L"alias " + pair.first + L"=" +
-            quote_for_single_quoted_shell_literal(pair.second) + L";\n";
-    }
-
-    for (const auto& pair : g_shell_functions) {
-        command_to_run += L"function " + pair.first + L" { ";
-        for (const auto& line : pair.second.body_lines) {
-            command_to_run += line + L"\n";
-        }
-        command_to_run += L" };\n";
-    }
-
-    command_to_run += join_tokens_as_command_line(command_tokens);
-
-    std::wstring temp_file_path;
-    std::wstring command_line;
-    if (command_to_run.size() > 4000) {
-        wchar_t temp_path[MAX_PATH];
-        wchar_t temp_file[MAX_PATH];
-        if (GetTempPathW(MAX_PATH, temp_path) != 0 &&
-            GetTempFileNameW(temp_path, L"ksh", 0, temp_file) != 0) {
-            HANDLE temp_handle = CreateFileW(
-                temp_file,
-                GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_DELETE,
-                nullptr,
-                CREATE_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL,
-                nullptr);
-            if (temp_handle != INVALID_HANDLE_VALUE) {
-                const int utf8_length = WideCharToMultiByte(
-                    CP_UTF8,
-                    0,
-                    command_to_run.c_str(),
-                    static_cast<int>(command_to_run.size()),
-                    nullptr,
-                    0,
-                    nullptr,
-                    nullptr);
-                std::string utf8;
-                if (utf8_length > 0) {
-                    utf8.resize(static_cast<size_t>(utf8_length));
-                    WideCharToMultiByte(
-                        CP_UTF8,
-                        0,
-                        command_to_run.c_str(),
-                        static_cast<int>(command_to_run.size()),
-                        &utf8[0],
-                        utf8_length,
-                        nullptr,
-                        nullptr);
-                }
-                DWORD written = 0;
-                if (utf8_length > 0 &&
-                    WriteFile(temp_handle, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr) &&
-                    written == utf8.size() && FlushFileBuffers(temp_handle)) {
-                    temp_file_path = temp_file;
-                    command_line = quote_command_argument(ksh_path) + L" " + quote_command_argument(temp_file_path);
-                }
-                CloseHandle(temp_handle);
-                if (temp_file_path.empty()) {
-                    DeleteFileW(temp_file);
-                }
-            } else {
-                DeleteFileW(temp_file);
-            }
-        }
-
-        if (command_line.empty()) {
-            CloseHandle(child_stdin);
-            CloseHandle(parent_stdin);
-            CloseHandle(parent_stdout);
-            CloseHandle(child_stdout);
-            std::wcerr << L"ksh: coproc: unable to create temporary script\n";
-            ksh_env.variables[L"?"] = L"1";
-            return false;
-        }
-    } else {
-        command_line = quote_command_argument(ksh_path) + L" -c " + quote_command_argument(command_to_run);
-    }
-
-    STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    ZeroMemory(&pi, sizeof(pi));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = child_stdin;
-    si.hStdOutput = child_stdout;
-    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-
-    std::vector<HANDLE> inherited_handles = { child_stdin, child_stdout, si.hStdError };
-    if (!create_process_with_handle_list(command_line, si, inherited_handles, 0, pi)) {
-        if (!temp_file_path.empty()) {
-            DeleteFileW(temp_file_path.c_str());
-        }
-        CloseHandle(child_stdin);
-        CloseHandle(parent_stdin);
-        CloseHandle(parent_stdout);
-        CloseHandle(child_stdout);
-        std::wcerr << L"ksh: coproc: unable to launch command\n";
-        ksh_env.variables[L"?"] = L"1";
-        return false;
-    }
-
-    CloseHandle(child_stdin);
-    CloseHandle(child_stdout);
-    CloseHandle(pi.hThread);
-    g_coprocess.input_write = parent_stdin;
-    g_coprocess.output_read = parent_stdout;
-    g_coprocess.process = pi.hProcess;
-    g_coprocess.pid = pi.dwProcessId;
-    g_coprocess.temp_file_path = std::move(temp_file_path);
-    g_coprocess.active = true;
-    ksh_env.variables[L"COPROC_PID"] = std::to_wstring(pi.dwProcessId);
-    ksh_env.variables[L"COPROC_ACTIVE"] = L"1";
-    ksh_env.variables[L"?"] = L"0";
-    return true;
-}
-
-bool execute_builtin_getconf(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output) {
-    if (tokens.size() < 2) {
-        std::wcerr << L"getconf: usage: getconf [-v specification] system_var [pathname] or getconf -a\n";
-        ksh_env.variables[L"?"] = L"1";
-        return true;
-    }
-
-    static const std::unordered_map<std::wstring, std::wstring> kStaticGetconfValues = {
-        {L"CHAR_BIT", L"8"},
-        {L"INT_MAX", L"2147483647"},
-        {L"LONG_MAX", L"2147483647"},
-        {L"ULONG_MAX", L"4294967295"},
-        {L"PAGE_SIZE", L"4096"},
-        {L"ARG_MAX", L"32767"},
-        {L"PATH_MAX", L"260"}
-    };
-
-    auto get_runtime_getconf_value = [](const std::wstring& name, std::wstring& value_out) -> bool {
-        if (name == L"PATH") {
-            wchar_t windir[MAX_PATH];
-            DWORD windir_len = GetEnvironmentVariableW(L"windir", windir, MAX_PATH);
-            if (windir_len > 0 && windir_len < MAX_PATH) {
-                value_out = std::wstring(windir) + L"\\System32;" + std::wstring(windir);
-            } else {
-                value_out = L"C:\\Windows\\System32;C:\\Windows";
-            }
-            return true;
-        }
-
-        if (name == L"TMPDIR") {
-            wchar_t tmp[MAX_PATH];
-            DWORD tmp_len = GetTempPathW(MAX_PATH, tmp);
-            if (tmp_len > 0 && tmp_len < MAX_PATH) {
-                value_out = tmp;
-            } else {
-                value_out = L"C:\\Temp";
-            }
-            return true;
-        }
-
-        std::unordered_map<std::wstring, std::wstring>::const_iterator it = kStaticGetconfValues.find(name);
-        if (it != kStaticGetconfValues.end()) {
-            value_out = it->second;
-            return true;
-        }
-
-        return false;
-    };
-
-    static const std::vector<std::wstring> kGetconfListOrder = {
-        L"CHAR_BIT",
-        L"INT_MAX",
-        L"LONG_MAX",
-        L"ULONG_MAX",
-        L"PAGE_SIZE",
-        L"ARG_MAX",
-        L"PATH_MAX",
-        L"PATH",
-        L"TMPDIR"
-    };
-
-    if (tokens[1] == L"-a") {
-        for (const std::wstring& key : kGetconfListOrder) {
-            std::wstring value;
-            if (!get_runtime_getconf_value(key, value)) {
-                continue;
-            }
-            if (!write_output(key + L" = " + value + L"\n")) {
-                ksh_env.variables[L"?"] = L"1";
-                return true;
-            }
-        }
-        ksh_env.variables[L"?"] = L"0";
-        return true;
-    }
-
-    std::wstring var = tokens[1];
-    std::wstring value;
-    if (get_runtime_getconf_value(var, value)) {
-        if (!write_output(value + L"\n")) {
-            ksh_env.variables[L"?"] = L"1";
-            return true;
-        }
-        ksh_env.variables[L"?"] = L"0";
-        return true;
-    } else {
-        std::wcerr << L"getconf: unknown variable: " << var << L"\n";
-        ksh_env.variables[L"?"] = L"1";
-        return true;
-    }
-}
-
-bool execute_builtin_pathchk(const std::vector<std::wstring>& tokens) {
-    if (tokens.size() < 2) {
-        std::wcerr << L"pathchk: usage: pathchk [-p] [-P] pathname...\n";
-        ksh_env.variables[L"?"] = L"1";
-        return true;
-    }
-
-    bool posix_portable = false;
-    bool check_empty_components = false;
-    size_t start_idx = 1;
-
-    while (start_idx < tokens.size() && tokens[start_idx].size() > 1 && tokens[start_idx][0] == L'-') {
-        std::wstring arg = tokens[start_idx];
-        for (size_t j = 1; j < arg.size(); ++j) {
-            if (arg[j] == L'p') posix_portable = true;
-            else if (arg[j] == L'P') check_empty_components = true;
-            else {
-                std::wcerr << L"pathchk: invalid option: -" << arg[j] << L"\n";
-                ksh_env.variables[L"?"] = L"1";
-                return true;
-            }
-        }
-        start_idx++;
-    }
-
-    if (start_idx >= tokens.size()) {
-        std::wcerr << L"pathchk: missing pathname\n";
-        ksh_env.variables[L"?"] = L"1";
-        return true;
-    }
-
-    bool all_ok = true;
-    for (size_t i = start_idx; i < tokens.size(); ++i) {
-        std::wstring path = tokens[i];
-
-        if (path.empty()) {
-            std::wcerr << L"pathchk: empty pathname is invalid\n";
-            all_ok = false;
-            continue;
-        }
-
-        std::vector<std::wstring> components;
-        std::wstring current;
-        for (wchar_t ch : path) {
-            if (ch == L'\\' || ch == L'/') {
-                if (!current.empty()) {
-                    components.push_back(current);
-                    current.clear();
-                } else if (check_empty_components) {
-                    std::wcerr << L"pathchk: '" << path << L"': empty component is not portable\n";
-                    all_ok = false;
-                }
-            } else {
-                current.push_back(ch);
-            }
-        }
-        if (!current.empty()) {
-            components.push_back(current);
-        }
-
-        if (posix_portable) {
-            if (path.size() > 256) {
-                std::wcerr << L"pathchk: '" << path << L"': pathname length exceeds POSIX limit (256)\n";
-                all_ok = false;
-            }
-            for (const auto& comp : components) {
-                if (comp.size() > 14) {
-                    std::wcerr << L"pathchk: '" << path << L"': component '" << comp << L"' length exceeds POSIX limit (14)\n";
-                    all_ok = false;
-                }
-                for (wchar_t ch : comp) {
-                    bool ok_char = (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z') ||
-                                   (ch >= L'0' && ch <= L'9') || ch == L'.' || ch == L'_' || ch == L'-';
-                    if (!ok_char) {
-                        std::wcerr << L"pathchk: '" << path << L"': character '" << ch << L"' in '" << comp << L"' is not portable\n";
-                        all_ok = false;
-                    }
-                }
-            }
-        } else {
-            if (path.size() > 260) {
-                std::wcerr << L"pathchk: '" << path << L"': pathname length exceeds Windows limit (260)\n";
-                all_ok = false;
-            }
-            for (const auto& comp : components) {
-                if (comp.size() > 255) {
-                    std::wcerr << L"pathchk: '" << path << L"': component '" << comp << L"' length exceeds Windows limit (255)\n";
-                    all_ok = false;
-                }
-                for (size_t char_idx = 0; char_idx < comp.size(); ++char_idx) {
-                    wchar_t ch = comp[char_idx];
-                    if (ch == L':' && char_idx == 1 && comp.size() == 2 && i == start_idx) {
-                        continue;
-                    }
-                    if (ch == L'<' || ch == L'>' || ch == L':' || ch == L'"' || ch == L'|' || ch == L'?' || ch == L'*') {
-                        std::wcerr << L"pathchk: '" << path << L"': component '" << comp << L"' contains invalid character '" << ch << L"'\n";
-                        all_ok = false;
-                    }
-                }
-            }
-        }
-    }
-
-    ksh_env.variables[L"?"] = all_ok ? L"0" : L"1";
-    return true;
-}
-
 bool execute_command_line(const std::wstring& input_line, bool& should_exit_shell, bool bypass_aliases, bool bypass_function_lookup) {
     std::wstring line = input_line;
     g_expansion_error = false;
@@ -15516,8 +16147,8 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
         double val = 0.0;
         bool parse_ok = true;
         try {
-            ArithmeticParser parser(expanded);
-            val = parser.parse();
+            val = evaluate_arithmetic_double(expanded);
+            // parsed
         } catch (const std::exception& ex) {
             std::wstring wmsg = L"ksh: ((" + expanded + L")): " + std::wstring(ex.what(), ex.what() + strlen(ex.what()));
             std::wcerr << wmsg << L"\n";
@@ -19912,6 +20543,16 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
     return true;
 }
 
+
+/******************************************************************************
+** End of ksh_executor.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_selftest.cpp
+******************************************************************************/
+
+
 // SECTION 13: Built-in Self-Tests and Verification
 int run_internal_self_tests() {
     int passed = 0;
@@ -20268,6 +20909,14 @@ int run_internal_self_tests() {
     std::wcout << L"\n--- Self-Test Summary: " << passed << L" passed, " << failed << L" failed ---\n";
     return (failed == 0) ? 0 : 1;
 }
+/******************************************************************************
+** End of ksh_selftest.cpp
+******************************************************************************/
+
+/******************************************************************************
+** Begin file ksh_main.cpp
+******************************************************************************/
+
 
 int wmain(int argc, wchar_t* argv[]) {
     enable_ansi_support();
@@ -20473,172 +21122,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     return finalize_shell_exit(0);
 }
+/******************************************************************************
+** End of ksh_main.cpp
+******************************************************************************/
 
-bool file_exists_regular(const std::wstring& path) {
-    DWORD attributes = GetFileAttributesW(path.c_str());
-    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
-}
-
-bool ensure_default_home_kshrc_exists(const std::wstring& profile_path) {
-    if (profile_path.empty()) {
-        return false;
-    }
-
-    DWORD attributes = GetFileAttributesW(profile_path.c_str());
-    if (attributes != INVALID_FILE_ATTRIBUTES) {
-        return (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
-    }
-
-    std::ofstream profile_file(profile_path.c_str(), std::ios::binary);
-    if (!profile_file.is_open()) {
-        std::wcerr << L"ksh: warning: could not create startup profile: " << profile_path << L"\n";
-        return false;
-    }
-
-    const char* default_profile =
-        "# ksh startup profile (.kshrc)\n"
-        "# This file is loaded automatically when ksh starts.\n"
-        "# Add aliases, variables, and shell functions here.\n"
-        "\n"
-        "# Prompt customization tokens for PS1:\n"
-        "#   %u user, %d domain, %w cwd, %m host, %# role-char, %% literal-percent\n"
-        "# Example:\n"
-        "# PS1='%u@%d %w %# '\n"
-        "# alias ll='dir'\n";
-    profile_file.write(default_profile, static_cast<std::streamsize>(std::strlen(default_profile)));
-    if (!profile_file.good()) {
-        std::wcerr << L"ksh: warning: failed writing startup profile: " << profile_path << L"\n";
-        return false;
-    }
-
-    return true;
-}
-
-std::wstring get_default_startup_profile_path() {
-    wchar_t userprofile_path[MAX_PATH];
-    DWORD userprofile_len = GetEnvironmentVariableW(L"USERPROFILE", userprofile_path, MAX_PATH);
-    if (userprofile_len > 0 && userprofile_len < MAX_PATH) {
-        std::wstring candidate = std::wstring(userprofile_path) + L"\\.kshrc";
-        if (file_exists_regular(candidate) || ensure_default_home_kshrc_exists(candidate)) {
-            return candidate;
-        }
-    }
-
-    // Legacy fallback for existing installs that use the AppData profile path.
-    wchar_t appdata_path[MAX_PATH];
-    DWORD appdata_len = GetEnvironmentVariableW(L"APPDATA", appdata_path, MAX_PATH);
-    if (appdata_len > 0 && appdata_len < MAX_PATH) {
-        std::wstring candidate = std::wstring(appdata_path) + L"\\ksh_profile.ksh";
-        if (file_exists_regular(candidate)) {
-            return candidate;
-        }
-    }
-
-    return L"";
-}
-
-bool load_startup_profile(const StartupOptions& options, bool& should_exit_shell) {
-    if (options.disable_profile) {
-        return true;
-    }
-
-    std::wstring profile_path;
-    if (options.profile_override_set) {
-        profile_path = trim_copy(options.profile_override_path);
-        if (profile_path.empty()) {
-            return true;
-        }
-    } else {
-        profile_path = get_default_startup_profile_path();
-        if (profile_path.empty()) {
-            return true;
-        }
-    }
-
-    if (!file_exists_regular(profile_path)) {
-        if (options.profile_override_set) {
-            std::wcerr << L"ksh: cannot open startup profile: " << profile_path << L"\n";
-        }
-        return true;
-    }
-
-    std::vector<std::wstring> empty_args;
-    if (!execute_script_file(profile_path, empty_args, should_exit_shell)) {
-        std::wcerr << L"ksh: startup profile reported an error: " << profile_path << L"\n";
-    }
-
-    return true;
-}
-
-// Startup section: command-line option parsing and shell bootstrap.
-bool parse_startup_arguments(int argc, wchar_t* argv[], StartupOptions& options, int& first_positional_index, bool& show_help, bool& show_version) {
-    first_positional_index = argc;
-
-    for (int i = 1; i < argc; ++i) {
-        std::wstring arg = argv[i];
-
-        if (arg == L"--") {
-            first_positional_index = i + 1;
-            return true;
-        }
-
-        if (arg == L"-c") {
-            if (i + 1 >= argc) {
-                std::wcerr << L"ksh: -c requires a command string\n";
-                return false;
-            }
-            options.command_string_set = true;
-            options.command_string = argv[++i];
-            first_positional_index = i + 1;
-            return true;
-        }
-
-        if (arg == L"--script-test") {
-            if (i + 1 >= argc) {
-                std::wcerr << L"ksh: --script-test requires a script path\n";
-                return false;
-            }
-            options.script_test_set = true;
-            options.script_test_path = argv[++i];
-            options.disable_profile = true;
-            first_positional_index = i + 1;
-            return true;
-        }
-
-        if (arg == L"-h" || arg == L"--help") {
-            show_help = true;
-            continue;
-        }
-
-        if (arg == L"--version") {
-            show_version = true;
-            continue;
-        }
-
-        if (arg == L"--no-profile") {
-            options.disable_profile = true;
-            continue;
-        }
-
-        if (arg == L"--profile") {
-            if (i + 1 >= argc) {
-                std::wcerr << L"ksh: --profile requires a file path\n";
-                return false;
-            }
-            options.profile_override_set = true;
-            options.profile_override_path = argv[++i];
-            continue;
-        }
-
-        if (arg.rfind(L"--profile=", 0) == 0) {
-            options.profile_override_set = true;
-            options.profile_override_path = arg.substr(10);
-            continue;
-        }
-
-        first_positional_index = i;
-        return true;
-    }
-
-    return true;
-}
