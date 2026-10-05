@@ -364,7 +364,7 @@ CrossShellTCSH supports comprehensive CSH/TCSH scripting constructs.
 ```csh
 #!/usr/bin/env tcsh
 
-set src_files = ( src/arch.cpp src/awk.cpp src/cat.cpp src/tcsh.cpp )
+set src_files = ( src/arch.cpp src/awk.cpp src/cat/cat.cpp src/tcsh.cpp )
 
 echo "Processing source files..."
 foreach file ( $src_files )
