@@ -210,7 +210,9 @@ To uninstall CrossShell for UNIX:
 `suspend`, `swlist`, `sync`, `tail`, `tee`, `test`, `threads`, `tmux`, `top`,
 `touch`, `tr`, `traceroute`, `true`, `truncate`, `ts`, `tsort`, `tty`,
 `typeset`, `ufw`, `ulimit`, `umask`, `uname`, `uniq`, `unxz`, `unzip`,
-`uptime`, `useradd`, `userdel`, `usermod`, `vcc`, `vhdctl`, `vmstat`, and `w`
+`uptime`, `useradd`, `userdel`, `usermod`, `vcc`, `vhdctl`, `vmstat`, `w`,
+`wall`, `watch`, `wc`, `wget`, `whence`, `whereami`, `whereis`, `which`, `who`,
+`whois`, `wipe`, `xargs`, `xorriso`, `xz`, `yacc`, `yes`, `zcat`, `zgrep`, and `zip`
 have function-named modules in
 their respective `src/<command>/` directories. Each directory includes
 `build.ps1`, `build.bat`, and `build.sh`, which compile all of that command's
