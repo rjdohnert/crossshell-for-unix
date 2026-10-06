@@ -1,54 +1,57 @@
 @echo off
-setlocal enabledelayedexpansion
-
-set TARGET=strace.exe
-set SOURCES=strace.cpp strace_app.cpp engine.cpp reporter.cpp options.cpp
-set LIBS_MSVC=dbghelp.lib
-set LIBS_GCC=-ldbghelp -municode
-set LIBS_CLANG=-ldbghelp -Wl,/subsystem:console
-set BIN_DIR=..\..\bin
-
-if "%1"=="clean" (
-    echo [strace] Cleaning build artifacts...
-    del /q /f *.obj *.o *.pdb %TARGET% 2>nul
-    echo [strace] Clean complete.
-    exit /b 0
-)
-
-set COMPILER=
-where clang++ >nul 2>&1 && set COMPILER=clang
-if not defined COMPILER (
-    where g++ >nul 2>&1 && set COMPILER=gcc
-)
-if not defined COMPILER (
-    where cl >nul 2>&1 && set COMPILER=cl
-)
-if not defined COMPILER (
-    echo [strace] Error: No suitable C++ compiler found (clang++, g++, cl.exe).
-    exit /b 1
-)
-
-echo [strace] Building using %COMPILER%...
-
-if "%COMPILER%"=="clang" (
-    clang++ -std=c++17 -O2 -DNDEBUG %SOURCES% %LIBS_CLANG% -o %TARGET%
-) else if "%COMPILER%"=="gcc" (
-    g++ -std=c++17 -O2 -DNDEBUG %SOURCES% %LIBS_GCC% -o %TARGET%
-) else if "%COMPILER%"=="cl" (
-    cl /nologo /EHsc /std:c++17 /O2 /DNDEBUG %SOURCES% %LIBS_MSVC% /Fe:%TARGET%
-    del /q /f *.obj 2>nul
-)
-
-if not exist %TARGET% (
-    echo [strace] Build failed.
-    exit /b 1
-)
-
-echo [strace] Successfully built %TARGET%
-
-if not "%1"=="--no-install" (
-    if exist %BIN_DIR% (
-        copy /y %TARGET% %BIN_DIR%\%TARGET% >nul
-        echo [strace] Installed to %BIN_DIR%\%TARGET%
-    )
-)
+setlocal EnableExtensions
+set TOOL_NAME=strace
+set SOURCE_FILES=output_redirection_guard.cpp process_tracker.cpp strace_app.cpp strace.cpp symbol_resolver.cpp trace_engine.cpp trace_formatter.cpp trace_options.cpp trace_reporter.cpp wide_pipe_streambuf.cpp
+set NO_INSTALL=0
+set CLEAN=0
+:parse
+if "%~1"=="" goto configure
+if /i "%~1"=="clean" goto set_clean
+if /i "%~1"=="--clean" goto set_clean
+if /i "%~1"=="-Clean" goto set_clean
+if /i "%~1"=="--no-install" goto set_no_install
+if /i "%~1"=="-NoInstall" goto set_no_install
+echo Unknown option: %1
+exit /b 1
+:set_clean
+set CLEAN=1
+shift /1
+goto parse
+:set_no_install
+set NO_INSTALL=1
+shift /1
+goto parse
+:configure
+pushd "%~dp0" || exit /b 1
+if "%CLEAN%"=="1" goto clean
+where clang++ >nul 2>nul
+if not errorlevel 1 goto clang
+where cl.exe >nul 2>nul
+if not errorlevel 1 goto msvc
+where g++ >nul 2>nul
+if not errorlevel 1 goto gcc
+echo No suitable C++ compiler found (clang++, cl.exe, or g++ required).
+set RESULT=1
+goto done
+:clang
+clang++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "%TOOL_NAME%.exe" %SOURCE_FILES% -ldbghelp -lpsapi -ladvapi32
+goto compiled
+:msvc
+cl.exe /nologo /std:c++17 /O2 /EHsc /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:%TOOL_NAME%.exe" %SOURCE_FILES% dbghelp.lib psapi.lib advapi32.lib
+goto compiled
+:gcc
+g++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -municode  -o "%TOOL_NAME%.exe" %SOURCE_FILES% -ldbghelp -lpsapi -ladvapi32
+:compiled
+set RESULT=%errorlevel%
+if not "%RESULT%"=="0" goto done
+if "%NO_INSTALL%"=="1" goto done
+if not exist "..\..\bin" mkdir "..\..\bin"
+copy /y "%TOOL_NAME%.exe" "..\..\bin\%TOOL_NAME%.exe" >nul
+set RESULT=%errorlevel%
+goto done
+:clean
+del /q *.obj *.o "%TOOL_NAME%.exe" *.pdb *.ilk 2>nul
+set RESULT=0
+:done
+popd
+exit /b %RESULT%

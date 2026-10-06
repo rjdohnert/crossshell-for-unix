@@ -1,0 +1,57 @@
+@echo off
+setlocal EnableExtensions
+set TOOL_NAME=supervisord
+set SOURCE_FILES=admin_check.cpp async_pipe_pump.cpp config_diagnostics.cpp config_key_handlers.cpp config_parser.cpp config_validation.cpp config_value_parser.cpp environment_block.cpp event_ring_buffer.cpp executable_path.cpp health_check_scheduler_runtime.cpp ipc_action_parser.cpp ipc_client.cpp ipc_command_parser.cpp ipc_endpoint.cpp ipc_framing.cpp ipc_response.cpp logger.cpp managed_process.cpp path_encoding.cpp pipe_client_security.cpp process_state.cpp program_config_comparison.cpp rotating_file_sink.cpp scoped_handle.cpp service_events.cpp service_runtime.cpp supervisor.cpp supervisord_app.cpp supervisord_help.cpp supervisord.cpp
+set NO_INSTALL=0
+set CLEAN=0
+:parse
+if "%~1"=="" goto configure
+if /i "%~1"=="clean" goto set_clean
+if /i "%~1"=="--clean" goto set_clean
+if /i "%~1"=="-Clean" goto set_clean
+if /i "%~1"=="--no-install" goto set_no_install
+if /i "%~1"=="-NoInstall" goto set_no_install
+echo Unknown option: %1
+exit /b 1
+:set_clean
+set CLEAN=1
+shift /1
+goto parse
+:set_no_install
+set NO_INSTALL=1
+shift /1
+goto parse
+:configure
+pushd "%~dp0" || exit /b 1
+if "%CLEAN%"=="1" goto clean
+where clang++ >nul 2>nul
+if not errorlevel 1 goto clang
+where cl.exe >nul 2>nul
+if not errorlevel 1 goto msvc
+where g++ >nul 2>nul
+if not errorlevel 1 goto gcc
+echo No suitable C++ compiler found (clang++, cl.exe, or g++ required).
+set RESULT=1
+goto done
+:clang
+clang++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "%TOOL_NAME%.exe" %SOURCE_FILES% -ladvapi32
+goto compiled
+:msvc
+cl.exe /nologo /std:c++17 /O2 /EHsc /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:%TOOL_NAME%.exe" %SOURCE_FILES% advapi32.lib
+goto compiled
+:gcc
+g++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -municode  -o "%TOOL_NAME%.exe" %SOURCE_FILES% -ladvapi32
+:compiled
+set RESULT=%errorlevel%
+if not "%RESULT%"=="0" goto done
+if "%NO_INSTALL%"=="1" goto done
+if not exist "..\..\bin" mkdir "..\..\bin"
+copy /y "%TOOL_NAME%.exe" "..\..\bin\%TOOL_NAME%.exe" >nul
+set RESULT=%errorlevel%
+goto done
+:clean
+del /q *.obj *.o "%TOOL_NAME%.exe" *.pdb *.ilk 2>nul
+set RESULT=0
+:done
+popd
+exit /b %RESULT%

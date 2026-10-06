@@ -1,42 +1,28 @@
-#!/usr/bin/env sh
-set -e
-
-TARGET="strace.exe"
-SOURCES="strace.cpp strace_app.cpp engine.cpp reporter.cpp options.cpp"
-LIBS="-ldbghelp -Wl,/subsystem:console"
-BIN_DIR="../../bin"
-
-if [ "$1" = "clean" ] || [ "$1" = "--clean" ]; then
-    echo "[strace] Cleaning build artifacts..."
-    rm -f *.o *.obj *.pdb "$TARGET"
-    echo "[strace] Clean complete."
-    exit 0
-fi
-
-COMPILER=""
+#!/bin/sh
+set -eu
+cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+TOOL_NAME="strace"
+SOURCE_FILES="output_redirection_guard.cpp process_tracker.cpp strace_app.cpp strace.cpp symbol_resolver.cpp trace_engine.cpp trace_formatter.cpp trace_options.cpp trace_reporter.cpp wide_pipe_streambuf.cpp"
+NO_INSTALL=0
+for arg in "$@"; do
+    case "$arg" in
+        clean|--clean) rm -f *.obj *.o "$TOOL_NAME.exe" *.pdb *.ilk; exit 0 ;;
+        --no-install) NO_INSTALL=1 ;;
+        *) echo "Unknown option: $arg" >&2; exit 1 ;;
+    esac
+done
 if command -v clang++ >/dev/null 2>&1; then
-    COMPILER="clang++"
+    clang++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "$TOOL_NAME.exe" $SOURCE_FILES -ldbghelp -lpsapi -ladvapi32
 elif command -v g++ >/dev/null 2>&1; then
-    COMPILER="g++"
-    LIBS="-ldbghelp -municode"
+    g++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -municode  -o "$TOOL_NAME.exe" $SOURCE_FILES -ldbghelp -lpsapi -ladvapi32
+elif command -v cl.exe >/dev/null 2>&1; then
+    export MSYS_NO_PATHCONV=1
+    cl.exe /nologo /std:c++17 /O2 /EHsc /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:$TOOL_NAME.exe" $SOURCE_FILES dbghelp.lib psapi.lib advapi32.lib
 else
-    echo "[strace] Error: No suitable C++ compiler found (clang++, g++)." >&2
+    echo "No suitable Windows C++ compiler found (clang++, g++, or cl.exe required)." >&2
     exit 1
 fi
-
-echo "[strace] Building using $COMPILER..."
-$COMPILER -std=c++17 -O2 -DNDEBUG $SOURCES $LIBS -o "$TARGET"
-
-if [ ! -f "$TARGET" ]; then
-    echo "[strace] Build failed." >&2
-    exit 1
-fi
-
-echo "[strace] Successfully built $TARGET"
-
-if [ "$1" != "--no-install" ]; then
-    if [ -d "$BIN_DIR" ]; then
-        cp -f "$TARGET" "$BIN_DIR/$TARGET"
-        echo "[strace] Installed to $BIN_DIR/$TARGET"
-    fi
+if [ "$NO_INSTALL" -eq 0 ]; then
+    mkdir -p ../../bin
+    cp -f "$TOOL_NAME.exe" "../../bin/$TOOL_NAME.exe"
 fi

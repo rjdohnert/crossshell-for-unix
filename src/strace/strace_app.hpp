@@ -1,7 +1,6 @@
 #pragma once
 
-#include "options.hpp"
-#include "engine.hpp"
+#include "strace.hpp"
 
 class StraceApplication {
 public:

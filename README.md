@@ -46,6 +46,7 @@ Microsoft Corporation
   - [Silent Installation](#silent-installation)
   - [Portable Installation (ZIP)](#portable-installation-zip)
 - [Uninstallation](#uninstallation)
+- [Building Utilities](#building-utilities)
 - [Project History](#project-history)
 - [AI Use Disclosure](#ai-use-disclosure)
 - [Acknowledgments](#acknowledgments)
@@ -198,6 +199,47 @@ To uninstall CrossShell for UNIX:
 1. Open Windows **Settings** (`Win + I`).
 2. Navigate to **Apps** > **Installed apps** (or **Apps & features**).
 3. Locate **CrossShell for UNIX** and select **Uninstall**.
+
+---
+
+## Building Utilities
+
+`realpath`, `reboot`, `recode`, `recycle`, `refresh`, `registryctl`, `rename`,
+`renice`, `resolve`, `rm`, `rpm`, `rpmbuild`, `split`, `ss`, `startsrc`, `stat`,
+`stdbuf`, `stop`, `stopsrc`, `strace`, `strings`, `su`, `sudo`, `supervisord`,
+`suspend`, `swlist`, and `sync` have function-named modules in
+their respective `src/<command>/` directories. Each directory includes
+`build.ps1`, `build.bat`, and `build.sh`, which compile all of that command's
+implementation files. Compile the complete module set rather than just the
+entry-point source file.
+
+Use a Windows C++17 toolchain: Clang or MSVC with the Windows SDK, or MinGW-w64
+GCC. MSVC requires a Developer Command Prompt or an initialized developer
+environment. The shell scripts run in a Windows shell environment such as Git
+Bash; they do not port the Windows APIs to Linux.
+
+From the repository root, for example:
+
+```powershell
+./src/realpath/build.ps1 -NoInstall
+./src/realpath/build.ps1 -Compiler cl -NoInstall
+./src/realpath/build.ps1 -Clean
+```
+
+```cmd
+src\realpath\build.bat --no-install
+src\realpath\build.bat --clean
+```
+
+```sh
+sh src/realpath/build.sh --no-install
+sh src/realpath/build.sh --clean
+```
+
+The scripts can be invoked from any working directory. By default, they also
+copy the resulting executable to the project's `bin/` directory; use
+`-NoInstall` (PowerShell) or `--no-install` (batch/shell) to skip that step.
+Cleaning only removes local build artifacts, not installed binaries.
 
 ---
 
