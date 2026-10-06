@@ -207,7 +207,11 @@ To uninstall CrossShell for UNIX:
 `realpath`, `reboot`, `recode`, `recycle`, `refresh`, `registryctl`, `rename`,
 `renice`, `resolve`, `rm`, `rpm`, `rpmbuild`, `split`, `ss`, `startsrc`, `stat`,
 `stdbuf`, `stop`, `stopsrc`, `strace`, `strings`, `su`, `sudo`, `supervisord`,
-`suspend`, `swlist`, and `sync` have function-named modules in
+`suspend`, `swlist`, `sync`, `tail`, `tee`, `test`, `threads`, `tmux`, `top`,
+`touch`, `tr`, `traceroute`, `true`, `truncate`, `ts`, `tsort`, `tty`,
+`typeset`, `ufw`, `ulimit`, `umask`, `uname`, `uniq`, `unxz`, `unzip`,
+`uptime`, `useradd`, `userdel`, `usermod`, `vcc`, `vhdctl`, `vmstat`, and `w`
+have function-named modules in
 their respective `src/<command>/` directories. Each directory includes
 `build.ps1`, `build.bat`, and `build.sh`, which compile all of that command's
 implementation files. Compile the complete module set rather than just the

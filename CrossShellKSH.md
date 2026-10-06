@@ -346,6 +346,21 @@ HKCU.Environment.MY_CUSTOM_VAR="Enabled"
 
 ## 9. Scripting Walkthrough & Practical Examples
 
+CrossShell KSH runs both `.sh` and `.ksh` files natively on Windows:
+
+```powershell
+.\ksh.exe .\script.sh "argument with spaces"
+```
+
+`.sh` commands invoked from KSH run in a child instance of the same Windows
+executable, preserving argument quoting, redirection, pipelines, and exit status
+without terminating the caller. No Bash, WSL, or POSIX compatibility layer is
+required. UTF-8 BOM and Windows CRLF input are supported; a shebang is treated
+as a comment, not as a request to launch a UNIX interpreter. Scripts must use
+CrossShell KSH's supported syntax and available Windows commands; the `.sh`
+extension does not imply full Bash or UNIX compatibility. Use `source FILE`
+or `. FILE` when a script should modify the current shell's state.
+
 ### Example 1: Automated Deployment Script
 ```ksh
 #!/usr/bin/env ksh

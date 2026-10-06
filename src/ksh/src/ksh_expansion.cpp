@@ -828,6 +828,40 @@ bool parse_command_substitution_content(const std::wstring& input, size_t start_
     return false;
 }
 
+bool parse_backtick_command_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index) {
+    content.clear();
+    next_index = start_index;
+
+    size_t i = start_index;
+    while (i < input.size()) {
+        wchar_t ch = input[i];
+
+        if (ch == L'`') {
+            next_index = i + 1;
+            return true;
+        }
+
+        if (ch == L'\\') {
+            if (i + 1 < input.size()) {
+                wchar_t next_ch = input[i + 1];
+                if (next_ch == L'`' || next_ch == L'\\' || next_ch == L'$') {
+                    content += next_ch;
+                    i += 2;
+                    continue;
+                }
+            }
+            content += ch;
+            i++;
+            continue;
+        }
+
+        content += ch;
+        i++;
+    }
+
+    return false;
+}
+
 bool parse_arithmetic_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index) {
     content.clear();
     next_index = start_index;
@@ -1726,9 +1760,17 @@ std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_
         next_index++;
     }
 
-    while (next_index < input.length() && (std::iswalnum(input[next_index]) || input[next_index] == L'_' || input[next_index] == L'.')) {
-        var_name += input[next_index];
-        next_index++;
+    while (next_index < input.length()) {
+        wchar_t c = input[next_index];
+        if (std::iswalnum(c) || c == L'_') {
+            var_name += c;
+            next_index++;
+        } else if (braced && c == L'.') {
+            var_name += c;
+            next_index++;
+        } else {
+            break;
+        }
     }
 
     if (braced && next_index < input.length() && input[next_index] == L'[') {
@@ -2182,9 +2224,34 @@ std::wstring expand_substitutions_left_to_right(const std::wstring& input) {
         }
 
         if (ch == L'"' && !in_single_quotes) {
+            if (!in_double_quotes && i + 3 < input.length() && input[i + 1] == L'$' && input[i + 2] == L'@' && input[i + 3] == L'"') {
+                if (current_script_args().empty()) {
+                    i += 4;
+                    continue;
+                }
+            }
             in_double_quotes = !in_double_quotes;
             result += ch;
             i++;
+            continue;
+        }
+
+        if (ch == L'`' && !in_single_quotes) {
+            std::wstring cmd_content;
+            size_t next_index = i + 1;
+            if (!parse_backtick_command_substitution_content(input, i + 1, cmd_content, next_index)) {
+                result += L'`';
+                i++;
+                continue;
+            }
+
+            std::wstring expanded_command = expand_substitutions_left_to_right(cmd_content);
+            std::vector<std::wstring> substitution_tokens = ksh_tokenize_preserve_quotes(expanded_command);
+            const bool use_capture_sink = can_capture_builtin_command_substitution(substitution_tokens);
+            std::wstring sub_output = execute_command_substitution(expanded_command, use_capture_sink);
+
+            result += sub_output;
+            i = next_index;
             continue;
         }
 
@@ -2251,6 +2318,28 @@ std::wstring evaluate_command_substitutions(const std::wstring& input) {
     size_t i = 0;
 
     while (i < input.size()) {
+        if (input[i] == L'`') {
+            std::wstring cmd_content;
+            size_t next_index = i + 1;
+            if (!parse_backtick_command_substitution_content(input, i + 1, cmd_content, next_index)) {
+                output += L'`';
+                i++;
+                continue;
+            }
+
+            std::wstring nested = evaluate_command_substitutions(cmd_content);
+            if (g_expansion_error) {
+                return L"";
+            }
+            std::vector<std::wstring> substitution_tokens = ksh_tokenize_preserve_quotes(nested);
+            const bool use_capture_sink = can_capture_builtin_command_substitution(substitution_tokens);
+            std::wstring sub_output = execute_command_substitution(nested, use_capture_sink);
+
+            output += sub_output;
+            i = next_index;
+            continue;
+        }
+
         if (input[i] == L'$' && (i + 1) < input.size() && input[i + 1] == L'(' && !((i + 2) < input.size() && input[i + 2] == L'(')) {
             std::wstring cmd_content;
             size_t next_index = i + 2;

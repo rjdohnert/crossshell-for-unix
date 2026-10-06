@@ -1191,7 +1191,9 @@ bool execute_native_or_fallback(const std::wstring& full_command, const Redirect
         return false;
     }
 
-    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir));
+    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir)) ||
+        g_pipeline_stdin != INVALID_HANDLE_VALUE || g_pipeline_stdout != INVALID_HANDLE_VALUE ||
+        g_pipeline_stderr != INVALID_HANDLE_VALUE || g_subshell_stdout != INVALID_HANDLE_VALUE;
     if (use_redirected_stdio) {
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdInput = std_in;
@@ -1301,7 +1303,9 @@ bool launch_process(const std::wstring& full_command, HANDLE& process_handle, DW
         return false;
     }
 
-    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir));
+    const bool use_redirected_stdio = (redir != nullptr && has_any_redirection(*redir)) ||
+        g_pipeline_stdin != INVALID_HANDLE_VALUE || g_pipeline_stdout != INVALID_HANDLE_VALUE ||
+        g_pipeline_stderr != INVALID_HANDLE_VALUE || g_subshell_stdout != INVALID_HANDLE_VALUE;
     if (use_redirected_stdio) {
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdInput = std_in;
@@ -1752,14 +1756,10 @@ ScriptInterpreterResolution build_script_interpreter_command(const std::vector<s
         append_script_arguments();
         return ScriptInterpreterResolution::Resolved;
     } else if (ends_with_case_insensitive(script_path, L".sh")) {
-        std::wstring bash_path;
-        if (!resolve_bash_exe_path(bash_path)) {
+        const std::vector<std::wstring> script_args(tokens.begin() + 1, tokens.end());
+        if (!build_self_script_command(script_path, script_args, command_line)) {
             return ScriptInterpreterResolution::Failed;
         }
-        command_line = quote_command_argument(bash_path);
-        command_line += L" ";
-        command_line += quote_command_argument(script_path);
-        append_script_arguments();
         return ScriptInterpreterResolution::Resolved;
     } else {
         return ScriptInterpreterResolution::NotScript;
@@ -1767,7 +1767,7 @@ ScriptInterpreterResolution build_script_interpreter_command(const std::vector<s
 }
 
 bool is_ksh_script_path(const std::wstring& path) {
-    return ends_with_case_insensitive(path, L".ksh");
+    return ends_with_case_insensitive(path, L".ksh") || ends_with_case_insensitive(path, L".sh");
 }
 
 bool build_self_script_command(const std::wstring& script_path, const std::vector<std::wstring>& script_args, std::wstring& command_line) {

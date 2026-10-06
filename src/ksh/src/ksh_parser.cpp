@@ -200,6 +200,7 @@ bool is_valid_shell_identifier(const std::wstring& name) {
 bool validate_shell_lexical_state(const std::wstring& input, std::wstring& error_message) {
     bool in_single_quotes = false;
     bool in_double_quotes = false;
+    bool in_backticks = false;
     bool escaped = false;
 
     for (wchar_t ch : input) {
@@ -215,11 +216,13 @@ bool validate_shell_lexical_state(const std::wstring& input, std::wstring& error
             in_single_quotes = !in_single_quotes;
         } else if (ch == L'"' && !in_single_quotes) {
             in_double_quotes = !in_double_quotes;
+        } else if (ch == L'`' && !in_single_quotes) {
+            in_backticks = !in_backticks;
         }
     }
 
-    if (in_single_quotes || in_double_quotes) {
-        error_message = L"ksh: syntax error: unterminated quote";
+    if (in_single_quotes || in_double_quotes || in_backticks) {
+        error_message = in_backticks ? L"ksh: syntax error: unterminated backtick" : L"ksh: syntax error: unterminated quote";
         return false;
     }
     if (escaped) {
@@ -827,6 +830,7 @@ std::vector<std::wstring> ksh_tokenize(const std::wstring& input) {
     std::wstring current;
     bool in_quotes = false;
     bool in_single_quotes = false;
+    bool in_backticks = false;
     bool in_array_def = false;
     bool escaped = false;
 
@@ -861,6 +865,13 @@ std::vector<std::wstring> ksh_tokenize(const std::wstring& input) {
             continue;
         }
 
+        if (c == L'`' && !in_single_quotes) {
+            in_backticks = !in_backticks;
+            current += c;
+            i++;
+            continue;
+        }
+
         if (c == L'"' && !in_array_def && !in_single_quotes) {
             in_quotes = !in_quotes;
             i++;
@@ -875,7 +886,7 @@ std::vector<std::wstring> ksh_tokenize(const std::wstring& input) {
             in_array_def = false;
             current += c;
             i++;
-        } else if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
+        } else if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_backticks && !in_array_def) {
             if (!current.empty()) {
                 tokens.push_back(current);
                 current.clear();
@@ -897,6 +908,7 @@ std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input
     std::wstring current;
     bool in_quotes = false;
     bool in_single_quotes = false;
+    bool in_backticks = false;
     bool in_array_def = false;
     bool escaped = false;
 
@@ -931,6 +943,13 @@ std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input
             continue;
         }
 
+        if (c == L'`' && !in_single_quotes) {
+            in_backticks = !in_backticks;
+            current += c;
+            i++;
+            continue;
+        }
+
         if (c == L'"' && !in_array_def && !in_single_quotes) {
             in_quotes = !in_quotes;
             current += c;
@@ -959,7 +978,7 @@ std::vector<std::wstring> ksh_tokenize_preserve_quotes(const std::wstring& input
             continue;
         }
 
-        if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_array_def) {
+        if ((c == L' ' || c == L'\t') && !in_quotes && !in_single_quotes && !in_backticks && !in_array_def) {
             if (!current.empty()) {
                 tokens.push_back(current);
                 current.clear();

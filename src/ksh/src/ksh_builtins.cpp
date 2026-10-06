@@ -180,7 +180,7 @@ const std::array<const wchar_t*, 25> kHelpShellSyntaxLines = {
 
 const std::array<const wchar_t*, 12> kHelpRuntimeBehaviorLines = {
     L"\nScripts and runtime behavior:\n",
-    L"  ksh script.ksh [args...]   Run a script with positional parameters.\n",
+    L"  ksh script.sh [args...]    Run a .sh or .ksh script with positional parameters.\n",
     L"  ksh -c \"command\" [name [args...]] Execute a command string.\n",
     L"  ksh --script-test FILE     Run FILE without a startup profile and report PASS/FAIL.\n",
     L"  source FILE or . FILE      Run a file in the current shell state.\n",

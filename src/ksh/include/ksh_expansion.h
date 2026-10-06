@@ -66,6 +66,7 @@ double evaluate_arithmetic_double(const std::wstring& expr);
 std::wstring trim_trailing_line_endings(const std::wstring& value);
 
 bool parse_command_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index);
+bool parse_backtick_command_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index);
 bool parse_arithmetic_substitution_content(const std::wstring& input, size_t start_index, std::wstring& content, size_t& next_index);
 std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_index, size_t& next_index, bool in_double_quotes);
 std::wstring expand_substitutions_left_to_right(const std::wstring& input);

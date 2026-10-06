@@ -59,6 +59,22 @@ int run_internal_self_tests() {
 
     std::wcout << L"--- Running Internal Self-Tests ---\n";
 
+    {
+        assert_true(is_ksh_script_path(L"script.sh"), L"native .sh script recognition");
+        assert_true(is_ksh_script_path(L"script.SH"), L"case-insensitive .sh script recognition");
+        assert_true(is_ksh_script_path(L"script.ksh"), L"native .ksh script recognition");
+        assert_true(!is_ksh_script_path(L"script.ps1"), L"PowerShell scripts retain their interpreter");
+        const std::vector<std::wstring> args = { L"argument with spaces", L"quoted\"argument" };
+        std::wstring expected_command;
+        assert_true(build_self_script_command(L"folder with spaces\\script.sh", args, expected_command),
+            L"build native .sh interpreter command");
+        std::wstring actual_command;
+        assert_true(build_script_interpreter_command(
+            { L"folder with spaces\\script.sh", args[0], args[1] }, actual_command) == ScriptInterpreterResolution::Resolved,
+            L"resolve .sh without an external Bash interpreter");
+        assert_eq(actual_command, expected_command, L"native .sh interpreter preserves argument quoting");
+    }
+
     // 1. Quoting Cleanup & Escapes Removal
     assert_eq(remove_quotes_and_escapes_from_token(L"\"hello\""), L"hello", L"remove_quotes \"hello\"");
     assert_eq(remove_quotes_and_escapes_from_token(L"'world'"), L"world", L"remove_quotes 'world'");

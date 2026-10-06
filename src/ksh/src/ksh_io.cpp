@@ -487,11 +487,11 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
         }
     }
 
-    if (redir.stdout_to_stderr && (redir.has_stderr || redir.stderr_to_stdout)) {
+    if (redir.stdout_to_stderr && (redir.has_stdout || redir.stderr_to_stdout)) {
         error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
         return false;
     }
-    if (redir.stderr_to_stdout && (redir.has_stdout || redir.stdout_to_stderr)) {
+    if (redir.stderr_to_stdout && (redir.has_stderr || redir.stdout_to_stderr)) {
         error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
         return false;
     }
