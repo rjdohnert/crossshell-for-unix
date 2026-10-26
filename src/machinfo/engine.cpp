@@ -67,35 +67,9 @@ std::wstring SmbiosParser::getSmbiosString(const BYTE* headerPtr, BYTE stringInd
     return L"N/A";
 }
 
-SystemFirmwareInfo SmbiosParser::parseFirmware() {
+SystemFirmwareInfo SmbiosParser::parseSmbiosTable(const BYTE* tableStart, size_t declaredTableBytes) {
     SystemFirmwareInfo fw;
-
-    FIRMWARE_TYPE fwType;
-    if (GetFirmwareType(&fwType)) {
-        if (fwType == FirmwareTypeUefi) fw.firmwareType = L"UEFI";
-        else if (fwType == FirmwareTypeBios) fw.firmwareType = L"Legacy BIOS";
-    }
-
-    const DWORD smbiosSignature = 0x52534D42; // 'RSMB'
-    DWORD size = GetSystemFirmwareTable(smbiosSignature, 0, nullptr, 0);
-    if (size == 0) return fw;
-
-    std::vector<BYTE> buffer(size);
-    if (GetSystemFirmwareTable(smbiosSignature, 0, buffer.data(), size) == 0) return fw;
-    if (size < sizeof(RawSMBIOSData) - 1) return fw;
-
-    const RawSMBIOSData* smbios = reinterpret_cast<const RawSMBIOSData*>(buffer.data());
-    if (smbios->Length == 0) return fw;
-
-    const BYTE* tableStart = smbios->SMBIOSTableData;
-    const BYTE* bufferEnd = buffer.data() + size;
-    if (tableStart < buffer.data() || tableStart > bufferEnd) return fw;
-
-    size_t declaredTableBytes = static_cast<size_t>(smbios->Length);
-    size_t availableBytes = static_cast<size_t>(bufferEnd - tableStart);
-    if (declaredTableBytes > availableBytes) {
-        declaredTableBytes = availableBytes;
-    }
+    if (!tableStart || declaredTableBytes == 0) return fw;
 
     const BYTE* endPtr = tableStart + declaredTableBytes;
     size_t offset = 0;
@@ -144,6 +118,35 @@ SystemFirmwareInfo SmbiosParser::parseFirmware() {
     }
 
     return fw;
+}
+
+SystemFirmwareInfo SmbiosParser::parseFirmware() {
+    SystemFirmwareInfo fw;
+    FIRMWARE_TYPE fwType;
+    if (GetFirmwareType(&fwType)) {
+        if (fwType == FirmwareTypeUefi) fw.firmwareType = L"UEFI";
+        else if (fwType == FirmwareTypeBios) fw.firmwareType = L"Legacy BIOS";
+    }
+
+    const DWORD smbiosSignature = 0x52534D42;
+    DWORD size = GetSystemFirmwareTable(smbiosSignature, 0, nullptr, 0);
+    if (size < sizeof(RawSMBIOSData) - 1) return fw;
+
+    std::vector<BYTE> buffer(size);
+    if (GetSystemFirmwareTable(smbiosSignature, 0, buffer.data(), size) == 0) return fw;
+    const RawSMBIOSData* smbios = reinterpret_cast<const RawSMBIOSData*>(buffer.data());
+    if (smbios->Length == 0) return fw;
+
+    const BYTE* tableStart = smbios->SMBIOSTableData;
+    const BYTE* bufferEnd = buffer.data() + size;
+    if (tableStart < buffer.data() || tableStart > bufferEnd) return fw;
+    size_t tableBytes = static_cast<size_t>(smbios->Length);
+    const size_t availableBytes = static_cast<size_t>(bufferEnd - tableStart);
+    if (tableBytes > availableBytes) tableBytes = availableBytes;
+
+    SystemFirmwareInfo tableInfo = parseSmbiosTable(tableStart, tableBytes);
+    tableInfo.firmwareType = fw.firmwareType;
+    return tableInfo;
 }
 
 // ============================================================================
@@ -222,13 +225,12 @@ TpmInfo TpmDiagnosticsProvider::query(bool enableTpmWmi) {
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hTpm != INVALID_HANDLE_VALUE) {
         tpm.present = true;
-        tpm.ready = true;
         CloseHandle(hTpm);
     } else {
         const DWORD err = GetLastError();
         if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION) {
             tpm.present = true;
-            tpm.ready = true;
+            tpm.ready = false; // Change to false to stop interpreting access-denied TPM probes as readiness
         }
     }
 
@@ -320,7 +322,7 @@ TpmInfo TpmDiagnosticsProvider::query(bool enableTpmWmi) {
 
     ComPtr<IEnumWbemClassObject> pEnumerator;
     BSTR queryLanguage = SysAllocString(L"WQL");
-    BSTR queryText = SysAllocString(L"SELECT SpecVersion, ManufacturerIdTxt, ManufacturerVersion, IsEnabled_InitialValue, IsActivated_InitialValue FROM Win32_Tpm");
+    BSTR queryText = SysAllocString(L"SELECT SpecVersion, ManufacturerIdTxt, ManufacturerVersion FROM Win32_Tpm");
     if (!queryLanguage || !queryText) {
         if (queryLanguage) SysFreeString(queryLanguage);
         if (queryText) SysFreeString(queryText);
@@ -357,22 +359,6 @@ TpmInfo TpmDiagnosticsProvider::query(bool enableTpmWmi) {
             }
             VariantClear(&vt);
 
-            bool isEnabled = false;
-            bool isActivated = false;
-
-            VariantInit(&vt);
-            if (SUCCEEDED(pObj->Get(L"IsEnabled_InitialValue", 0, &vt, nullptr, nullptr)) && vt.vt == VT_BOOL) {
-                isEnabled = (vt.boolVal == VARIANT_TRUE);
-            }
-            VariantClear(&vt);
-
-            VariantInit(&vt);
-            if (SUCCEEDED(pObj->Get(L"IsActivated_InitialValue", 0, &vt, nullptr, nullptr)) && vt.vt == VT_BOOL) {
-                isActivated = (vt.boolVal == VARIANT_TRUE);
-            }
-            VariantClear(&vt);
-
-            tpm.ready = tpm.ready || (isEnabled && isActivated);
         }
     }
 
@@ -449,8 +435,17 @@ CpuTopology HardwareDiagnosticsScanner::queryCpuTopology() {
 
     SYSTEM_INFO sysInfo;
     GetNativeSystemInfo(&sysInfo);
-    cpu.logicalCount = sysInfo.dwNumberOfProcessors;
-    cpu.supportsVirtualization = IsProcessorFeaturePresent(PF_VIRT_FIRMWARE_ENABLED) != 0;
+    switch (sysInfo.wProcessorArchitecture) {
+        case PROCESSOR_ARCHITECTURE_AMD64: cpu.architecture = L"x86_64"; break;
+        case PROCESSOR_ARCHITECTURE_INTEL: cpu.architecture = L"x86"; break;
+        case PROCESSOR_ARCHITECTURE_ARM: cpu.architecture = L"ARM"; break;
+        case PROCESSOR_ARCHITECTURE_ARM64: cpu.architecture = L"ARM64"; break;
+        case PROCESSOR_ARCHITECTURE_IA64: cpu.architecture = L"IA-64"; break;
+        default: cpu.architecture = L"Unknown"; break;
+    }
+    cpu.logicalCount = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    if (cpu.logicalCount == 0) cpu.logicalCount = sysInfo.dwNumberOfProcessors;
+    cpu.virtualizationFirmwareEnabled = IsProcessorFeaturePresent(PF_VIRT_FIRMWARE_ENABLED) != 0;
     cpu.supportsAVX2 = checkAVX2Support();
 
     return cpu;
@@ -462,6 +457,7 @@ MemoryStatusInfo HardwareDiagnosticsScanner::queryMemoryStatus() {
     statex.dwLength = sizeof(statex);
 
     if (GlobalMemoryStatusEx(&statex)) {
+        mem.valid = true;
         mem.totalPhysBytes = statex.ullTotalPhys;
         mem.availPhysBytes = statex.ullAvailPhys;
         mem.pageFileLimitBytes = statex.ullTotalPageFile;
@@ -477,12 +473,14 @@ std::wstring HardwareDiagnosticsScanner::queryWindowsVersion() {
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEXW);
 
     HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    bool versionAvailable = false;
     if (hNtdll) {
         pfnRtlGetVersion pRtlGetVersion = reinterpret_cast<pfnRtlGetVersion>(GetProcAddress(hNtdll, "RtlGetVersion"));
         if (pRtlGetVersion) {
-            pRtlGetVersion(&osvi);
+            versionAvailable = pRtlGetVersion(&osvi) == 0;
         }
     }
+    if (!versionAvailable) return L"Unknown Windows version";
 
     wchar_t buf[128];
     swprintf_s(buf, 128, L"Microsoft Windows %lu.%lu (Build %lu)",

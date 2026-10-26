@@ -137,6 +137,8 @@ int run_internal_self_tests() {
 
         string multio_a = create_temp_process_subst_path();
         string multio_b = create_temp_process_subst_path();
+        assert_true(!find_executable_in_path(current_shell_executable_path()).empty(),
+                "current shell executable resolves as an explicit path");
         bool saved_multios = g_env.options.count("multios") && g_env.options["multios"];
         g_env.options["multios"] = true;
         int multio_status = execute_single_command("print priority12_multio > " + quote_for_shell_path(multio_a) +
@@ -1025,6 +1027,81 @@ int run_internal_self_tests() {
             g_env.functions.erase("rec_a");
             g_env.functions.erase("rec_b");
         }
+    }
+
+    {
+        error_code ec;
+        fs::path original_directory = fs::current_path(ec);
+        fs::path probe_directory = fs::temp_directory_path(ec) /
+            ("zsh_path_probe_" + to_string(GetCurrentProcessId()) + "_" + to_string(GetTickCount64()));
+        bool directory_created = false;
+        if (!ec) {
+            directory_created = fs::create_directory(probe_directory, ec) && !ec;
+        }
+        bool setup_ok = directory_created;
+        string command_name = "zsh_path_probe_" + to_string(GetCurrentProcessId());
+        if (setup_ok) {
+            ofstream probe(probe_directory / (command_name + ".exe"), ios::binary);
+            setup_ok = probe.is_open();
+        }
+
+        const char* path_value = getenv("PATH");
+        bool had_path = path_value != nullptr;
+        string old_path = had_path ? path_value : "";
+        bool path_changed = setup_ok && _putenv_s("PATH", "") == 0;
+        string resolved;
+        if (path_changed) {
+            fs::current_path(probe_directory, ec);
+            if (!ec) resolved = find_executable_in_path(command_name);
+        }
+        error_code restore_error;
+        fs::current_path(original_directory, restore_error);
+        int path_restore_status = _putenv_s("PATH", had_path ? old_path.c_str() : "");
+        if (directory_created) {
+            error_code cleanup_error;
+            fs::remove_all(probe_directory, cleanup_error);
+        }
+        assert_true(setup_ok && path_changed && resolved.empty() && !restore_error && path_restore_status == 0,
+                    "command lookup does not implicitly search the current directory");
+    }
+
+    // New Tier 1 & Tier 2 Builtin Tests
+    {
+        int rc_where = dispatch_command({"where", "echo"});
+        assert_true(rc_where == 0, "where builtin resolves built-in command");
+    }
+    {
+        dispatch_command({"hash", "mytool=C:/bin/mytool.exe"});
+        assert_true(g_env.command_hash_table.count("mytool") && g_env.command_hash_table["mytool"] == "C:\\bin\\mytool.exe",
+                    "hash stores command path mapping");
+        dispatch_command({"hash", "-r"});
+        assert_true(g_env.command_hash_table.empty(), "hash -r flushes command hash table");
+    }
+    {
+        dispatch_command({"disable", "echo"});
+        assert_true(g_env.disabled_builtins.count("echo") != 0, "disable builtin deactivates command");
+        dispatch_command({"enable", "echo"});
+        assert_true(g_env.disabled_builtins.count("echo") == 0, "enable builtin restores command");
+    }
+    {
+        dispatch_command({"ulimit", "-n", "4096"});
+        assert_true(g_env.resource_limits["descriptors"] == "4096", "ulimit sets descriptor limit");
+        dispatch_command({"unlimit", "descriptors"});
+        assert_true(g_env.resource_limits["descriptors"] == "unlimited", "unlimit resets resource limit");
+    }
+    {
+        dispatch_command({"sched", "+10", "echo", "test_sched"});
+        assert_true(!g_env.scheduled_events.empty(), "sched registers deferred command");
+        dispatch_command({"sched", "-1"});
+        assert_true(g_env.scheduled_events.empty(), "sched -1 cancels scheduled event");
+    }
+    {
+        int rc_stat = dispatch_command({"stat", "-s", "src/zsh/zsh.cpp"});
+        assert_true(rc_stat == 0, "stat -s checks file existence");
+    }
+    {
+        int rc_echotc = dispatch_command({"echotc", "cols"});
+        assert_true(rc_echotc == 0, "echotc queries terminal capability");
     }
 
     cout << "\n--- Self-Test Summary: " << passed << " passed, " << failed << " failed ---\n";

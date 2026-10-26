@@ -7,6 +7,7 @@
 class SmbiosParser {
 public:
     static std::wstring getSmbiosString(const BYTE* headerPtr, BYTE stringIndex, const BYTE* endPtr);
+    static SystemFirmwareInfo parseSmbiosTable(const BYTE* tableStart, size_t tableBytes);
     static SystemFirmwareInfo parseFirmware();
 };
 

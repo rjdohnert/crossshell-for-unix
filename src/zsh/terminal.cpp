@@ -126,6 +126,7 @@ static string render_prompt_template(const string& fmt) {
 }
 
 string render_prompt() {
+    process_scheduled_events();
     if (!g_env.prompt_dirty) return g_env.prompt_cache;
     string prompt = render_prompt_template(g_env.vars["PROMPT"]);
     g_env.prompt_cache = prompt;

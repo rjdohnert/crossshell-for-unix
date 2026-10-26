@@ -102,6 +102,20 @@ struct CoProcessState {
 };
 
 struct RedirectionSpec {
+    struct StandardFdAction {
+        enum class Kind {
+            OpenRead,
+            OpenWriteTruncate,
+            OpenWriteAppend,
+            Duplicate
+        };
+
+        int fd = -1;
+        Kind kind = Kind::OpenRead;
+        std::wstring path;
+        int duplicate_source_fd = -1;
+    };
+
     struct CustomFdAction {
         enum class Kind {
             OpenRead,
@@ -127,6 +141,7 @@ struct RedirectionSpec {
     bool append_stderr = false;
     std::wstring stderr_path;
     bool stderr_to_stdout = false;
+    std::vector<StandardFdAction> standard_fd_actions;
     std::vector<CustomFdAction> custom_fd_actions;
 };
 

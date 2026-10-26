@@ -169,8 +169,7 @@ TcshEngine::TcshEngine(bool loadRc) : builtins(tcsh_builtin_names()) {
 TcshEngine::~TcshEngine() {
     saveHistory();
     for (auto& job : jobList) {
-        if (job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) CloseHandle(job.hProcess);
-        if (job.hJob && job.hJob != INVALID_HANDLE_VALUE) CloseHandle(job.hJob);
+        close_job_handles(job);
     }
 }
 
@@ -243,13 +242,14 @@ void TcshEngine::loadRcFile() {
 std::string TcshEngine::resolveExecutable(const std::string& inputCmd, bool& foundOnDisk) {
     foundOnDisk = false;
     std::wstring wCmd = string_to_wstring(inputCmd);
-    DWORD attr = GetFileAttributesW(wCmd.c_str());
-    if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-        foundOnDisk = true;
-        return inputCmd;
-    }
+    const bool has_explicit_path = inputCmd.find_first_of("\\/:") != std::string::npos;
+    if (has_explicit_path) {
+        DWORD attr = GetFileAttributesW(wCmd.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            foundOnDisk = true;
+            return inputCmd;
+        }
 
-    if (inputCmd.find('\\') != std::string::npos || inputCmd.find('/') != std::string::npos) {
         const std::vector<std::string> exts = { ".exe", ".cmd", ".bat", ".com" };
         for (const auto& ext : exts) {
             std::string testPath = inputCmd + ext;
@@ -260,14 +260,44 @@ std::string TcshEngine::resolveExecutable(const std::string& inputCmd, bool& fou
                 return testPath;
             }
         }
+        return inputCmd;
     }
 
-    wchar_t szPath[MAX_PATH];
+    DWORD path_length = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+    if (path_length == 0) return inputCmd;
+    std::vector<wchar_t> path_buffer(path_length);
+    if (GetEnvironmentVariableW(L"PATH", path_buffer.data(), path_length) == 0) return inputCmd;
+
+    std::wstring explicit_path;
+    std::wstring raw_path(path_buffer.data());
+    size_t path_start = 0;
+    while (path_start <= raw_path.size()) {
+        size_t path_end = raw_path.find(L';', path_start);
+        std::wstring directory = raw_path.substr(
+            path_start,
+            path_end == std::wstring::npos ? std::wstring::npos : path_end - path_start);
+        if (directory.size() >= 2 && directory.front() == L'"' && directory.back() == L'"') {
+            directory = directory.substr(1, directory.size() - 2);
+        }
+        if (!directory.empty()) {
+            wchar_t absolute_directory[MAX_PATH] = {};
+            DWORD absolute_length = GetFullPathNameW(directory.c_str(), MAX_PATH, absolute_directory, nullptr);
+            if (absolute_length > 0 && absolute_length < MAX_PATH) {
+                if (!explicit_path.empty()) explicit_path += L';';
+                explicit_path.append(absolute_directory, absolute_length);
+            }
+        }
+        if (path_end == std::wstring::npos) break;
+        path_start = path_end + 1;
+    }
+
+    if (explicit_path.empty()) return inputCmd;
+    wchar_t szPath[MAX_PATH] = {};
     LPWSTR lpFilePart;
-    if (SearchPathW(NULL, wCmd.c_str(), L".exe", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
-    if (SearchPathW(NULL, wCmd.c_str(), L".cmd", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
-    if (SearchPathW(NULL, wCmd.c_str(), L".bat", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
-    if (SearchPathW(NULL, wCmd.c_str(), L".com", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
+    if (SearchPathW(explicit_path.c_str(), wCmd.c_str(), L".exe", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
+    if (SearchPathW(explicit_path.c_str(), wCmd.c_str(), L".cmd", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
+    if (SearchPathW(explicit_path.c_str(), wCmd.c_str(), L".bat", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
+    if (SearchPathW(explicit_path.c_str(), wCmd.c_str(), L".com", MAX_PATH, szPath, &lpFilePart) > 0) { foundOnDisk = true; return wstring_to_string(szPath); }
 
     foundOnDisk = false;
     return inputCmd;

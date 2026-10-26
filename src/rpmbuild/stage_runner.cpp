@@ -13,7 +13,8 @@ bool StageRunner::execute(const std::string& script, const std::string& stageNam
             out << script << "\r\n";
         }
 
-        STARTUPINFOA si = { sizeof(si) };
+        STARTUPINFOA si{};
+        si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
         std::string cmd = "cmd.exe /s /c \"\"" + bat.string() + "\"\"";
 

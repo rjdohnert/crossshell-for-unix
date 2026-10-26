@@ -9,6 +9,7 @@ class MachinfoReporter {
 public:
     static std::wstring formatMemorySize(ULONGLONG bytes);
     static std::wstring jsonEscape(const std::wstring& value);
+    static std::wstring csvEscape(const std::wstring& value);
     static void report(const CpuTopology& cpu, const SystemFirmwareInfo& fw, const MemoryStatusInfo& mem,
                        const TpmInfo& tpm, const std::wstring& osVersion, const MachinfoOptions& opts);
 };

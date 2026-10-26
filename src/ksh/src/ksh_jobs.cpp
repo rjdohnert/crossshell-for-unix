@@ -45,6 +45,18 @@ void register_child_process_times(HANDLE hProcess) {
     }
 }
 
+bool get_background_handle_exit_code(HANDLE handle, DWORD& code) {
+    bool is_pipeline_thread = false;
+    {
+        std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
+        is_pipeline_thread = (g_pipeline_thread_handles.find(handle) != g_pipeline_thread_handles.end());
+    }
+
+    return is_pipeline_thread
+        ? GetExitCodeThread(handle, &code) != FALSE
+        : GetExitCodeProcess(handle, &code) != FALSE;
+}
+
 void update_background_jobs(bool print_completions) {
     auto ensure_job_handle_views = [](BackgroundJob& job) {
         if (job.process_handles.empty() && job.process_handle != nullptr) {
@@ -85,14 +97,7 @@ void update_background_jobs(bool print_completions) {
             }
 
             DWORD code = STILL_ACTIVE;
-            bool is_pipeline_thread = false;
-            {
-                std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
-                is_pipeline_thread = (g_pipeline_thread_handles.find(handle) != g_pipeline_thread_handles.end());
-            }
-            if (is_pipeline_thread) {
-                if (!GetExitCodeThread(handle, &code)) code = 1;
-            } else if (!GetExitCodeProcess(handle, &code)) {
+            if (!get_background_handle_exit_code(handle, code)) {
                 code = 1;
             }
 
@@ -255,11 +260,19 @@ bool wait_for_background_job(BackgroundJob& job, DWORD& exit_code) {
         }
 
         WaitForSingleObject(handle, INFINITE);
-        register_child_process_times(handle);
         DWORD code = 1;
-        if (!GetExitCodeProcess(handle, &code)) {
+        if (!get_background_handle_exit_code(handle, code)) {
             code = 1;
             ok = false;
+        } else {
+            bool is_pipeline_thread = false;
+            {
+                std::lock_guard<std::mutex> lock(g_pipeline_threads_mutex);
+                is_pipeline_thread = (g_pipeline_thread_handles.find(handle) != g_pipeline_thread_handles.end());
+            }
+            if (!is_pipeline_thread) {
+                register_child_process_times(handle);
+            }
         }
 
         if (i + 1 == job.process_handles.size()) {
@@ -557,7 +570,14 @@ bool launch_pipeline_stage_process(
         }
     }
 
-    if (allow_inprocess && needs_shell) {
+    std::vector<std::wstring> redirection_probe_tokens = ksh_tokenize_preserve_quotes(segment);
+    RedirectionSpec redirection_probe;
+    std::wstring redirection_probe_error;
+    const bool has_redirection =
+        !parse_redirections(redirection_probe_tokens, redirection_probe, redirection_probe_error) ||
+        has_any_redirection(redirection_probe);
+
+    if (allow_inprocess && needs_shell && !has_redirection) {
         auto duplicate_for_thread = [](HANDLE source, HANDLE& duplicate) {
             duplicate = INVALID_HANDLE_VALUE;
             return DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE;
@@ -672,11 +692,11 @@ bool launch_pipeline_stage_process(
     }
 
     for (const auto& pair : g_shell_functions) {
-        command_to_run += L"function " + pair.first + L" { ";
+        command_to_run += L"function " + pair.first + L" {\n";
         for (const auto& line : pair.second.body_lines) {
             command_to_run += line + L"\n";
         }
-        command_to_run += L" };\n";
+        command_to_run += L"}\n";
     }
 
     command_to_run += segment;
@@ -832,7 +852,8 @@ bool execute_pipeline_segments(
     DWORD& background_pid,
     std::vector<HANDLE>* background_handles,
     std::vector<DWORD>* background_pids,
-    std::vector<std::wstring>* temp_files_out) {
+    std::vector<std::wstring>* temp_files_out,
+    bool force_isolated_shell_stages) {
     last_exit_code = 1;
     background_handle = nullptr;
     background_pid = 0;
@@ -846,6 +867,17 @@ bool execute_pipeline_segments(
     if (segments.size() < 2) {
         g_last_pipeline_error_detail = L"ksh: pipeline requires at least 2 stages";
         return false;
+    }
+
+    bool pipeline_has_redirection = false;
+    for (const std::wstring& segment : segments) {
+        std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(segment);
+        RedirectionSpec redirection;
+        std::wstring error_message;
+        if (!parse_redirections(tokens, redirection, error_message) || has_any_redirection(redirection)) {
+            pipeline_has_redirection = true;
+            break;
+        }
     }
 
     std::vector<HANDLE> process_handles;
@@ -1030,7 +1062,14 @@ bool execute_pipeline_segments(
 
         PROCESS_INFORMATION pi;
         std::wstring temp_file_path;
-        if (!launch_pipeline_stage_process(segment, segment_stdin, segment_stdout, segment_stderr, pi, temp_file_path, true)) {
+        if (!launch_pipeline_stage_process(
+            segment,
+            segment_stdin,
+            segment_stdout,
+            segment_stderr,
+            pi,
+            temp_file_path,
+            !pipeline_has_redirection && !force_isolated_shell_stages)) {
             DWORD launch_error = GetLastError();
             g_last_pipeline_error_detail =
                 L"ksh: pipeline stage " + std::to_wstring(i + 1) + L"/" + std::to_wstring(segments.size()) +

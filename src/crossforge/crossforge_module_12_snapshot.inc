@@ -49,7 +49,7 @@
         return s;
     }
 
-    Document(int id, const std::string& path = "") : WindowId(id), FilePath(path) {
+    Document(int id, const std::string& path = "") : FilePath(path), WindowId(id) {
         if (path.empty()) {
             Title = "NO NAME " + std::to_string(id) + ".TXT";
             Lines.push_back("");
@@ -119,6 +119,9 @@
     bool Undo() {
         if (UndoStack.empty()) return false;
         RedoStack.push_back(Snapshot{Lines, CursorX, CursorY, ScrollY, ScrollX, IsModified});
+        if (RedoStack.size() > 200) {
+            RedoStack.pop_front();
+        }
         Snapshot state = std::move(UndoStack.back());
         UndoStack.pop_back();
         Lines = std::move(state.Lines);
@@ -134,6 +137,9 @@
     bool Redo() {
         if (RedoStack.empty()) return false;
         UndoStack.push_back(Snapshot{Lines, CursorX, CursorY, ScrollY, ScrollX, IsModified});
+        if (UndoStack.size() > 200) {
+            UndoStack.pop_front();
+        }
         Snapshot state = std::move(RedoStack.back());
         RedoStack.pop_back();
         Lines = std::move(state.Lines);

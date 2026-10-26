@@ -1,0 +1,1267 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <ctype.h>
+#include <io.h>
+#include <fcntl.h>
+#include <windows.h>
+
+#define JQ_VERSION "1.7.1-win"
+
+/* =========================================================================
+ * Terminal Color Palette (ANSI Virtual Terminal Sequences)
+ * ========================================================================= */
+
+#define COLOR_RESET   "\x1b[0m"
+#define COLOR_NULL    "\x1b[90m"       /* Bright Black / Gray */
+#define COLOR_BOOL    "\x1b[33m"       /* Yellow */
+#define COLOR_NUMBER  "\x1b[36m"       /* Cyan */
+#define COLOR_STRING  "\x1b[32m"       /* Green */
+#define COLOR_KEY     "\x1b[1;34m"     /* Bold Blue */
+#define COLOR_BRACKET "\x1b[1;37m"     /* Bold White */
+
+/* =========================================================================
+ * OOP: JqValue (JSON AST Node)
+ * ========================================================================= */
+
+typedef enum {
+    JQ_NULL,
+    JQ_BOOL,
+    JQ_NUMBER,
+    JQ_STRING,
+    JQ_ARRAY,
+    JQ_OBJECT
+} JqType;
+
+typedef struct JqValue JqValue;
+
+typedef struct JqObjectEntry {
+    char *key;
+    JqValue *val;
+} JqObjectEntry;
+
+typedef struct JqSerializer JqSerializer;
+
+typedef struct JqValueVTable {
+    void (*destroy)(JqValue *self);
+    JqValue* (*clone)(const JqValue *self);
+    void (*serialize)(const JqValue *self, JqSerializer *ser, int depth);
+    bool (*is_truthy)(const JqValue *self);
+} JqValueVTable;
+
+struct JqValue {
+    const JqValueVTable *vptr;
+    JqType type;
+    union {
+        bool bool_val;
+        double num_val;
+        char *str_val;
+        struct {
+            JqValue **items;
+            size_t count;
+            size_t cap;
+        } arr;
+        struct {
+            JqObjectEntry *entries;
+            size_t count;
+            size_t cap;
+        } obj;
+    } as;
+};
+
+/* Forward Declarations for VTable implementations */
+static void JqValue_destroy_impl(JqValue *self);
+static JqValue* JqValue_clone_impl(const JqValue *self);
+static void JqValue_serialize_impl(const JqValue *self, JqSerializer *ser, int depth);
+static bool JqValue_is_truthy_impl(const JqValue *self);
+
+static const JqValueVTable g_JqValueVTable = {
+    .destroy   = JqValue_destroy_impl,
+    .clone     = JqValue_clone_impl,
+    .serialize = JqValue_serialize_impl,
+    .is_truthy = JqValue_is_truthy_impl
+};
+
+/* Object Constructors */
+static JqValue *JqValue_New(JqType t) {
+    JqValue *v = (JqValue *)calloc(1, sizeof(JqValue));
+    v->vptr = &g_JqValueVTable;
+    v->type = t;
+    return v;
+}
+
+static JqValue *JqValue_NewNull(void) {
+    return JqValue_New(JQ_NULL);
+}
+
+static JqValue *JqValue_NewBool(bool b) {
+    JqValue *v = JqValue_New(JQ_BOOL);
+    v->as.bool_val = b;
+    return v;
+}
+
+static JqValue *JqValue_NewNumber(double n) {
+    JqValue *v = JqValue_New(JQ_NUMBER);
+    v->as.num_val = n;
+    return v;
+}
+
+static JqValue *JqValue_NewString(const char *s) {
+    JqValue *v = JqValue_New(JQ_STRING);
+    v->as.str_val = _strdup(s ? s : "");
+    return v;
+}
+
+static JqValue *JqValue_NewArray(void) {
+    return JqValue_New(JQ_ARRAY);
+}
+
+static JqValue *JqValue_NewObject(void) {
+    return JqValue_New(JQ_OBJECT);
+}
+
+static void JqValue_ArrayAppend(JqValue *self, JqValue *item) {
+    if (self->type != JQ_ARRAY) return;
+    if (self->as.arr.count >= self->as.arr.cap) {
+        self->as.arr.cap = self->as.arr.cap ? self->as.arr.cap * 2 : 8;
+        self->as.arr.items = (JqValue **)realloc(self->as.arr.items, sizeof(JqValue *) * self->as.arr.cap);
+    }
+    self->as.arr.items[self->as.arr.count++] = item;
+}
+
+static void JqValue_ObjectSet(JqValue *self, const char *key, JqValue *val) {
+    if (self->type != JQ_OBJECT) return;
+    for (size_t i = 0; i < self->as.obj.count; i++) {
+        if (strcmp(self->as.obj.entries[i].key, key) == 0) {
+            self->as.obj.entries[i].val->vptr->destroy(self->as.obj.entries[i].val);
+            self->as.obj.entries[i].val = val;
+            return;
+        }
+    }
+    if (self->as.obj.count >= self->as.obj.cap) {
+        self->as.obj.cap = self->as.obj.cap ? self->as.obj.cap * 2 : 8;
+        self->as.obj.entries = (JqObjectEntry *)realloc(self->as.obj.entries, sizeof(JqObjectEntry) * self->as.obj.cap);
+    }
+    self->as.obj.entries[self->as.obj.count].key = _strdup(key);
+    self->as.obj.entries[self->as.obj.count].val = val;
+    self->as.obj.count++;
+}
+
+static JqValue *JqValue_ObjectGet(const JqValue *self, const char *key) {
+    if (self->type != JQ_OBJECT) return NULL;
+    for (size_t i = 0; i < self->as.obj.count; i++) {
+        if (strcmp(self->as.obj.entries[i].key, key) == 0) {
+            return self->as.obj.entries[i].val;
+        }
+    }
+    return NULL;
+}
+
+/* VTable Methods */
+static void JqValue_destroy_impl(JqValue *self) {
+    if (!self) return;
+    if (self->type == JQ_STRING) {
+        free(self->as.str_val);
+    } else if (self->type == JQ_ARRAY) {
+        for (size_t i = 0; i < self->as.arr.count; i++) {
+            self->as.arr.items[i]->vptr->destroy(self->as.arr.items[i]);
+        }
+        free(self->as.arr.items);
+    } else if (self->type == JQ_OBJECT) {
+        for (size_t i = 0; i < self->as.obj.count; i++) {
+            free(self->as.obj.entries[i].key);
+            self->as.obj.entries[i].val->vptr->destroy(self->as.obj.entries[i].val);
+        }
+        free(self->as.obj.entries);
+    }
+    free(self);
+}
+
+static JqValue* JqValue_clone_impl(const JqValue *self) {
+    if (!self) return NULL;
+    switch (self->type) {
+        case JQ_NULL:   return JqValue_NewNull();
+        case JQ_BOOL:   return JqValue_NewBool(self->as.bool_val);
+        case JQ_NUMBER: return JqValue_NewNumber(self->as.num_val);
+        case JQ_STRING: return JqValue_NewString(self->as.str_val);
+        case JQ_ARRAY: {
+            JqValue *dup = JqValue_NewArray();
+            for (size_t i = 0; i < self->as.arr.count; i++) {
+                JqValue_ArrayAppend(dup, self->as.arr.items[i]->vptr->clone(self->as.arr.items[i]));
+            }
+            return dup;
+        }
+        case JQ_OBJECT: {
+            JqValue *dup = JqValue_NewObject();
+            for (size_t i = 0; i < self->as.obj.count; i++) {
+                JqValue_ObjectSet(dup, self->as.obj.entries[i].key,
+                                  self->as.obj.entries[i].val->vptr->clone(self->as.obj.entries[i].val));
+            }
+            return dup;
+        }
+    }
+    return JqValue_NewNull();
+}
+
+static bool JqValue_is_truthy_impl(const JqValue *self) {
+    if (!self || self->type == JQ_NULL) return false;
+    if (self->type == JQ_BOOL) return self->as.bool_val;
+    return true;
+}
+
+/* =========================================================================
+ * OOP: JqConfig (Command-line Configuration)
+ * Holds all genuine jq qualifiers.
+ * ========================================================================= */
+
+typedef struct JqNamedArg {
+    char name[128];
+    JqValue *val;
+} JqNamedArg;
+
+typedef struct JqConfig {
+    bool compact_output;     /* -c, --compact-output */
+    bool null_input;         /* -n, --null-input */
+    bool raw_input;          /* -R, --raw-input */
+    bool raw_output;         /* -r, --raw-output */
+    bool join_output;        /* -j, --join-output */
+    bool ascii_output;       /* -a, --ascii-output */
+    bool sort_keys;          /* -S, --sort-keys */
+    bool color_output;       /* -C, --color-output */
+    bool monochrome_output;  /* -M, --monochrome-output */
+    bool tab_indent;         /* --tab */
+    int  indent_spaces;      /* --indent <n> */
+    bool unbuffered;         /* --unbuffered */
+    bool exit_status;        /* -e, --exit-status */
+    bool slurp;              /* -s, --slurp */
+    bool stream;             /* --stream */
+    bool seq;                /* --seq */
+    char from_file[MAX_PATH];/* -f, --from-file <file> */
+    char library_path[MAX_PATH]; /* -L <dir> */
+    bool run_tests;          /* --run-tests */
+    bool args_mode;          /* --args */
+    bool jsonargs_mode;      /* --jsonargs */
+
+    JqNamedArg named_args[64];
+    int named_arg_count;
+
+    char *filter_string;
+    char **input_files;
+    int input_file_count;
+
+    /* Class Methods */
+    void (*print_help)(void);
+    void (*print_version)(void);
+    bool (*parse_args)(struct JqConfig *self, int argc, char *argv[]);
+} JqConfig;
+
+static void JqConfig_print_version(void) {
+    printf("jq\n", JQ_VERSION);
+}
+
+static void JqConfig_print_help(void) {
+    printf("jq - Command-line JSON processor [version %s]\n\n", JQ_VERSION);
+    printf("Usage: jq [options] <jq filter> [file...]\n");
+    printf("       jq [options] --args <jq filter> [strings...]\n");
+    printf("       jq [options] --jsonargs <jq filter> [json_strings...]\n\n");
+    printf("Basic options:\n");
+    printf("  -c, --compact-output    compact instead of pretty-printed output\n");
+    printf("  -n, --null-input        use `null` as the single input value\n");
+    printf("  -e, --exit-status       set exit status code based on output truthiness\n");
+    printf("  -s, --slurp             read entire input stream into large array\n");
+    printf("  -r, --raw-output        output raw strings, not JSON quoted\n");
+    printf("  -j, --join-output       like -r, but do not emit a newline after each output\n");
+    printf("  -R, --raw-input         read input lines as strings instead of parsing JSON\n");
+    printf("  -S, --sort-keys         sort keys of objects on output\n");
+    printf("  -C, --color-output      colorize JSON (default on terminal)\n");
+    printf("  -M, --monochrome-output disable colorization\n");
+    printf("      --tab               use tabs for indentation\n");
+    printf("      --indent <n>        use n spaces for indentation (default: 2)\n");
+    printf("      --unbuffered        flush output stream after each JSON object\n");
+    printf("      --stream            parse input in streaming mode\n");
+    printf("      --seq               use application/json-seq format\n");
+    printf("  -a, --ascii-output      escape non-ASCII characters to \\uXXXX\n\n");
+    printf("Filter source & libraries:\n");
+    printf("  -f, --from-file <file>  read filter from file instead of command line\n");
+    printf("  -L <dir>                prepend directory to library search path\n\n");
+    printf("Variables & Parameters:\n");
+    printf("  --arg <v> <val>         set $v to string value <val>\n");
+    printf("  --argjson <v> <val>     set $v to parsed JSON value <val>\n");
+    printf("  --slurpfile <v> <file>  set $v to array of JSON values read from <file>\n");
+    printf("  --rawfile <v> <file>    set $v to string containing content of <file>\n");
+    printf("  --args                  consume remaining arguments as positional string array\n");
+    printf("  --jsonargs              consume remaining arguments as positional JSON values\n\n");
+    printf("Informational:\n");
+    printf("  --run-tests             run integrated test harness\n");
+    printf("  -V, --version           show version and exit\n");
+    printf("  -h, --help              show this help message and exit\n");
+}
+
+static bool JqConfig_parse_args(JqConfig *self, int argc, char *argv[]) {
+    int i = 1;
+    bool filter_seen = false;
+
+    while (i < argc) {
+        char *arg = argv[i];
+
+        if (arg[0] == '-' && arg[1] != '\0') {
+            if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+                self->print_help();
+                exit(0);
+            }
+            if (strcmp(arg, "--version") == 0 || strcmp(arg, "-V") == 0) {
+                self->print_version();
+                exit(0);
+            }
+            if (strcmp(arg, "-c") == 0 || strcmp(arg, "--compact-output") == 0) {
+                self->compact_output = true;
+            } else if (strcmp(arg, "-n") == 0 || strcmp(arg, "--null-input") == 0) {
+                self->null_input = true;
+            } else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--raw-output") == 0) {
+                self->raw_output = true;
+            } else if (strcmp(arg, "-j") == 0 || strcmp(arg, "--join-output") == 0) {
+                self->join_output = true;
+                self->raw_output = true;
+            } else if (strcmp(arg, "-R") == 0 || strcmp(arg, "--raw-input") == 0) {
+                self->raw_input = true;
+            } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--slurp") == 0) {
+                self->slurp = true;
+            } else if (strcmp(arg, "-S") == 0 || strcmp(arg, "--sort-keys") == 0) {
+                self->sort_keys = true;
+            } else if (strcmp(arg, "-C") == 0 || strcmp(arg, "--color-output") == 0) {
+                self->color_output = true;
+                self->monochrome_output = false;
+            } else if (strcmp(arg, "-M") == 0 || strcmp(arg, "--monochrome-output") == 0) {
+                self->monochrome_output = true;
+                self->color_output = false;
+            } else if (strcmp(arg, "-a") == 0 || strcmp(arg, "--ascii-output") == 0) {
+                self->ascii_output = true;
+            } else if (strcmp(arg, "-e") == 0 || strcmp(arg, "--exit-status") == 0) {
+                self->exit_status = true;
+            } else if (strcmp(arg, "--tab") == 0) {
+                self->tab_indent = true;
+            } else if (strcmp(arg, "--unbuffered") == 0) {
+                self->unbuffered = true;
+            } else if (strcmp(arg, "--stream") == 0) {
+                self->stream = true;
+            } else if (strcmp(arg, "--seq") == 0) {
+                self->seq = true;
+            } else if (strcmp(arg, "--run-tests") == 0) {
+                self->run_tests = true;
+            } else if (strcmp(arg, "--indent") == 0 && i + 1 < argc) {
+                self->indent_spaces = atoi(argv[++i]);
+            } else if ((strcmp(arg, "-f") == 0 || strcmp(arg, "--from-file") == 0) && i + 1 < argc) {
+                strncpy(self->from_file, argv[++i], MAX_PATH - 1);
+            } else if (strcmp(arg, "-L") == 0 && i + 1 < argc) {
+                strncpy(self->library_path, argv[++i], MAX_PATH - 1);
+            } else if (strcmp(arg, "--arg") == 0 && i + 2 < argc) {
+                char *name = argv[++i];
+                char *val  = argv[++i];
+                if (self->named_arg_count < 64) {
+                    strncpy(self->named_args[self->named_arg_count].name, name, 127);
+                    self->named_args[self->named_arg_count].val = JqValue_NewString(val);
+                    self->named_arg_count++;
+                }
+            } else if (strcmp(arg, "--argjson") == 0 && i + 2 < argc) {
+                char *name = argv[++i];
+                char *val  = argv[++i];
+                /* Parsed dynamically via JqParser later */
+                if (self->named_arg_count < 64) {
+                    strncpy(self->named_args[self->named_arg_count].name, name, 127);
+                    self->named_args[self->named_arg_count].val = JqValue_NewString(val);
+                    self->named_arg_count++;
+                }
+            } else if (strcmp(arg, "--args") == 0) {
+                self->args_mode = true;
+                i++;
+                break;
+            } else if (strcmp(arg, "--jsonargs") == 0) {
+                self->jsonargs_mode = true;
+                i++;
+                break;
+            } else {
+                /* Bundled short flags, e.g., -cr */
+                size_t len = strlen(arg);
+                for (size_t c = 1; c < len; c++) {
+                    switch (arg[c]) {
+                        case 'c': self->compact_output = true; break;
+                        case 'n': self->null_input = true; break;
+                        case 'r': self->raw_output = true; break;
+                        case 'j': self->join_output = true; self->raw_output = true; break;
+                        case 'R': self->raw_input = true; break;
+                        case 's': self->slurp = true; break;
+                        case 'S': self->sort_keys = true; break;
+                        case 'C': self->color_output = true; self->monochrome_output = false; break;
+                        case 'M': self->monochrome_output = true; self->color_output = false; break;
+                        case 'a': self->ascii_output = true; break;
+                        case 'e': self->exit_status = true; break;
+                        case 'h': self->print_help(); exit(0);
+                        case 'V': self->print_version(); exit(0);
+                        default:
+                            fprintf(stderr, "jq: Unknown option %s\nUse jq --help for list of options\n", arg);
+                            return false;
+                    }
+                }
+            }
+        } else {
+            /* Positional parameter */
+            if (!filter_seen && self->from_file[0] == '\0') {
+                self->filter_string = _strdup(arg);
+                filter_seen = true;
+            } else {
+                self->input_files = &argv[i];
+                self->input_file_count = argc - i;
+                break;
+            }
+        }
+        i++;
+    }
+
+    if (!self->filter_string && self->from_file[0] == '\0') {
+        self->filter_string = _strdup("."); /* Default identity filter */
+    }
+
+    return true;
+}
+
+static JqConfig *JqConfig_New(void) {
+    JqConfig *c = (JqConfig *)calloc(1, sizeof(JqConfig));
+    c->indent_spaces = 2;
+    c->print_help = JqConfig_print_help;
+    c->print_version = JqConfig_print_version;
+    c->parse_args = JqConfig_parse_args;
+    return c;
+}
+
+/* =========================================================================
+ * OOP: JqSerializer (Pretty-Printing, Coloring, Escaping)
+ * ========================================================================= */
+
+struct JqSerializer {
+    const JqConfig *config;
+    FILE *out;
+    bool enable_color;
+
+    void (*write_indent)(struct JqSerializer *self, int depth);
+    void (*write_string)(struct JqSerializer *self, const char *str, bool is_key);
+};
+
+static void JqSerializer_write_indent(JqSerializer *self, int depth) {
+    if (self->config->compact_output) return;
+    fputc('\n', self->out);
+    for (int i = 0; i < depth; i++) {
+        if (self->config->tab_indent) {
+            fputc('\t', self->out);
+        } else {
+            for (int s = 0; s < self->config->indent_spaces; s++) {
+                fputc(' ', self->out);
+            }
+        }
+    }
+}
+
+static void JqSerializer_write_string(JqSerializer *self, const char *str, bool is_key) {
+    if (self->enable_color) {
+        fputs(is_key ? COLOR_KEY : COLOR_STRING, self->out);
+    }
+    fputc('"', self->out);
+    for (const char *p = str; *p; p++) {
+        switch (*p) {
+            case '\"': fputs("\\\"", self->out); break;
+            case '\\': fputs("\\\\", self->out); break;
+            case '\b': fputs("\\b", self->out); break;
+            case '\f': fputs("\\f", self->out); break;
+            case '\n': fputs("\\n", self->out); break;
+            case '\r': fputs("\\r", self->out); break;
+            case '\t': fputs("\\t", self->out); break;
+            default:
+                if ((unsigned char)*p < 0x20) {
+                    fprintf(self->out, "\\u%04x", (unsigned char)*p);
+                } else if (self->config->ascii_output && (unsigned char)*p >= 0x80) {
+                    fprintf(self->out, "\\u%04x", (unsigned char)*p);
+                } else {
+                    fputc(*p, self->out);
+                }
+                break;
+        }
+    }
+    fputc('"', self->out);
+    if (self->enable_color) {
+        fputs(COLOR_RESET, self->out);
+    }
+}
+
+static int compare_entries(const void *a, const void *b) {
+    const JqObjectEntry *ea = (const JqObjectEntry *)a;
+    const JqObjectEntry *eb = (const JqObjectEntry *)b;
+    return strcmp(ea->key, eb->key);
+}
+
+static void JqValue_serialize_impl(const JqValue *self, JqSerializer *ser, int depth) {
+    if (!self) return;
+
+    switch (self->type) {
+        case JQ_NULL:
+            if (ser->enable_color) fputs(COLOR_NULL, ser->out);
+            fputs("null", ser->out);
+            if (ser->enable_color) fputs(COLOR_RESET, ser->out);
+            break;
+
+        case JQ_BOOL:
+            if (ser->enable_color) fputs(COLOR_BOOL, ser->out);
+            fputs(self->as.bool_val ? "true" : "false", ser->out);
+            if (ser->enable_color) fputs(COLOR_RESET, ser->out);
+            break;
+
+        case JQ_NUMBER:
+            if (ser->enable_color) fputs(COLOR_NUMBER, ser->out);
+            if (self->as.num_val == (int64_t)self->as.num_val) {
+                fprintf(ser->out, "%lld", (long long)self->as.num_val);
+            } else {
+                fprintf(ser->out, "%g", self->as.num_val);
+            }
+            if (ser->enable_color) fputs(COLOR_RESET, ser->out);
+            break;
+
+        case JQ_STRING:
+            ser->write_string(ser, self->as.str_val, false);
+            break;
+
+        case JQ_ARRAY:
+            if (self->as.arr.count == 0) {
+                fputs("[]", ser->out);
+                return;
+            }
+            fputc('[', ser->out);
+            for (size_t i = 0; i < self->as.arr.count; i++) {
+                ser->write_indent(ser, depth + 1);
+                self->as.arr.items[i]->vptr->serialize(self->as.arr.items[i], ser, depth + 1);
+                if (i + 1 < self->as.arr.count) {
+                    fputc(',', ser->out);
+                    if (ser->config->compact_output) fputc(' ', ser->out);
+                }
+            }
+            ser->write_indent(ser, depth);
+            fputc(']', ser->out);
+            break;
+
+        case JQ_OBJECT:
+            if (self->as.obj.count == 0) {
+                fputs("{}", ser->out);
+                return;
+            }
+            if (ser->config->sort_keys && self->as.obj.count > 1) {
+                qsort(self->as.obj.entries, self->as.obj.count, sizeof(JqObjectEntry), compare_entries);
+            }
+            fputc('{', ser->out);
+            for (size_t i = 0; i < self->as.obj.count; i++) {
+                ser->write_indent(ser, depth + 1);
+                ser->write_string(ser, self->as.obj.entries[i].key, true);
+                fputs(ser->config->compact_output ? ":" : ": ", ser->out);
+                self->as.obj.entries[i].val->vptr->serialize(self->as.obj.entries[i].val, ser, depth + 1);
+                if (i + 1 < self->as.obj.count) {
+                    fputc(',', ser->out);
+                    if (ser->config->compact_output) fputc(' ', ser->out);
+                }
+            }
+            ser->write_indent(ser, depth);
+            fputc('}', ser->out);
+            break;
+    }
+}
+
+static JqSerializer *JqSerializer_New(const JqConfig *cfg, FILE *out) {
+    JqSerializer *ser = (JqSerializer *)calloc(1, sizeof(JqSerializer));
+    ser->config = cfg;
+    ser->out = out;
+    ser->write_indent = JqSerializer_write_indent;
+    ser->write_string = JqSerializer_write_string;
+
+    bool is_term = _isatty(_fileno(out));
+    if (cfg->color_output) {
+        ser->enable_color = true;
+    } else if (cfg->monochrome_output) {
+        ser->enable_color = false;
+    } else {
+        ser->enable_color = is_term;
+    }
+
+    /* Enable Windows ANSI VT processing */
+    if (ser->enable_color && is_term) {
+        HANDLE hOut = (HANDLE)_get_osfhandle(_fileno(out));
+        DWORD dwMode = 0;
+        if (GetConsoleMode(hOut, &dwMode)) {
+            SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+
+    return ser;
+}
+
+/* =========================================================================
+ * OOP: JqParser (Recursive Descent JSON Lexer & Parser)
+ * ========================================================================= */
+
+typedef struct JqParser {
+    const char *src;
+    size_t pos;
+    size_t len;
+
+    /* Parser Methods */
+    JqValue* (*parse_value)(struct JqParser *self);
+} JqParser;
+
+static void JqParser_skip_whitespace(JqParser *self) {
+    while (self->pos < self->len) {
+        char c = self->src[self->pos];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            self->pos++;
+        } else {
+            break;
+        }
+    }
+}
+
+static char* JqParser_parse_raw_string(JqParser *self) {
+    if (self->src[self->pos] != '"') return NULL;
+    self->pos++; /* skip " */
+
+    size_t cap = 32;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+
+    while (self->pos < self->len) {
+        char c = self->src[self->pos++];
+        if (c == '"') {
+            buf[len] = '\0';
+            return buf;
+        }
+        if (c == '\\' && self->pos < self->len) {
+            char esc = self->src[self->pos++];
+            switch (esc) {
+                case '"':  c = '"'; break;
+                case '\\': c = '\\'; break;
+                case '/':  c = '/'; break;
+                case 'b':  c = '\b'; break;
+                case 'f':  c = '\f'; break;
+                case 'n':  c = '\n'; break;
+                case 'r':  c = '\r'; break;
+                case 't':  c = '\t'; break;
+                case 'u': {
+                    if (self->pos + 4 <= self->len) {
+                        char hex[5] = {self->src[self->pos], self->src[self->pos+1],
+                                       self->src[self->pos+2], self->src[self->pos+3], '\0'};
+                        self->pos += 4;
+                        unsigned int codepoint = (unsigned int)strtoul(hex, NULL, 16);
+                        c = (codepoint < 128) ? (char)codepoint : '?';
+                    }
+                    break;
+                }
+                default: break;
+            }
+        }
+        if (len + 2 >= cap) {
+            cap *= 2;
+            buf = (char *)realloc(buf, cap);
+        }
+        buf[len++] = c;
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+static JqValue* JqParser_parse_value_impl(JqParser *self) {
+    JqParser_skip_whitespace(self);
+    if (self->pos >= self->len) return NULL;
+
+    char c = self->src[self->pos];
+
+    if (c == 'n' && strncmp(&self->src[self->pos], "null", 4) == 0) {
+        self->pos += 4;
+        return JqValue_NewNull();
+    }
+    if (c == 't' && strncmp(&self->src[self->pos], "true", 4) == 0) {
+        self->pos += 4;
+        return JqValue_NewBool(true);
+    }
+    if (c == 'f' && strncmp(&self->src[self->pos], "false", 5) == 0) {
+        self->pos += 5;
+        return JqValue_NewBool(false);
+    }
+    if (c == '"') {
+        char *str = JqParser_parse_raw_string(self);
+        JqValue *v = JqValue_NewString(str);
+        free(str);
+        return v;
+    }
+    if (c == '-' || isdigit((unsigned char)c)) {
+        char *endptr;
+        double num = strtod(&self->src[self->pos], &endptr);
+        self->pos = (size_t)(endptr - self->src);
+        return JqValue_NewNumber(num);
+    }
+    if (c == '[') {
+        self->pos++;
+        JqValue *arr = JqValue_NewArray();
+        while (self->pos < self->len) {
+            JqParser_skip_whitespace(self);
+            if (self->pos < self->len && self->src[self->pos] == ']') {
+                self->pos++;
+                return arr;
+            }
+            JqValue *item = self->parse_value(self);
+            if (!item) break;
+            JqValue_ArrayAppend(arr, item);
+            JqParser_skip_whitespace(self);
+            if (self->pos < self->len && self->src[self->pos] == ',') {
+                self->pos++;
+            }
+        }
+        return arr;
+    }
+    if (c == '{') {
+        self->pos++;
+        JqValue *obj = JqValue_NewObject();
+        while (self->pos < self->len) {
+            JqParser_skip_whitespace(self);
+            if (self->pos < self->len && self->src[self->pos] == '}') {
+                self->pos++;
+                return obj;
+            }
+            if (self->src[self->pos] != '"') break;
+            char *key = JqParser_parse_raw_string(self);
+            JqParser_skip_whitespace(self);
+            if (self->pos < self->len && self->src[self->pos] == ':') {
+                self->pos++;
+            }
+            JqValue *val = self->parse_value(self);
+            if (key && val) {
+                JqValue_ObjectSet(obj, key, val);
+            }
+            free(key);
+            JqParser_skip_whitespace(self);
+            if (self->pos < self->len && self->src[self->pos] == ',') {
+                self->pos++;
+            }
+        }
+        return obj;
+    }
+
+    return NULL;
+}
+
+static JqParser *JqParser_New(const char *src) {
+    JqParser *p = (JqParser *)calloc(1, sizeof(JqParser));
+    p->src = src;
+    p->len = strlen(src);
+    p->parse_value = JqParser_parse_value_impl;
+    return p;
+}
+
+/* =========================================================================
+ * OOP: Filter Execution Pipeline
+ * ========================================================================= */
+
+typedef struct JqResultSet {
+    JqValue **items;
+    size_t count;
+    size_t cap;
+} JqResultSet;
+
+static JqResultSet JqResultSet_Init(void) {
+    JqResultSet rs;
+    rs.count = 0;
+    rs.cap = 4;
+    rs.items = (JqValue **)malloc(sizeof(JqValue *) * rs.cap);
+    return rs;
+}
+
+static void JqResultSet_Append(JqResultSet *rs, JqValue *v) {
+    if (rs->count >= rs->cap) {
+        rs->cap *= 2;
+        rs->items = (JqValue **)realloc(rs->items, sizeof(JqValue *) * rs->cap);
+    }
+    rs->items[rs->count++] = v;
+}
+
+static void JqResultSet_Free(JqResultSet *rs) {
+    for (size_t i = 0; i < rs->count; i++) {
+        rs->items[i]->vptr->destroy(rs->items[i]);
+    }
+    free(rs->items);
+}
+
+typedef struct JqFilter JqFilter;
+
+typedef struct JqFilterVTable {
+    void (*destroy)(JqFilter *self);
+    JqResultSet (*execute)(JqFilter *self, const JqValue *input);
+} JqFilterVTable;
+
+struct JqFilter {
+    const JqFilterVTable *vptr;
+};
+
+/* 1. Identity Filter '.' */
+typedef struct JqIdentityFilter {
+    JqFilter base;
+} JqIdentityFilter;
+
+static JqResultSet JqIdentityFilter_exec(JqFilter *self, const JqValue *input) {
+    (void)self;
+    JqResultSet rs = JqResultSet_Init();
+    JqResultSet_Append(&rs, input->vptr->clone(input));
+    return rs;
+}
+
+static void JqIdentityFilter_destroy(JqFilter *self) { free(self); }
+
+static const JqFilterVTable g_IdentityVTable = { JqIdentityFilter_destroy, JqIdentityFilter_exec };
+
+static JqFilter *JqIdentityFilter_New(void) {
+    JqIdentityFilter *f = (JqIdentityFilter *)malloc(sizeof(JqIdentityFilter));
+    f->base.vptr = &g_IdentityVTable;
+    return (JqFilter *)f;
+}
+
+/* 2. Key Access Filter '.foo' */
+typedef struct JqKeyFilter {
+    JqFilter base;
+    char key[128];
+} JqKeyFilter;
+
+static JqResultSet JqKeyFilter_exec(JqFilter *self, const JqValue *input) {
+    JqKeyFilter *kf = (JqKeyFilter *)self;
+    JqResultSet rs = JqResultSet_Init();
+    if (input->type == JQ_OBJECT) {
+        JqValue *v = JqValue_ObjectGet(input, kf->key);
+        if (v) {
+            JqResultSet_Append(&rs, v->vptr->clone(v));
+        } else {
+            JqResultSet_Append(&rs, JqValue_NewNull());
+        }
+    } else {
+        JqResultSet_Append(&rs, JqValue_NewNull());
+    }
+    return rs;
+}
+
+static void JqKeyFilter_destroy(JqFilter *self) { free(self); }
+
+static const JqFilterVTable g_KeyVTable = { JqKeyFilter_destroy, JqKeyFilter_exec };
+
+static JqFilter *JqKeyFilter_New(const char *key) {
+    JqKeyFilter *f = (JqKeyFilter *)malloc(sizeof(JqKeyFilter));
+    f->base.vptr = &g_KeyVTable;
+    strncpy(f->key, key, 127);
+    return (JqFilter *)f;
+}
+
+/* 3. Array Index Filter '.[N]' */
+typedef struct JqIndexFilter {
+    JqFilter base;
+    int index;
+} JqIndexFilter;
+
+static JqResultSet JqIndexFilter_exec(JqFilter *self, const JqValue *input) {
+    JqIndexFilter *idx_f = (JqIndexFilter *)self;
+    JqResultSet rs = JqResultSet_Init();
+    if (input->type == JQ_ARRAY) {
+        int idx = idx_f->index;
+        if (idx < 0) idx += (int)input->as.arr.count;
+        if (idx >= 0 && (size_t)idx < input->as.arr.count) {
+            JqResultSet_Append(&rs, input->as.arr.items[idx]->vptr->clone(input->as.arr.items[idx]));
+        } else {
+            JqResultSet_Append(&rs, JqValue_NewNull());
+        }
+    } else {
+        JqResultSet_Append(&rs, JqValue_NewNull());
+    }
+    return rs;
+}
+
+static void JqIndexFilter_destroy(JqFilter *self) { free(self); }
+
+static const JqFilterVTable g_IndexVTable = { JqIndexFilter_destroy, JqIndexFilter_exec };
+
+static JqFilter *JqIndexFilter_New(int index) {
+    JqIndexFilter *f = (JqIndexFilter *)malloc(sizeof(JqIndexFilter));
+    f->base.vptr = &g_IndexVTable;
+    f->index = index;
+    return (JqFilter *)f;
+}
+
+/* 4. Array/Object Iterator '.[]' */
+typedef struct JqIteratorFilter {
+    JqFilter base;
+} JqIteratorFilter;
+
+static JqResultSet JqIteratorFilter_exec(JqFilter *self, const JqValue *input) {
+    (void)self;
+    JqResultSet rs = JqResultSet_Init();
+    if (input->type == JQ_ARRAY) {
+        for (size_t i = 0; i < input->as.arr.count; i++) {
+            JqResultSet_Append(&rs, input->as.arr.items[i]->vptr->clone(input->as.arr.items[i]));
+        }
+    } else if (input->type == JQ_OBJECT) {
+        for (size_t i = 0; i < input->as.obj.count; i++) {
+            JqResultSet_Append(&rs, input->as.obj.entries[i].val->vptr->clone(input->as.obj.entries[i].val));
+        }
+    }
+    return rs;
+}
+
+static void JqIteratorFilter_destroy(JqFilter *self) { free(self); }
+
+static const JqFilterVTable g_IteratorVTable = { JqIteratorFilter_destroy, JqIteratorFilter_exec };
+
+static JqFilter *JqIteratorFilter_New(void) {
+    JqIteratorFilter *f = (JqIteratorFilter *)malloc(sizeof(JqIteratorFilter));
+    f->base.vptr = &g_IteratorVTable;
+    return (JqFilter *)f;
+}
+
+/* 5. Builtin Function: 'keys', 'length', 'type' */
+typedef struct JqBuiltinFilter {
+    JqFilter base;
+    char name[32];
+} JqBuiltinFilter;
+
+static JqResultSet JqBuiltinFilter_exec(JqFilter *self, const JqValue *input) {
+    JqBuiltinFilter *bf = (JqBuiltinFilter *)self;
+    JqResultSet rs = JqResultSet_Init();
+
+    if (strcmp(bf->name, "keys") == 0) {
+        JqValue *res = JqValue_NewArray();
+        if (input->type == JQ_OBJECT) {
+            for (size_t i = 0; i < input->as.obj.count; i++) {
+                JqValue_ArrayAppend(res, JqValue_NewString(input->as.obj.entries[i].key));
+            }
+        }
+        JqResultSet_Append(&rs, res);
+    } else if (strcmp(bf->name, "length") == 0) {
+        double len = 0;
+        if (input->type == JQ_ARRAY)  len = (double)input->as.arr.count;
+        if (input->type == JQ_OBJECT) len = (double)input->as.obj.count;
+        if (input->type == JQ_STRING) len = (double)strlen(input->as.str_val);
+        JqResultSet_Append(&rs, JqValue_NewNumber(len));
+    } else if (strcmp(bf->name, "type") == 0) {
+        const char *t = "null";
+        if (input->type == JQ_BOOL)   t = "boolean";
+        if (input->type == JQ_NUMBER) t = "number";
+        if (input->type == JQ_STRING) t = "string";
+        if (input->type == JQ_ARRAY)  t = "array";
+        if (input->type == JQ_OBJECT) t = "object";
+        JqResultSet_Append(&rs, JqValue_NewString(t));
+    }
+    return rs;
+}
+
+static void JqBuiltinFilter_destroy(JqFilter *self) { free(self); }
+
+static const JqFilterVTable g_BuiltinVTable = { JqBuiltinFilter_destroy, JqBuiltinFilter_exec };
+
+static JqFilter *JqBuiltinFilter_New(const char *name) {
+    JqBuiltinFilter *f = (JqBuiltinFilter *)malloc(sizeof(JqBuiltinFilter));
+    f->base.vptr = &g_BuiltinVTable;
+    strncpy(f->name, name, 31);
+    return (JqFilter *)f;
+}
+
+/* 6. Pipeline Combinator: 'A | B' */
+typedef struct JqPipelineFilter {
+    JqFilter base;
+    JqFilter *left;
+    JqFilter *right;
+} JqPipelineFilter;
+
+static JqResultSet JqPipelineFilter_exec(JqFilter *self, const JqValue *input) {
+    JqPipelineFilter *pf = (JqPipelineFilter *)self;
+    JqResultSet intermediate = pf->left->vptr->execute(pf->left, input);
+    JqResultSet final_res = JqResultSet_Init();
+
+    for (size_t i = 0; i < intermediate.count; i++) {
+        JqResultSet sub = pf->right->vptr->execute(pf->right, intermediate.items[i]);
+        for (size_t j = 0; j < sub.count; j++) {
+            JqResultSet_Append(&final_res, sub.items[j]);
+        }
+        free(sub.items); /* ownership moved to final_res */
+    }
+    JqResultSet_Free(&intermediate);
+    return final_res;
+}
+
+static void JqPipelineFilter_destroy(JqFilter *self) {
+    JqPipelineFilter *pf = (JqPipelineFilter *)self;
+    if (pf->left)  pf->left->vptr->destroy(pf->left);
+    if (pf->right) pf->right->vptr->destroy(pf->right);
+    free(pf);
+}
+
+static const JqFilterVTable g_PipelineVTable = { JqPipelineFilter_destroy, JqPipelineFilter_exec };
+
+static JqFilter *JqPipelineFilter_New(JqFilter *l, JqFilter *r) {
+    JqPipelineFilter *f = (JqPipelineFilter *)malloc(sizeof(JqPipelineFilter));
+    f->base.vptr = &g_PipelineVTable;
+    f->left = l;
+    f->right = r;
+    return (JqFilter *)f;
+}
+
+/* Filter Compiler */
+static JqFilter* JqFilter_CompileSub(const char **expr) {
+    while (**expr == ' ' || **expr == '\t') (*expr)++;
+
+    if (**expr == '\0' || **expr == '|') return JqIdentityFilter_New();
+
+    if (strncmp(*expr, "keys", 4) == 0 && !isalnum((unsigned char)(*expr)[4])) {
+        *expr += 4;
+        return JqBuiltinFilter_New("keys");
+    }
+    if (strncmp(*expr, "length", 6) == 0 && !isalnum((unsigned char)(*expr)[6])) {
+        *expr += 6;
+        return JqBuiltinFilter_New("length");
+    }
+    if (strncmp(*expr, "type", 4) == 0 && !isalnum((unsigned char)(*expr)[4])) {
+        *expr += 4;
+        return JqBuiltinFilter_New("type");
+    }
+
+    if (**expr == '.') {
+        (*expr)++;
+        if (**expr == '[') {
+            (*expr)++;
+            if (**expr == ']') {
+                (*expr)++;
+                return JqIteratorFilter_New();
+            } else {
+                int idx = atoi(*expr);
+                while (**expr && **expr != ']') (*expr)++;
+                if (**expr == ']') (*expr)++;
+                return JqIndexFilter_New(idx);
+            }
+        }
+        if (**expr == '\0' || **expr == '|' || **expr == ' ') {
+            return JqIdentityFilter_New();
+        }
+        /* Identifier key access */
+        char key_buf[128];
+        int ki = 0;
+        while (**expr && (isalnum((unsigned char)**expr) || **expr == '_' || **expr == '-')) {
+            if (ki < 127) key_buf[ki++] = **expr;
+            (*expr)++;
+        }
+        key_buf[ki] = '\0';
+        return JqKeyFilter_New(key_buf);
+    }
+
+    return JqIdentityFilter_New();
+}
+
+static JqFilter* JqFilter_Compile(const char *expr) {
+    const char *p = expr;
+    JqFilter *cur = JqFilter_CompileSub(&p);
+
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '|') {
+            p++;
+            JqFilter *rhs = JqFilter_CompileSub(&p);
+            cur = JqPipelineFilter_New(cur, rhs);
+        } else if (*p == '.') {
+            /* Implicit chained access like .foo.bar */
+            JqFilter *rhs = JqFilter_CompileSub(&p);
+            cur = JqPipelineFilter_New(cur, rhs);
+        } else {
+            break;
+        }
+    }
+    return cur;
+}
+
+/* =========================================================================
+ * OOP: JqEngine (Application Orchestrator)
+ * ========================================================================= */
+
+typedef struct JqEngine {
+    JqConfig *config;
+    JqSerializer *serializer;
+    JqFilter *filter;
+    bool has_truthy_output;
+
+    /* Engine Methods */
+    int (*run)(struct JqEngine *self);
+    void (*process_value)(struct JqEngine *self, JqValue *val);
+    char* (*read_stream)(FILE *stream);
+} JqEngine;
+
+static char* JqEngine_read_stream_impl(FILE *stream) {
+    size_t cap = 16384;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+
+    while (!feof(stream) && !ferror(stream)) {
+        size_t n = fread(buf + len, 1, cap - len - 1, stream);
+        len += n;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            buf = (char *)realloc(buf, cap);
+        }
+        if (n == 0) break;
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+static void JqEngine_process_value_impl(JqEngine *self, JqValue *val) {
+    JqResultSet results = self->filter->vptr->execute(self->filter, val);
+
+    for (size_t i = 0; i < results.count; i++) {
+        JqValue *item = results.items[i];
+        if (item->vptr->is_truthy(item)) {
+            self->has_truthy_output = true;
+        }
+
+        if (self->config->raw_output && item->type == JQ_STRING) {
+            fputs(item->as.str_val, stdout);
+            if (!self->config->join_output) fputc('\n', stdout);
+        } else {
+            item->vptr->serialize(item, self->serializer, 0);
+            fputc('\n', stdout);
+        }
+        if (self->config->unbuffered) {
+            fflush(stdout);
+        }
+    }
+
+    JqResultSet_Free(&results);
+}
+
+static int JqEngine_run_impl(JqEngine *self) {
+    /* If --null-input / -n */
+    if (self->config->null_input) {
+        JqValue *null_v = JqValue_NewNull();
+        self->process_value(self, null_v);
+        null_v->vptr->destroy(null_v);
+        return (self->config->exit_status && !self->has_truthy_output) ? 1 : 0;
+    }
+
+    /* Iterate Input Streams */
+    int file_idx = 0;
+    do {
+        FILE *in = stdin;
+        bool is_stdin = true;
+
+        if (self->config->input_file_count > 0) {
+            const char *path = self->config->input_files[file_idx];
+            if (strcmp(path, "-") != 0) {
+                if (fopen_s(&in, path, "rb") != 0 || !in) {
+                    fprintf(stderr, "jq: cannot open %s\n", path);
+                    return 2;
+                }
+                is_stdin = false;
+            }
+        }
+
+        if (self->config->raw_input) {
+            /* Raw Input line-by-line */
+            char line[8192];
+            JqValue *slurp_arr = self->config->slurp ? JqValue_NewArray() : NULL;
+
+            while (fgets(line, sizeof(line), in)) {
+                size_t l = strlen(line);
+                while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+                JqValue *str_val = JqValue_NewString(line);
+
+                if (self->config->slurp) {
+                    JqValue_ArrayAppend(slurp_arr, str_val);
+                } else {
+                    self->process_value(self, str_val);
+                    str_val->vptr->destroy(str_val);
+                }
+            }
+            if (slurp_arr) {
+                self->process_value(self, slurp_arr);
+                slurp_arr->vptr->destroy(slurp_arr);
+            }
+        } else {
+            /* Standard JSON parsing */
+            char *json_content = self->read_stream(in);
+            JqParser *parser = JqParser_New(json_content);
+
+            if (self->config->slurp) {
+                JqValue *slurp_arr = JqValue_NewArray();
+                JqValue *val;
+                while ((val = parser->parse_value(parser)) != NULL) {
+                    JqValue_ArrayAppend(slurp_arr, val);
+                }
+                self->process_value(self, slurp_arr);
+                slurp_arr->vptr->destroy(slurp_arr);
+            } else {
+                JqValue *val;
+                while ((val = parser->parse_value(parser)) != NULL) {
+                    self->process_value(self, val);
+                    val->vptr->destroy(val);
+                }
+            }
+
+            free(parser);
+            free(json_content);
+        }
+
+        if (!is_stdin) fclose(in);
+        file_idx++;
+    } while (file_idx < self->config->input_file_count);
+
+    if (self->config->exit_status && !self->has_truthy_output) {
+        return 1;
+    }
+    return 0;
+}
+
+static JqEngine *JqEngine_New(JqConfig *cfg) {
+    JqEngine *eng = (JqEngine *)calloc(1, sizeof(JqEngine));
+    eng->config = cfg;
+    eng->serializer = JqSerializer_New(cfg, stdout);
+    eng->filter = JqFilter_Compile(cfg->filter_string);
+    eng->run = JqEngine_run_impl;
+    eng->process_value = JqEngine_process_value_impl;
+    eng->read_stream = JqEngine_read_stream_impl;
+    return eng;
+}
+
+static void JqEngine_Destroy(JqEngine *self) {
+    if (!self) return;
+    if (self->filter) self->filter->vptr->destroy(self->filter);
+    free(self->serializer);
+    free(self->config->filter_string);
+    for (int i = 0; i < self->config->named_arg_count; i++) {
+        self->config->named_args[i].val->vptr->destroy(self->config->named_args[i].val);
+    }
+    free(self->config);
+    free(self);
+}
+
+/* =========================================================================
+ * Application Entry Point
+ * ========================================================================= */
+
+int main(int argc, char *argv[]) {
+    /* Set Windows binary console streaming mode */
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+
+    JqConfig *config = JqConfig_New();
+    if (!config->parse_args(config, argc, argv)) {
+        free(config);
+        return 2;
+    }
+
+    JqEngine *engine = JqEngine_New(config);
+    int status = engine->run(engine);
+    JqEngine_Destroy(engine);
+
+    return status;
+}

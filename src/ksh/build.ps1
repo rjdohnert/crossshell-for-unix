@@ -4,7 +4,7 @@
 .DESCRIPTION
     Builds CrossShell KSH either as a single-file SQLite-style amalgamation
     (ksh.cpp) or from separate modular translation units (src/*.cpp).
-    Installs by default to bin/ksh.exe and supports running the internal self-test suite.
+    Installs by default to bin/ksh.exe and supports internal and process-level regression tests.
 .PARAMETER Action
     Action to perform: 'build' (default), 'clean', 'test', 'noinstall', 'modular', 'amalgamate'.
 .PARAMETER Target
@@ -28,6 +28,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$testAmalgamationPath = $null
 Push-Location $scriptDir
 
 try {
@@ -75,9 +76,17 @@ try {
 
     Write-Host "[ksh] Using compiler: $compilerCmd"
 
-    # Step 1: Ensure amalgamation exists
+    # Step 1: Prepare the amalgamation source
     if ($Target -eq "amalgamation" -or $Target -eq "all") {
-        if (-not (Test-Path "$scriptDir\ksh.cpp")) {
+        if ($Action -eq "test") {
+            $testAmalgamationPath = Join-Path $env:TEMP ("ksh-test-" + [guid]::NewGuid().ToString("N") + ".cpp")
+            Write-Host "[ksh] Generating a fresh test amalgamation..."
+            & pwsh.exe -NoProfile -File "$scriptDir\amalgamate.ps1" -OutputFile $testAmalgamationPath -SourceDir $scriptDir
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "[ksh] Failed to generate the test amalgamation."
+                exit $LASTEXITCODE
+            }
+        } elseif (-not (Test-Path "$scriptDir\ksh.cpp")) {
             Write-Host "[ksh] Generating initial amalgamation..."
             if (Test-Path "$scriptDir\amalgamate.exe") {
                 & "$scriptDir\amalgamate.exe" --source-dir "$scriptDir" --output "$scriptDir\ksh.cpp"
@@ -92,10 +101,11 @@ try {
     # Step 2: Build target
     if ($Target -eq "amalgamation" -or $Target -eq "all") {
         Write-Host "[ksh] Compiling amalgamated ksh.exe..."
+        $amalgamationSource = if ($testAmalgamationPath) { $testAmalgamationPath } else { "ksh.cpp" }
         if ($isMsvc) {
-            & $compilerCmd /std:c++17 /O2 /EHsc /nologo /Fe:ksh.exe ksh.cpp Advapi32.lib User32.lib
+            & $compilerCmd /std:c++17 /O2 /EHsc /nologo /Fe:ksh.exe $amalgamationSource Advapi32.lib User32.lib
         } else {
-            & $compilerCmd -std=c++17 -O2 ksh.cpp -lAdvapi32 -lUser32 "-Wl,/subsystem:console" -o ksh.exe
+            & $compilerCmd -std=c++17 -O2 $amalgamationSource -lAdvapi32 -lUser32 "-Wl,/subsystem:console" -o ksh.exe
         }
         if ($LASTEXITCODE -ne 0) {
             Write-Error "[ksh] Build failed for ksh.exe."
@@ -129,6 +139,19 @@ try {
             exit $LASTEXITCODE
         }
         Write-Host "[ksh] All self-tests passed!"
+
+        $testExecutablePath = (Resolve-Path $testTarget).Path
+        & "$scriptDir\tests\run-regression.ps1" -ExecutablePath $testExecutablePath
+        Write-Host "[ksh] All regression tests passed!"
+
+        if (-not [string]::IsNullOrWhiteSpace($env:KSH_REFERENCE_EXE)) {
+            & "$scriptDir\tests\run-differential.ps1" `
+                -CrossShellPath $testExecutablePath `
+                -ReferenceShellPath $env:KSH_REFERENCE_EXE `
+                -ReferenceWslDistribution $env:KSH_REFERENCE_WSL_DISTRO
+        } else {
+            Write-Host "[ksh] Differential tests skipped; set KSH_REFERENCE_EXE to a reference KornShell executable."
+        }
     }
 
     # Step 4: Install to ../../bin/ if requested
@@ -143,5 +166,8 @@ try {
     }
 }
 finally {
+    if ($testAmalgamationPath -and (Test-Path -LiteralPath $testAmalgamationPath)) {
+        Remove-Item -LiteralPath $testAmalgamationPath -Force
+    }
     Pop-Location
 }

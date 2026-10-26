@@ -37,6 +37,40 @@ public:
             p.StatusBarAttr     = BACKGROUND_GREEN;
             break;
 
+        case Theme_Cyberpunk:
+            p.MenuAttr          = BACKGROUND_RED | BACKGROUND_BLUE;
+            p.MenuHotkeyAttr    = BACKGROUND_RED | BACKGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.DesktopAttr       = 0;
+            p.WinBorderActive   = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+            p.WinBorderInactive = FOREGROUND_RED | FOREGROUND_BLUE;
+            p.WinTitleAttr      = BACKGROUND_RED | BACKGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.EditorBg          = 0;
+            p.TextDefault       = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+            p.KeywordAttr       = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+            p.StringAttr        = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.CommentAttr       = FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+            p.NumberAttr        = FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.LineNumAttr       = FOREGROUND_RED | FOREGROUND_BLUE;
+            p.StatusBarAttr     = BACKGROUND_RED | BACKGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+            break;
+
+        case Theme_RetroAmber:
+            p.MenuAttr          = BACKGROUND_RED | BACKGROUND_GREEN;
+            p.MenuHotkeyAttr    = BACKGROUND_RED | BACKGROUND_GREEN | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.DesktopAttr       = 0;
+            p.WinBorderActive   = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.WinBorderInactive = FOREGROUND_RED | FOREGROUND_GREEN;
+            p.WinTitleAttr      = BACKGROUND_RED | BACKGROUND_GREEN | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.EditorBg          = 0;
+            p.TextDefault       = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.KeywordAttr       = FOREGROUND_RED | FOREGROUND_INTENSITY;
+            p.StringAttr        = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+            p.CommentAttr       = FOREGROUND_RED | FOREGROUND_GREEN;
+            p.NumberAttr        = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            p.LineNumAttr       = FOREGROUND_RED | FOREGROUND_GREEN;
+            p.StatusBarAttr     = BACKGROUND_RED | BACKGROUND_GREEN | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+            break;
+
         case Theme_BorlandBlue:
         default:
             // Default palette with blue editor background.

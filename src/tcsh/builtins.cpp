@@ -440,14 +440,7 @@ bool TcshEngine::executeBuiltin(const std::vector<std::string>& args) {
     }
     if (cmd == "disown") {
         auto closeJobHandles = [](Job& job) {
-            if (job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) {
-                CloseHandle(job.hProcess);
-                job.hProcess = NULL;
-            }
-            if (job.hJob && job.hJob != INVALID_HANDLE_VALUE) {
-                CloseHandle(job.hJob);
-                job.hJob = NULL;
-            }
+            close_job_handles(job);
         };
 
         if (args.size() == 1) {
@@ -652,7 +645,7 @@ bool TcshEngine::executeBuiltin(const std::vector<std::string>& args) {
     if (cmd == "wait") {
         if (args.size() == 1) {
             for (auto& job : jobList) {
-                if (job.isRunning && job.hProcess) WaitForSingleObject(job.hProcess, INFINITE);
+                if (job.isRunning && job.hProcess) wait_job_processes(job);
             }
             updateJobs();
             return okStatus();
@@ -665,7 +658,7 @@ bool TcshEngine::executeBuiltin(const std::vector<std::string>& args) {
 
         for (auto& job : jobList) {
             if (static_cast<int>(job.id) == parsed && job.isRunning && job.hProcess) {
-                WaitForSingleObject(job.hProcess, INFINITE);
+                wait_job_processes(job);
                 updateJobs();
                 return okStatus();
             }
@@ -752,16 +745,8 @@ bool TcshEngine::executeBuiltin(const std::vector<std::string>& args) {
     if (cmd == "hup") {
         for (auto& job : jobList) {
             if (job.isRunning && job.hProcess) {
-                TerminateProcess(job.hProcess, 1);
                 job.isRunning = false;
-                if (job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) {
-                    CloseHandle(job.hProcess);
-                    job.hProcess = NULL;
-                }
-                if (job.hJob && job.hJob != INVALID_HANDLE_VALUE) {
-                    CloseHandle(job.hJob);
-                    job.hJob = NULL;
-                }
+                terminate_job_processes(job, 1);
             }
         }
         updateJobs();
@@ -799,11 +784,8 @@ bool TcshEngine::executeBuiltin(const std::vector<std::string>& args) {
                 return failStatus();
             }
 
-            bool ok = TerminateProcess(it->hProcess, 1) != FALSE;
-            if (it->hJob && it->hJob != INVALID_HANDLE_VALUE) TerminateJobObject(it->hJob, 1);
+            bool ok = terminate_job_processes(*it, 1);
             it->isRunning = false;
-            if (it->hProcess && it->hProcess != INVALID_HANDLE_VALUE) { CloseHandle(it->hProcess); it->hProcess = NULL; }
-            if (it->hJob && it->hJob != INVALID_HANDLE_VALUE) { CloseHandle(it->hJob); it->hJob = NULL; }
             if (!ok) print_error_message("kill: Failed to terminate job\n");
             setVariableList("status", { ok ? "0" : "1" });
             return true;

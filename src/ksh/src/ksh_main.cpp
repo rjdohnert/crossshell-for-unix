@@ -92,7 +92,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     if (show_version && first_positional_index == argc) {
         std::wcout << L"\n"; 
-        std::wcout << L"  CrossShellKSH 3.1.16-2026 Copyright (C) 2026, Roberto J Dohnert\n";
+        std::wcout << L"  CrossShellKSH 3.2.3-2026 Copyright (C) 2026, Roberto J Dohnert\n";
         std::wcout << L"         All Rights Reserved. License: BSD-3-Clause        \n";
         std::wcout << L"\n";
         std::wcout << L"Microsoft Windows is a registered trademark of Microsoft Corporation.\n";

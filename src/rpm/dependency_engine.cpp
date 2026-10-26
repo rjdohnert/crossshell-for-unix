@@ -41,6 +41,25 @@ bool DependencyEngine::verify(const RpmMetadata& pkg, RpmDatabase& db) {
                     }
                 }
                 if (satisfied) break;
+
+                // Match file requirements (e.g. /bin/sh or file paths)
+                if (req.name.front() == '/' || req.name.front() == '\\' ||
+                    req.name.find('/') != std::string::npos || req.name.find('\\') != std::string::npos) {
+                    std::string reqNorm = req.name;
+                    std::replace(reqNorm.begin(), reqNorm.end(), '/', '\\');
+                    for (const auto& f : installed.files) {
+                        std::string fNorm = f.path;
+                        std::replace(fNorm.begin(), fNorm.end(), '/', '\\');
+                        if (_stricmp(fNorm.c_str(), reqNorm.c_str()) == 0 ||
+                            (fNorm.size() >= reqNorm.size() &&
+                             _stricmp(fNorm.c_str() + (fNorm.size() - reqNorm.size()), reqNorm.c_str()) == 0 &&
+                             (fNorm.size() == reqNorm.size() || fNorm[fNorm.size() - reqNorm.size() - 1] == '\\'))) {
+                            satisfied = true;
+                            break;
+                        }
+                    }
+                }
+                if (satisfied) break;
             }
 
             if (!satisfied) {
@@ -56,21 +75,30 @@ bool DependencyEngine::verify(const RpmMetadata& pkg, RpmDatabase& db) {
 bool DependencyEngine::checkEraseDependencies(const std::string& pkgName, RpmDatabase& db) {
         RpmMetadata* found = db.find(pkgName);
         if (!found) return true;
+        std::string canonicalName = found->name;
 
         std::set<std::string> providedCaps;
-        providedCaps.insert(pkgName);
+        providedCaps.insert(canonicalName);
         for (const auto& prov : found->provides) {
             providedCaps.insert(prov.name);
         }
+        for (const auto& f : found->files) {
+            std::string pNorm = f.path;
+            std::replace(pNorm.begin(), pNorm.end(), '/', '\\');
+            providedCaps.insert(pNorm);
+            std::string pGen = f.path;
+            std::replace(pGen.begin(), pGen.end(), '\\', '/');
+            providedCaps.insert(pGen);
+        }
 
         for (const auto& [name, installed] : db.all()) {
-            if (installed.name == pkgName) continue;
+            if (installed.name == canonicalName) continue;
             for (const auto& req : installed.requirements) {
                 if (providedCaps.count(req.name) > 0) {
                     // Check if another installed package still provides this requirement
                     bool stillProvided = false;
                     for (const auto& [otherName, otherPkg] : db.all()) {
-                        if (otherName == pkgName) continue;
+                        if (otherName == canonicalName) continue;
                         if (otherPkg.name == req.name && matchDependency(otherPkg.version, req)) {
                             stillProvided = true;
                             break;
@@ -82,6 +110,20 @@ bool DependencyEngine::checkEraseDependencies(const std::string& pkgName, RpmDat
                                     stillProvided = true;
                                     break;
                                 }
+                            }
+                        }
+                        if (stillProvided) break;
+                        for (const auto& f : otherPkg.files) {
+                            std::string fNorm = f.path;
+                            std::replace(fNorm.begin(), fNorm.end(), '/', '\\');
+                            std::string rNorm = req.name;
+                            std::replace(rNorm.begin(), rNorm.end(), '/', '\\');
+                            if (_stricmp(fNorm.c_str(), rNorm.c_str()) == 0 ||
+                                (fNorm.size() >= rNorm.size() &&
+                                 _stricmp(fNorm.c_str() + (fNorm.size() - rNorm.size()), rNorm.c_str()) == 0 &&
+                                 (fNorm.size() == rNorm.size() || fNorm[fNorm.size() - rNorm.size() - 1] == '\\'))) {
+                                stillProvided = true;
+                                break;
                             }
                         }
                         if (stillProvided) break;

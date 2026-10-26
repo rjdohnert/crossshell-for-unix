@@ -32,6 +32,167 @@
 
 #include "ksh_internal.h"
 
+namespace {
+
+int g_builtin_redirection_depth = 0;
+
+class WideHandleStreamBuffer : public std::wstreambuf {
+public:
+    void set_handle(HANDLE handle) {
+        handle_ = handle;
+    }
+
+protected:
+    int_type overflow(int_type character) override {
+        if (traits_type::eq_int_type(character, traits_type::eof())) {
+            return traits_type::not_eof(character);
+        }
+
+        const wchar_t value = traits_type::to_char_type(character);
+        return write(&value, 1) ? character : traits_type::eof();
+    }
+
+    std::streamsize xsputn(const wchar_t* text, std::streamsize count) override {
+        if (count <= 0) {
+            return 0;
+        }
+        return write(text, static_cast<size_t>(count)) ? count : 0;
+    }
+
+    int sync() override {
+        return 0;
+    }
+
+private:
+    bool write(const wchar_t* text, size_t count) {
+        if (handle_ == nullptr || handle_ == INVALID_HANDLE_VALUE || count > static_cast<size_t>(INT_MAX)) {
+            return false;
+        }
+
+        DWORD console_mode = 0;
+        if (GetConsoleMode(handle_, &console_mode)) {
+            size_t offset = 0;
+            while (offset < count) {
+                const DWORD chunk = static_cast<DWORD>(std::min<size_t>(count - offset, MAXDWORD));
+                DWORD written = 0;
+                if (!WriteConsoleW(handle_, text + offset, chunk, &written, nullptr) || written == 0) {
+                    return false;
+                }
+                offset += written;
+            }
+            return true;
+        }
+
+        const int byte_count = WideCharToMultiByte(
+            CP_UTF8, 0, text, static_cast<int>(count), nullptr, 0, nullptr, nullptr);
+        if (byte_count <= 0) {
+            return false;
+        }
+
+        std::string bytes(static_cast<size_t>(byte_count), '\0');
+        if (WideCharToMultiByte(
+                CP_UTF8, 0, text, static_cast<int>(count), &bytes[0], byte_count, nullptr, nullptr) != byte_count) {
+            return false;
+        }
+
+        size_t offset = 0;
+        while (offset < bytes.size()) {
+            const DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes.size() - offset, MAXDWORD));
+            DWORD written = 0;
+            if (!WriteFile(handle_, bytes.data() + offset, chunk, &written, nullptr) || written == 0) {
+                return false;
+            }
+            offset += written;
+        }
+        return true;
+    }
+
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+class ScopedBuiltinRedirection {
+public:
+    explicit ScopedBuiltinRedirection(const RedirectionSpec& redirection) {
+        RedirectionSpec standard_redirection = redirection;
+        standard_redirection.has_stdin = false;
+        standard_redirection.stdin_path.clear();
+        standard_redirection.custom_fd_actions.clear();
+        standard_redirection.standard_fd_actions.erase(
+            std::remove_if(
+                standard_redirection.standard_fd_actions.begin(),
+                standard_redirection.standard_fd_actions.end(),
+                [](const RedirectionSpec::StandardFdAction& action) { return action.fd == 0; }),
+            standard_redirection.standard_fd_actions.end());
+
+        if (!has_any_redirection(standard_redirection)) {
+            return;
+        }
+
+        saved_stdout_handle_ = GetStdHandle(STD_OUTPUT_HANDLE);
+        saved_stderr_handle_ = GetStdHandle(STD_ERROR_HANDLE);
+        if (!setup_redirection_handles(
+                &standard_redirection,
+                std_in_,
+                std_out_,
+                std_err_,
+                close_in_,
+                close_out_,
+                close_err_)) {
+            valid_ = false;
+            return;
+        }
+
+        stdout_buffer_.set_handle(std_out_);
+        stderr_buffer_.set_handle(std_err_);
+        std::wcout.flush();
+        std::wcerr.flush();
+        old_stdout_buffer_ = std::wcout.rdbuf(&stdout_buffer_);
+        old_stderr_buffer_ = std::wcerr.rdbuf(&stderr_buffer_);
+        SetStdHandle(STD_OUTPUT_HANDLE, std_out_);
+        SetStdHandle(STD_ERROR_HANDLE, std_err_);
+        ++g_builtin_redirection_depth;
+        active_ = true;
+        valid_ = true;
+    }
+
+    ~ScopedBuiltinRedirection() {
+        if (!active_) {
+            return;
+        }
+
+        std::wcout.flush();
+        std::wcerr.flush();
+        std::wcout.rdbuf(old_stdout_buffer_);
+        std::wcerr.rdbuf(old_stderr_buffer_);
+        SetStdHandle(STD_OUTPUT_HANDLE, saved_stdout_handle_);
+        SetStdHandle(STD_ERROR_HANDLE, saved_stderr_handle_);
+        --g_builtin_redirection_depth;
+        close_redirection_handles(std_in_, std_out_, std_err_, close_in_, close_out_, close_err_);
+    }
+
+    bool is_valid() const {
+        return valid_;
+    }
+
+private:
+    HANDLE std_in_ = INVALID_HANDLE_VALUE;
+    HANDLE std_out_ = INVALID_HANDLE_VALUE;
+    HANDLE std_err_ = INVALID_HANDLE_VALUE;
+    HANDLE saved_stdout_handle_ = INVALID_HANDLE_VALUE;
+    HANDLE saved_stderr_handle_ = INVALID_HANDLE_VALUE;
+    bool close_in_ = false;
+    bool close_out_ = false;
+    bool close_err_ = false;
+    bool active_ = false;
+    bool valid_ = true;
+    WideHandleStreamBuffer stdout_buffer_;
+    WideHandleStreamBuffer stderr_buffer_;
+    std::wstreambuf* old_stdout_buffer_ = nullptr;
+    std::wstreambuf* old_stderr_buffer_ = nullptr;
+};
+
+}
+
 // Script context section: current script name and argument helpers.
 const std::vector<std::wstring>& current_script_args() {
     static const std::vector<std::wstring> empty_args;
@@ -675,9 +836,9 @@ class BlockRedirector {
     bool activeIn, activeOut;
 public:
     BlockRedirector(const RedirectionSpec& r) :
-        activeIn(false), activeOut(false),
         hSavedIn(INVALID_HANDLE_VALUE), hSavedOut(INVALID_HANDLE_VALUE),
-        hNewIn(INVALID_HANDLE_VALUE), hNewOut(INVALID_HANDLE_VALUE) {
+        hNewIn(INVALID_HANDLE_VALUE), hNewOut(INVALID_HANDLE_VALUE),
+        activeIn(false), activeOut(false) {
         
         if (r.has_stdin) {
             hSavedIn = GetStdHandle(STD_INPUT_HANDLE);
@@ -1983,15 +2144,33 @@ bool execute_script_lines_range(
             }
 
             heredoc_temp_file = temp_name;
-            std::wofstream out(heredoc_temp_file.c_str(), std::ios::binary | std::ios::trunc);
-            if (!out.is_open()) {
-                DeleteFileW(heredoc_temp_file.c_str());
+            HANDLE hTemp = CreateFileW(
+                heredoc_temp_file.c_str(),
+                GENERIC_WRITE,
+                0,
+                nullptr,
+                CREATE_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr);
+            if (hTemp == INVALID_HANDLE_VALUE) {
                 report_script_syntax_error(line_index, L"failed to write here-doc temp file");
                 ksh_env.variables[L"?"] = L"1";
                 return false;
             }
-            out << heredoc_content;
-            out.close();
+            if (!heredoc_content.empty()) {
+                int utf8_len = WideCharToMultiByte(
+                    CP_UTF8, 0, heredoc_content.c_str(), static_cast<int>(heredoc_content.size()),
+                    nullptr, 0, nullptr, nullptr);
+                if (utf8_len > 0) {
+                    std::string utf8_bytes(static_cast<size_t>(utf8_len), '\0');
+                    WideCharToMultiByte(
+                        CP_UTF8, 0, heredoc_content.c_str(), static_cast<int>(heredoc_content.size()),
+                        &utf8_bytes[0], utf8_len, nullptr, nullptr);
+                    DWORD written = 0;
+                    WriteFile(hTemp, utf8_bytes.data(), static_cast<DWORD>(utf8_bytes.size()), &written, nullptr);
+                }
+            }
+            CloseHandle(hTemp);
 
             std::vector<std::wstring> rebuilt_tokens;
             for (size_t t = 0; t < heredoc_tokens.size(); ++t) {
@@ -2025,12 +2204,7 @@ bool execute_script_lines_range(
             heredoc_end_line = probe;
         }
 
-        if (!execute_command_line(command_to_execute, should_exit_shell)) {
-            if (!heredoc_temp_file.empty()) {
-                DeleteFileW(heredoc_temp_file.c_str());
-            }
-            return false;
-        }
+        execute_command_line(command_to_execute, should_exit_shell);
         if (!heredoc_temp_file.empty()) {
             DeleteFileW(heredoc_temp_file.c_str());
         }
@@ -2384,8 +2558,77 @@ std::vector<std::wstring> prepare_script_lines(const std::wstring& text) {
     const std::vector<std::wstring> physical_lines = split_script_lines(normalized_text);
     std::vector<std::wstring> logical_lines;
     std::wstring continued;
+    std::wstring type_definition_command;
+    int type_definition_parenthesis_depth = 0;
+    bool collecting_type_definition = false;
+
+    auto update_type_definition_parentheses = [&](const std::wstring& text) {
+        bool in_single_quotes = false;
+        bool in_double_quotes = false;
+        bool escaped = false;
+        for (wchar_t ch : text) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch == L'\\' && !in_single_quotes) {
+                escaped = true;
+                continue;
+            }
+            if (ch == L'\'' && !in_double_quotes) {
+                in_single_quotes = !in_single_quotes;
+                continue;
+            }
+            if (ch == L'"' && !in_single_quotes) {
+                in_double_quotes = !in_double_quotes;
+                continue;
+            }
+            if (in_single_quotes || in_double_quotes) {
+                continue;
+            }
+            if (ch == L'(') {
+                type_definition_parenthesis_depth++;
+            } else if (ch == L')') {
+                type_definition_parenthesis_depth--;
+            }
+        }
+    };
+
+    auto is_typeset_type_definition = [](const std::wstring& command) {
+        const std::vector<std::wstring> tokens = ksh_tokenize_preserve_quotes(command);
+        if (tokens.empty() || tokens[0] != L"typeset") {
+            return false;
+        }
+        for (size_t index = 1; index < tokens.size(); ++index) {
+            const std::wstring& token = tokens[index];
+            if (token.size() < 2 || token[0] != L'-') {
+                break;
+            }
+            if (token.find(L'T', 1) != std::wstring::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     for (const std::wstring& physical_line : physical_lines) {
+        if (collecting_type_definition) {
+            const std::wstring type_line = trim_copy(physical_line);
+            if (!type_line.empty()) {
+                if (!type_definition_command.empty()) {
+                    type_definition_command += L' ';
+                }
+                type_definition_command += type_line;
+                update_type_definition_parentheses(type_line);
+            }
+            if (type_definition_parenthesis_depth <= 0) {
+                logical_lines.push_back(trim_copy(type_definition_command));
+                type_definition_command.clear();
+                collecting_type_definition = false;
+            }
+            continue;
+        }
+
         std::wstring line = physical_line;
         size_t trailing = line.size();
         while (trailing > 0 && (line[trailing - 1] == L' ' || line[trailing - 1] == L'\t')) {
@@ -2412,6 +2655,17 @@ std::vector<std::wstring> prepare_script_lines(const std::wstring& text) {
         if (trailing_pipe) {
             continued = line + L' ';
             continue;
+        }
+
+        if (is_typeset_type_definition(trimmed)) {
+            type_definition_command = trimmed;
+            type_definition_parenthesis_depth = 0;
+            update_type_definition_parentheses(trimmed);
+            if (type_definition_parenthesis_depth > 0) {
+                collecting_type_definition = true;
+                continue;
+            }
+            type_definition_command.clear();
         }
 
         const std::wstring lowered_trimmed = to_lower_copy(trimmed);
@@ -2447,6 +2701,9 @@ std::vector<std::wstring> prepare_script_lines(const std::wstring& text) {
     if (!continued.empty()) {
         const std::vector<std::wstring> commands = split_top_level_script_commands(continued);
         logical_lines.insert(logical_lines.end(), commands.begin(), commands.end());
+    }
+    if (collecting_type_definition && !type_definition_command.empty()) {
+        logical_lines.push_back(trim_copy(type_definition_command));
     }
     return logical_lines;
 }
@@ -2594,6 +2851,16 @@ std::wstring make_process_substitution_pipe_name(LONG id) {
         std::to_wstring(GetCurrentProcessId()) + L"_" +
         std::to_wstring(id) + L"_" +
         std::to_wstring(entropy);
+}
+
+void cancel_and_drain_pipe_connect(HANDLE pipe, OVERLAPPED* overlapped) {
+    if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE || overlapped == nullptr) {
+        return;
+    }
+
+    CancelIoEx(pipe, overlapped);
+    DWORD transferred = 0;
+    GetOverlappedResult(pipe, overlapped, &transferred, TRUE);
 }
 
 DWORD WINAPI PipeRelayThread(LPVOID lpParam) {
@@ -2829,14 +3096,16 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
     }
     
     BOOL bConn = ConnectNamedPipe(hServerPipe, ov);
-    if (!bConn && GetLastError() != ERROR_IO_PENDING && GetLastError() != ERROR_PIPE_CONNECTED) {
+    const DWORD connect_error = bConn ? ERROR_SUCCESS : GetLastError();
+    if (!bConn && connect_error != ERROR_IO_PENDING && connect_error != ERROR_PIPE_CONNECTED) {
         CloseHandle(ov->hEvent);
         delete ov;
         CloseHandle(hServerPipe);
         return L"";
     }
+    const bool connect_pending = !bConn && connect_error == ERROR_IO_PENDING;
     
-    if (bConn || GetLastError() == ERROR_PIPE_CONNECTED) {
+    if (bConn || connect_error == ERROR_PIPE_CONNECTED) {
         SetEvent(ov->hEvent);
     }
     
@@ -2848,6 +3117,9 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
     sa.bInheritHandle = TRUE;
     
     if (!CreatePipe(&hChildRead, &hChildWrite, &sa, 0)) {
+        if (connect_pending) {
+            cancel_and_drain_pipe_connect(hServerPipe, ov);
+        }
         CloseHandle(ov->hEvent);
         delete ov;
         CloseHandle(hServerPipe);
@@ -2858,7 +3130,9 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
         if (!SetHandleInformation(hChildRead, HANDLE_FLAG_INHERIT, 0)) {
             CloseHandle(hChildRead);
             CloseHandle(hChildWrite);
-            CancelIoEx(hServerPipe, ov);
+            if (connect_pending) {
+                cancel_and_drain_pipe_connect(hServerPipe, ov);
+            }
             CloseHandle(ov->hEvent);
             delete ov;
             CloseHandle(hServerPipe);
@@ -2868,7 +3142,9 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
         if (!SetHandleInformation(hChildWrite, HANDLE_FLAG_INHERIT, 0)) {
             CloseHandle(hChildRead);
             CloseHandle(hChildWrite);
-            CancelIoEx(hServerPipe, ov);
+            if (connect_pending) {
+                cancel_and_drain_pipe_connect(hServerPipe, ov);
+            }
             CloseHandle(ov->hEvent);
             delete ov;
             CloseHandle(hServerPipe);
@@ -2881,7 +3157,9 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
     if (path_len == 0 || path_len >= MAX_PATH) {
         CloseHandle(hChildRead);
         CloseHandle(hChildWrite);
-        CancelIoEx(hServerPipe, ov);
+        if (connect_pending) {
+            cancel_and_drain_pipe_connect(hServerPipe, ov);
+        }
         CloseHandle(ov->hEvent);
         delete ov;
         CloseHandle(hServerPipe);
@@ -2936,7 +3214,9 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
                 CloseHandle(params->hChild);
             }
             if (params->hServerPipe != nullptr && params->hServerPipe != INVALID_HANDLE_VALUE) {
-                CancelIoEx(params->hServerPipe, params->ov);
+                if (connect_pending) {
+                    cancel_and_drain_pipe_connect(params->hServerPipe, params->ov);
+                }
                 DisconnectNamedPipe(params->hServerPipe);
                 CloseHandle(params->hServerPipe);
             }
@@ -2951,7 +3231,9 @@ std::wstring handle_single_process_substitution(const std::wstring& inner_cmd, b
     } else {
         CloseHandle(hChildRead);
         CloseHandle(hChildWrite);
-        CancelIoEx(hServerPipe, ov);
+        if (connect_pending) {
+            cancel_and_drain_pipe_connect(hServerPipe, ov);
+        }
         CloseHandle(ov->hEvent);
         delete ov;
         CloseHandle(hServerPipe);
@@ -3363,6 +3645,25 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                         continue;
                     }
 
+                    if (ch == L'&' && i > 0 && (text[i - 1] == L'>' || text[i - 1] == L'<') &&
+                        (i + 1) < text.size() && (std::iswdigit(text[i + 1]) || text[i + 1] == L'-')) {
+                        current.push_back(ch);
+                        continue;
+                    }
+
+                    if (ch == L'&' && ((i + 1) >= text.size() || text[i + 1] != L'>')) {
+                        size_t next_command = i + 1;
+                        while (next_command < text.size() && std::iswspace(text[next_command])) {
+                            next_command++;
+                        }
+                        if (next_command < text.size()) {
+                            segments.push_back(trim_copy(current));
+                            separators.push_back(L"&");
+                            current.clear();
+                            continue;
+                        }
+                    }
+
                     if (ch == L'|' && (i + 1) < text.size() && text[i + 1] == L'|') {
                         segments.push_back(trim_copy(current));
                         separators.push_back(L"||");
@@ -3498,7 +3799,11 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
             if (disable_err) {
                 g_errexit_disabled_depth++;
             }
-            bool invoke_ok = execute_command_line(segment, should_exit_shell);
+            std::wstring command_to_invoke = segment;
+            if (i < list_separators.size() && list_separators[i] == L"&") {
+                command_to_invoke += L" &";
+            }
+            bool invoke_ok = execute_command_line(command_to_invoke, should_exit_shell);
             if (disable_err) {
                 g_errexit_disabled_depth--;
             }
@@ -3619,7 +3924,8 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                 background_pid,
                 &background_handles,
                 &background_pids,
-                &pipeline_temp_files)) {
+                &pipeline_temp_files,
+                g_builtin_redirection_depth > 0)) {
             if (perf_trace) {
                 log_performance_trace(L"execute.pipeline_run", GetTickCount64() - pipeline_exec_start, L"failed");
             }
@@ -3710,13 +4016,16 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
     for (RedirectionSpec::CustomFdAction& action : redir.custom_fd_actions) {
         action.path = remove_quotes_and_escapes_from_token(action.path);
     }
+    for (RedirectionSpec::StandardFdAction& action : redir.standard_fd_actions) {
+        action.path = remove_quotes_and_escapes_from_token(action.path);
+    }
     tokens = remove_quotes_and_escapes_from_tokens(tokens);
     if (perf_trace) {
         log_performance_trace(L"execute.redirection_parse", GetTickCount64() - redirection_parse_start);
     }
 
-    if (!redir.custom_fd_actions.empty() && (tokens.empty() || tokens[0] != L"exec")) {
-        std::wcerr << L"ksh: custom fd redirection (3-9) is currently supported only with exec\n";
+    if (!redir.custom_fd_actions.empty() && (tokens.empty() || (tokens[0] != L"exec" && tokens[0] != L"redirect"))) {
+        std::wcerr << L"ksh: custom fd redirection (3-9) is currently supported only with exec or redirect\n";
         ksh_env.variables[L"?"] = L"1";
         return false;
     }
@@ -3826,7 +4135,7 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
         HANDLE hOld;
         HANDLE hNew;
         bool active;
-        StdinRedirector(const RedirectionSpec& r) : active(false), hOld(INVALID_HANDLE_VALUE), hNew(INVALID_HANDLE_VALUE) {
+        StdinRedirector(const RedirectionSpec& r) : hOld(INVALID_HANDLE_VALUE), hNew(INVALID_HANDLE_VALUE), active(false) {
             if (r.has_stdin) {
                 hOld = GetStdHandle(STD_INPUT_HANDLE);
                 if (open_redirection_file(r.stdin_path, GENERIC_READ, OPEN_EXISTING, hNew)) {
@@ -3852,9 +4161,19 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
     bool is_function_cmd = (g_shell_functions.find(check_cmd) != g_shell_functions.end());
 
     std::unique_ptr<StdinRedirector> stdin_redir;
-    if (is_builtin_cmd || is_function_cmd) {
+    if ((is_builtin_cmd || is_function_cmd) && check_cmd != L"exec" && check_cmd != L"redirect") {
         stdin_redir = std::make_unique<StdinRedirector>(redir);
         if (!stdin_redir->is_valid(redir)) {
+            std::wcerr << L"ksh: redirection setup failed\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+    }
+
+    std::unique_ptr<ScopedBuiltinRedirection> builtin_redirection;
+    if ((is_builtin_cmd || is_function_cmd) && check_cmd != L"exec" && check_cmd != L"redirect") {
+        builtin_redirection = std::make_unique<ScopedBuiltinRedirection>(redir);
+        if (!builtin_redirection->is_valid()) {
             std::wcerr << L"ksh: redirection setup failed\n";
             ksh_env.variables[L"?"] = L"1";
             return false;
@@ -3869,6 +4188,11 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
         }
 
         if (!redir.has_stdout && !redir.stdout_to_stderr) {
+            if (g_builtin_redirection_depth > 0) {
+                std::wcout.write(text.data(), static_cast<std::streamsize>(text.size()));
+                std::wcout.flush();
+                return std::wcout.good();
+            }
             if (g_pipeline_stdout != INVALID_HANDLE_VALUE) {
                 std::string utf8;
                 int len = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), NULL, 0, NULL, NULL);
@@ -3905,17 +4229,10 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
             return true;
         }
 
-        RedirectionSpec output_redir = redir;
-        if (builtin_output_started) {
-            output_redir.append_stdout = true;
-        }
-
-        if (!write_text_with_stdout_redirection(text, output_redir)) {
-            return false;
-        }
-
+        std::wcout.write(text.data(), static_cast<std::streamsize>(text.size()));
+        std::wcout.flush();
         builtin_output_started = true;
-        return true;
+        return std::wcout.good();
     };
 
     std::wstring command_to_run = join_tokens_as_command_line(tokens);
@@ -4247,6 +4564,96 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
 
     if (cmd == L"help") {
         return execute_builtin_help(tokens, write_builtin_output);
+    }
+
+    if (cmd == L"break" || cmd == L"continue") {
+        int level_count = 1;
+        if (tokens.size() > 2) {
+            std::wcerr << L"ksh: " << cmd << L": too many arguments\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+        if (tokens.size() == 2) {
+            if (!try_parse_positive_int_strict(tokens[1], level_count)) {
+                std::wcerr << L"ksh: " << cmd << L": requires a positive integer argument\n";
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+        }
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    if (cmd == L"redirect") {
+        if (tokens.size() > 1) {
+            std::wcerr << L"ksh: redirect: unexpected argument: " << tokens[1] << L"\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+        if (!redir.custom_fd_actions.empty()) {
+            std::wstring custom_fd_error;
+            if (!apply_persistent_custom_fd_actions(redir, custom_fd_error)) {
+                std::wcerr << custom_fd_error << L"\n";
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+        }
+
+        HANDLE std_in = nullptr;
+        HANDLE std_out = nullptr;
+        HANDLE std_err = nullptr;
+        bool close_in = false;
+        bool close_out = false;
+        bool close_err = false;
+        if (setup_redirection_handles(&redir, std_in, std_out, std_err, close_in, close_out, close_err)) {
+            if (redir.has_stdin) {
+                SetStdHandle(STD_INPUT_HANDLE, std_in);
+            }
+            if (redir.has_stdout || redir.stdout_to_stderr) {
+                SetStdHandle(STD_OUTPUT_HANDLE, std_out);
+            }
+            if (redir.has_stderr || redir.stderr_to_stdout) {
+                SetStdHandle(STD_ERROR_HANDLE, std_err);
+            }
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        } else {
+            std::wcerr << L"ksh: redirect: redirection failed\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+    }
+
+    if (cmd == L"stop") {
+        if (tokens.size() < 2) {
+            std::wcerr << L"ksh: stop: usage: stop pid|%job...\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+        std::vector<std::wstring> stop_tokens;
+        stop_tokens.push_back(L"kill");
+        stop_tokens.push_back(L"-s");
+        stop_tokens.push_back(L"STOP");
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            stop_tokens.push_back(tokens[i]);
+        }
+        std::wstring stop_line = join_tokens_with_spaces(stop_tokens);
+        return execute_command_line(stop_line, should_exit_shell, true, true);
+    }
+
+    if (cmd == L"suspend") {
+        if (tokens.size() > 2 || (tokens.size() == 2 && tokens[1] != L"-f")) {
+            std::wcerr << L"ksh: suspend: usage: suspend [-f]\n";
+            ksh_env.variables[L"?"] = L"1";
+            return false;
+        }
+        suspend_process_by_pid(GetCurrentProcessId());
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    if (cmd == L"ulimit") {
+        return execute_builtin_ulimit(tokens, write_builtin_output);
     }
 
     if (cmd == L"version") {
@@ -5061,7 +5468,11 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                     } else if (kind == CommandResolutionKind::Function) {
                         line = target + L" is a function";
                     } else if (kind == CommandResolutionKind::Builtin) {
-                        line = target + L" is a shell builtin";
+                        if (is_special_builtin_command(target)) {
+                            line = target + L" is a special shell builtin";
+                        } else {
+                            line = target + L" is a shell builtin";
+                        }
                     } else if (kind == CommandResolutionKind::External) {
                         line = target + L" is " + detail;
                     }
@@ -5245,6 +5656,7 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                         ksh_env.variables[L"OPTARG"] = L"";
                         std::wcerr << L"ksh: getopts: option requires an argument -- " << optchar << L"\n";
                     }
+                    optind++;
                     ksh_env.variables[L"OPTIND"] = std::to_wstring(optind);
                     ksh_env.variables[kGetoptsCursorVar] = L"1";
                     ksh_env.variables[kGetoptsOptindMirrorVar] = std::to_wstring(optind);
@@ -5484,7 +5896,12 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
         }
         
         if (tokens[1] == L"-l") {
-            write_builtin_output(L"1) SIGHUP   2) SIGINT   3) SIGQUIT   8) SIGFPE   9) SIGKILL  10) SIGUSR1  11) SIGSEGV  12) SIGUSR2  14) SIGALRM  15) SIGTERM  17) SIGCHLD\n");
+            write_builtin_output(L"1) SIGHUP   2) SIGINT   3) SIGQUIT   8) SIGFPE   9) SIGKILL  10) SIGUSR1  11) SIGSEGV  12) SIGUSR2  14) SIGALRM  15) SIGTERM  17) SIGSTOP  18) SIGTSTP  19) SIGCONT  20) SIGCHLD\n");
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+        if (tokens[1] == L"-L") {
+            write_builtin_output(L" 1 HUP   2 INT   3 QUIT   8 FPE   9 KILL  10 USR1  11 SEGV  12 USR2  14 ALRM  15 TERM  17 STOP  18 TSTP  19 CONT  20 CHLD\n");
             ksh_env.variables[L"?"] = L"0";
             return true;
         }
@@ -5572,18 +5989,26 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                 }
                 
                 if (!job->completed) {
-                    if (job->process_handles.empty() && job->process_handle != nullptr) {
-                        job->process_handles.push_back(job->process_handle);
-                    }
-                    for (HANDLE handle : job->process_handles) {
-                        if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
-                            TerminateProcess(handle, 1);
+                    if (selected_signal == KillBuiltinSignal::Stop || selected_signal == KillBuiltinSignal::Tstp) {
+                        for (DWORD p : job->pids) { if (p != 0) suspend_process_by_pid(p); }
+                        if (job->pid != 0) suspend_process_by_pid(job->pid);
+                    } else if (selected_signal == KillBuiltinSignal::Cont) {
+                        for (DWORD p : job->pids) { if (p != 0) resume_process_by_pid(p); }
+                        if (job->pid != 0) resume_process_by_pid(job->pid);
+                    } else {
+                        if (job->process_handles.empty() && job->process_handle != nullptr) {
+                            job->process_handles.push_back(job->process_handle);
                         }
+                        for (HANDLE handle : job->process_handles) {
+                            if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
+                                TerminateProcess(handle, 1);
+                            }
+                        }
+                        DWORD ignored_code = 1;
+                        wait_for_background_job(*job, ignored_code);
+                        remove_background_job(job_id);
                     }
-                    DWORD ignored_code = 1;
-                    wait_for_background_job(*job, ignored_code);
                 }
-                remove_background_job(job_id);
             } else {
                 unsigned long parsed_pid = 0;
                 if (!try_parse_unsigned_long_strict(target, parsed_pid)) {
@@ -5615,6 +6040,13 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                     break;
                 case KillBuiltinSignal::Kill:
                     success = force_kill_process_by_pid(pid);
+                    break;
+                case KillBuiltinSignal::Stop:
+                case KillBuiltinSignal::Tstp:
+                    success = suspend_process_by_pid(pid);
+                    break;
+                case KillBuiltinSignal::Cont:
+                    success = resume_process_by_pid(pid);
                     break;
                 }
 
@@ -6147,13 +6579,16 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
         return ok;
     }
 
-    // ksh93 Built-in: typeset (supports -a, -A, -i, -r, -x, -L, -R, -Z)
-    if (cmd == L"typeset") {
+    // ksh93 Built-in: typeset and declaration builtins (integer, float, nameref, compound, functions, autoload)
+    if (cmd == L"typeset" || cmd == L"integer" || cmd == L"float" || cmd == L"nameref" ||
+        cmd == L"compound" || cmd == L"functions" || cmd == L"autoload") {
         struct TypesetOptions {
             bool array_mode = false;
             bool associative_mode = false;
             bool nameref_mode = false;
             bool integer_mode = false;
+            bool function_mode = false;
+            bool autoload_mode = false;
             bool readonly_mode = false;
             bool export_mode = false;
             bool uppercase_mode = false;
@@ -6175,6 +6610,16 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
         };
 
         TypesetOptions options;
+        if (cmd == L"integer" || cmd == L"float") {
+            options.integer_mode = true;
+        } else if (cmd == L"nameref") {
+            options.nameref_mode = true;
+        } else if (cmd == L"functions") {
+            options.function_mode = true;
+        } else if (cmd == L"autoload") {
+            options.function_mode = true;
+            options.autoload_mode = true;
+        }
         std::vector<std::wstring> operands;
         bool end_of_options = false;
 
@@ -6293,6 +6738,12 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                         return false;
                     }
                     options.list_mode = true;
+                } else if (token[j] == L'f') {
+                    if (!enable_mode) {
+                        std::wcerr << L"ksh: typeset: option removal (+f) is not supported\n";
+                        return false;
+                    }
+                    options.function_mode = true;
                 } else if (token[j] == L'T') {
                     if (!enable_mode) {
                         std::wcerr << L"ksh: typeset: option removal (+T) is not supported\n";
@@ -6352,6 +6803,45 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
             std::wcerr << L"ksh: typeset: justification width requires -L, -R, or -Z\n";
             ksh_env.variables[L"?"] = L"1";
             return false;
+        }
+
+        if (options.function_mode) {
+            if (operands.empty()) {
+                for (const auto& fn : g_shell_functions) {
+                    std::wstring def = fn.first + L"() {\n";
+                    for (const auto& line : fn.second.body_lines) {
+                        def += L"    " + line + L"\n";
+                    }
+                    def += L"}\n";
+                    if (!write_builtin_output(def)) {
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                }
+                ksh_env.variables[L"?"] = L"0";
+                return true;
+            }
+            bool all_ok = true;
+            for (const std::wstring& fn_name : operands) {
+                if (options.autoload_mode) continue;
+                std::map<std::wstring, ShellFunctionDefinition>::const_iterator fn_it = g_shell_functions.find(fn_name);
+                if (fn_it != g_shell_functions.end()) {
+                    std::wstring def = fn_it->first + L"() {\n";
+                    for (const auto& line : fn_it->second.body_lines) {
+                        def += L"    " + line + L"\n";
+                    }
+                    def += L"}\n";
+                    if (!write_builtin_output(def)) {
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                } else {
+                    std::wcerr << L"ksh: " << cmd << L": " << fn_name << L": not found\n";
+                    all_ok = false;
+                }
+            }
+            ksh_env.variables[L"?"] = all_ok ? L"0" : L"1";
+            return all_ok;
         }
 
         if (options.array_mode && options.associative_mode) {
@@ -7086,10 +7576,10 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                 if (redir.has_stdin) {
                     SetStdHandle(STD_INPUT_HANDLE, std_in);
                 }
-                if (redir.has_stdout) {
+                if (redir.has_stdout || redir.stdout_to_stderr) {
                     SetStdHandle(STD_OUTPUT_HANDLE, std_out);
                 }
-                if (redir.has_stderr) {
+                if (redir.has_stderr || redir.stderr_to_stdout) {
                     SetStdHandle(STD_ERROR_HANDLE, std_err);
                 }
                 ksh_env.variables[L"?"] = L"0";
@@ -7324,7 +7814,7 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
 
     // Builtin group: history and editing helpers.
     // Built-in: fc
-    if (cmd == L"fc") {
+    if (cmd == L"fc" || cmd == L"hist") {
         if (g_command_history.empty()) {
             load_command_history_from_file();
         }
@@ -7725,11 +8215,40 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
         bool omit_newline = false;
         bool raw_mode = false;
         bool use_coprocess_output = false;
+        int output_fd = 1;
         size_t start_idx = 1;
 
         if (cmd == L"print") {
             while (start_idx < tokens.size()) {
                 const std::wstring& arg = tokens[start_idx];
+                if (arg == L"--" || arg == L"-") {
+                    start_idx++;
+                    break;
+                }
+                if (arg == L"-u" || (arg.size() > 2 && arg.rfind(L"-u", 0) == 0)) {
+                    std::wstring fd_text;
+                    if (arg == L"-u") {
+                        if (start_idx + 1 >= tokens.size()) {
+                            std::wcerr << L"ksh: print: -u requires a file descriptor\n";
+                            ksh_env.variables[L"?"] = L"1";
+                            return false;
+                        }
+                        fd_text = tokens[start_idx + 1];
+                        start_idx += 2;
+                    } else {
+                        fd_text = arg.substr(2);
+                        start_idx++;
+                    }
+
+                    if (fd_text.size() != 1 || !std::iswdigit(fd_text[0]) || fd_text[0] == L'0') {
+                        std::wcerr << L"ksh: print: invalid file descriptor: " << fd_text << L"\n";
+                        ksh_env.variables[L"?"] = L"1";
+                        return false;
+                    }
+                    output_fd = fd_text[0] - L'0';
+                    continue;
+                }
+
                 if (arg.size() > 1 && arg[0] == L'-') {
                     bool recognized = false;
                     bool opt_n = false;
@@ -7741,7 +8260,12 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                         } else if (arg[j] == L'r') {
                             opt_r = true;
                             recognized = true;
-                        } else if (arg[j] == L'p' && g_coprocess.active) {
+                        } else if (arg[j] == L'p') {
+                            if (!g_coprocess.active) {
+                                std::wcerr << L"ksh: print -p: no active co-process\n";
+                                ksh_env.variables[L"?"] = L"1";
+                                return false;
+                            }
                             use_coprocess_output = true;
                             recognized = true;
                         } else {
@@ -7759,14 +8283,6 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                 } else {
                     break;
                 }
-            }
-
-            if (start_idx < tokens.size() && tokens[start_idx].size() > 1 &&
-                tokens[start_idx][0] == L'-' && tokens[start_idx].find(L'p') != std::wstring::npos &&
-                !g_coprocess.active) {
-                std::wcerr << L"ksh: print -p: no active co-process\n";
-                ksh_env.variables[L"?"] = L"1";
-                return false;
             }
         } else if (cmd == L"echo") {
             if (tokens.size() > 1 && tokens[1] == L"-n") {
@@ -7808,6 +8324,38 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
             line += L"\n";
         }
 
+        auto write_to_handle = [](HANDLE handle, const std::wstring& text) -> bool {
+            if (!is_valid_handle_value(handle)) {
+                return false;
+            }
+            if (text.empty()) {
+                return true;
+            }
+
+            const int byte_count = WideCharToMultiByte(
+                CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+            if (byte_count <= 0) {
+                return false;
+            }
+
+            std::string bytes(static_cast<size_t>(byte_count), '\0');
+            if (WideCharToMultiByte(
+                    CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), &bytes[0], byte_count, nullptr, nullptr) != byte_count) {
+                return false;
+            }
+
+            size_t offset = 0;
+            while (offset < bytes.size()) {
+                const DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes.size() - offset, MAXDWORD));
+                DWORD written = 0;
+                if (!WriteFile(handle, bytes.data() + offset, chunk, &written, nullptr) || written == 0) {
+                    return false;
+                }
+                offset += written;
+            }
+            return true;
+        };
+
         if (use_coprocess_output) {
             if (line.empty()) {
                 ksh_env.variables[L"?"] = L"0";
@@ -7844,9 +8392,35 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                 ksh_env.variables[L"?"] = L"1";
                 return false;
             }
-        } else if (!write_builtin_output(line)) {
-            ksh_env.variables[L"?"] = L"1";
-            return false;
+        } else if (output_fd == 1) {
+            if (!write_builtin_output(line)) {
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+        } else if (output_fd == 2) {
+            bool written = false;
+            if (g_builtin_redirection_depth > 0 || g_pipeline_stderr == INVALID_HANDLE_VALUE) {
+                std::wcerr.write(line.data(), static_cast<std::streamsize>(line.size()));
+                std::wcerr.flush();
+                written = std::wcerr.good();
+            } else {
+                written = write_to_handle(g_pipeline_stderr, line);
+            }
+            if (!written) {
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+        } else {
+            HANDLE custom_fd = get_persistent_custom_fd(output_fd);
+            if (!is_valid_handle_value(custom_fd)) {
+                std::wcerr << L"ksh: print: file descriptor is not open: " << output_fd << L"\n";
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
+            if (!write_to_handle(custom_fd, line)) {
+                ksh_env.variables[L"?"] = L"1";
+                return false;
+            }
         }
         ksh_env.variables[L"?"] = L"0";
         return true;

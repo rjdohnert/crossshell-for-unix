@@ -212,7 +212,8 @@ bool append_history_entry(const std::wstring& command_line) {
 
 bool resolve_history_recall(const std::wstring& input, std::wstring& resolved) {
     resolved = input;
-    if (input.empty() || input[0] != L'!') {
+    if (!g_is_interactive_session || input.empty() || input[0] != L'!') { return true; }
+    if (input.size() == 1 || input[1] == L' ' || input[1] == L'\t' || input[1] == L'=') {
         return true;
     }
 
@@ -418,7 +419,7 @@ std::wstring get_windows_release_text() {
 void print_version_text(const std::function<bool(const std::wstring&)>& write_output) {
     std::wstring out =
         L"\n"
-        L"  CrossShellKSH 3.1.16-2026 Copyright (C) 2026, Roberto J Dohnert\n"
+        L"  CrossShellKSH 3.2.3-2026 Copyright (C) 2026, Roberto J Dohnert\n"
         L"         All Rights Reserved. License: BSD-3-Clause        \n"
         L"\n"
         L"Microsoft Windows is a registered trademark of Microsoft Corporation.\n"
@@ -433,7 +434,7 @@ void print_version_text(const std::function<bool(const std::wstring&)>& write_ou
 
 
 void print_startup_system_info() {
-    std::wcout << L"CrossShellKSH v3.1.16-2026" << std::endl;
+    std::wcout << L"CrossShellKSH v3.2.3-2026" << std::endl;
 }
 
 void append_command_to_history_file(const std::wstring& command) {

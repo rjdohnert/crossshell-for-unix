@@ -1,83 +1,37 @@
-<#
-.SYNOPSIS
-    Builds the ls utility.
-.DESCRIPTION
-    Compiles all modular C++ source files for ls using available compilers (clang++, cl, or g++).
-    Optionally installs the resulting binary into the root bin/ directory.
-#>
 [CmdletBinding()]
-param (
-    [ValidateSet('auto', 'clang++', 'cl', 'g++')]
-    [string]$Compiler = 'auto',
-    [switch]$Install = $true,
-    [switch]$Clean
+param(
+    [ValidateSet('auto', 'clang', 'cl')][string]$Compiler = 'auto',
+    [switch]$Clean,
+    [switch]$NoInstall
 )
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Push-Location $scriptDir
-
+$ErrorActionPreference = 'Stop'
+$sourceFiles = @('ls.c', 'security.c', 'files.c', 'scan.c', 'listing.c')
+Push-Location $PSScriptRoot
 try {
     if ($Clean) {
-        Write-Host "[ls] Cleaning build artifacts..." -ForegroundColor Cyan
-        Remove-Item -Path "ls.exe", "*.obj", "*.o", "*.pdb", "*.ilk" -Force -ErrorAction SilentlyContinue
-        Write-Host "[ls] Clean complete." -ForegroundColor Green
+        Remove-Item ls.exe, *.obj, *.o, *.pdb, *.ilk -Force -ErrorAction SilentlyContinue
         return
     }
 
-    $sources = @(
-        "ls.cpp",
-        "ls_app.cpp",
-        "engine.cpp",
-        "options.cpp",
-        "reporter.cpp"
-    )
-
-    $selectedCompiler = $Compiler
-    if ($selectedCompiler -eq 'auto') {
-        if (Get-Command clang++ -ErrorAction SilentlyContinue) {
-            $selectedCompiler = 'clang++'
-        } elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) {
-            $selectedCompiler = 'cl'
-        } elseif (Get-Command g++ -ErrorAction SilentlyContinue) {
-            $selectedCompiler = 'g++'
-        } else {
-            Write-Error "[ls] No supported C++ compiler (clang++, cl.exe, g++) found in PATH."
-            exit 1
-        }
+    if ($Compiler -eq 'auto') {
+        if (Get-Command clang -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
+        elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) { $Compiler = 'cl' }
+        else { throw 'A Windows C compiler is required: clang or cl.exe.' }
     }
 
-    Write-Host "[ls] Compiling with $selectedCompiler..." -ForegroundColor Cyan
-
-    $outputExe = Join-Path $scriptDir "ls.exe"
-
-    if ($selectedCompiler -eq 'clang++') {
-        $cmdArgs = @("-std=c++17", "-O2") + $sources + @("-ladvapi32", "-Wl,/subsystem:console", "-o", $outputExe)
-        & clang++ $cmdArgs
-    } elseif ($selectedCompiler -eq 'cl') {
-        $cmdArgs = @("/nologo", "/EHsc", "/std:c++17", "/O2") + $sources + @("advapi32.lib", "/Fe:$outputExe")
-        & cl $cmdArgs
-        Remove-Item -Path "*.obj" -Force -ErrorAction SilentlyContinue
-    } elseif ($selectedCompiler -eq 'g++') {
-        $cmdArgs = @("-std=c++17", "-O2") + $sources + @("-ladvapi32", "-o", $outputExe)
-        & g++ $cmdArgs
+    if ($Compiler -eq 'clang') {
+        & clang -std=c17 -O2 -Wall -Wextra @sourceFiles -ladvapi32 -o ls.exe
+    } else {
+           & cl.exe /nologo /std:c17 /TC /O2 /W4 "/Fe:ls.exe" @sourceFiles /link Advapi32.lib
     }
+    if ($LASTEXITCODE -ne 0) { throw "Build failed for ls (exit $LASTEXITCODE)." }
 
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "[ls] Compilation failed with exit code $LASTEXITCODE."
-        exit $LASTEXITCODE
+    if (-not $NoInstall) {
+        $binDir = Join-Path $PSScriptRoot '../../bin'
+        New-Item -ItemType Directory $binDir -Force | Out-Null
+        Copy-Item ls.exe (Join-Path $binDir 'ls.exe') -Force
     }
-
-    Write-Host "[ls] Successfully built $outputExe" -ForegroundColor Green
-
-    if ($Install) {
-        $binDir = Resolve-Path (Join-Path $scriptDir "..\..\bin") -ErrorAction SilentlyContinue
-        if ($binDir -and (Test-Path $binDir)) {
-            $target = Join-Path $binDir "ls.exe"
-            Copy-Item -Path $outputExe -Destination $target -Force
-            Write-Host "[ls] Installed to $target" -ForegroundColor Green
-        }
-    }
-}
-finally {
+} finally {
     Pop-Location
 }

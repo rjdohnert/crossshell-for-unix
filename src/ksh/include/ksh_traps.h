@@ -92,7 +92,10 @@ enum class KillBuiltinSignal {
     Int,
     Quit,
     Kill,
-    Term
+    Term,
+    Stop,
+    Tstp,
+    Cont
 };
 
 std::wstring normalize_trap_event_name(const std::wstring& raw);
@@ -101,6 +104,8 @@ bool parse_kill_builtin_signal(const std::wstring& raw_signal, KillBuiltinSignal
 std::wstring signal_spec_to_trap_event(const std::wstring& raw_signal);
 bool force_kill_process_by_pid(DWORD pid);
 bool graceful_kill_process_by_pid(DWORD pid);
+bool suspend_process_by_pid(DWORD pid);
+bool resume_process_by_pid(DWORD pid);
 bool send_console_event_to_pid(DWORD pid, DWORD control_event);
 bool execute_registered_trap(const std::wstring& event_name, bool& should_exit_shell);
 bool queue_pending_trap_event(const std::wstring& event_name);

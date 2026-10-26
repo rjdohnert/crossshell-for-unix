@@ -27,7 +27,7 @@ bool SecurityEngine::applyPosixPermissions(const fs::path& filePath, uint32_t po
             return false;
         }
 
-        EXPLICIT_ACCESS_W ea[2] = {0};
+        EXPLICIT_ACCESS_W ea[2]{};
         ea[0].grfAccessPermissions = GENERIC_ALL;
         ea[0].grfAccessMode = SET_ACCESS;
         ea[0].grfInheritance = NO_INHERITANCE;

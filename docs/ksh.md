@@ -1,4 +1,4 @@
-# ksh
+# CrossShellKSH
 
 ## What it does
 
@@ -40,6 +40,8 @@ backslash at line end            Continue a logical command on the next line
 ```
 
 Comments begin with `#` outside quotes. Single and double quotes preserve spaces and protect shell metacharacters according to the shell's quoting rules.
+
+For commands, built-ins, and functions, descriptor and file redirections are applied left to right. For example, `command 2>&1 >out` sends stderr to the original stdout while stdout goes to `out`.
 
 ## Expansion
 
@@ -103,7 +105,7 @@ print $((2 ** 3))
 print $((5 ^ 3))
 print $((1 < 2 ? 10 : 20))
 ```
-- Interactive and diagnostics: `print`, `echo`, `printf`, `true`, `false`, `history`, `complete`, `fc`, `clear`, `math`, `read`
+- Interactive and diagnostics: `print [-n|-r|-p|-u fd]`, `echo`, `printf`, `true`, `false`, `history`, `complete`, `fc`, `clear`, `math`, `read`
 
 ## Control Flow
 
@@ -165,6 +167,25 @@ When command mode is active, cursor movement follows vi-style bounds and does no
 - `ksh --no-profile`
 - `ksh --profile C:\Users\me\.kshrc`
 - `ksh -c "echo hello"`
+
+## Development Tests
+
+From the repository root, run `pwsh -NoProfile -File src/ksh/build.ps1 test` to build `ksh`, run its internal self-tests, and run process-level script regressions. The regression suite checks output, errors, and exit status; its pipeline fixture uses the Windows `findstr` utility.
+
+Differential checks against a reference KornShell are optional. Set `KSH_REFERENCE_EXE` to the reference executable path before running the same test command; the shared syntax corpus then compares stdout, stderr, and exit status. For a WSL reference, also set `KSH_REFERENCE_WSL_DISTRO` to the distribution name and use the Linux executable path for `KSH_REFERENCE_EXE`, for example `/usr/sbin/ksh93`. The reference shell is not a build or runtime dependency.
+
+## Compatibility Snapshot
+
+This is a summary of behavior exercised by the optional differential corpus, not a claim of complete ksh93 compatibility.
+
+| Area | Current evidence |
+| --- | --- |
+| Expansion | Defaults, assignment/error operators, prefix/suffix removal, and pattern replacement are compared with ksh93. |
+| Arrays and variables | Sparse indexed arrays, associative arrays, namerefs, and function-local scope have differential cases. |
+| Compound types | Multiline `typeset -T` declarations, primitive defaults, and one nested custom type are compared; the full ksh93 compound-type surface is not claimed. |
+| Control and arithmetic | `getopts` edge cases, conditional flow, trap status, and integer arithmetic assignment are compared. |
+| Pipelines and redirection | Pipeline status, builtin stages, standard descriptor ordering, and `print -u` are compared. |
+| Windows integration | Paths, process creation, signals, terminal control, and job control are Windows-native and intentionally not Unix-equivalent. |
 
 ## Notes
 

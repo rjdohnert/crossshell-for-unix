@@ -63,6 +63,7 @@
 #include <io.h>
 #include <fcntl.h>
 #include <conio.h>
+#include <tlhelp32.h>
 
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "User32.lib")

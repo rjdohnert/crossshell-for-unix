@@ -63,7 +63,7 @@ This architecture brings the best of both worlds: the expressive ergonomics and 
 ## Current Release
 
 - **Version:** `15.7`
-- **MSI Package:** `CrossShell-for-UNIX-15.7.msi`
+- **MSI Package:** `CrossShell-for-UNIX-15.7.1.msi`
 - **Portable Archive:** `CrossShell-For-UNIX-bin.zip`
 
 ---
@@ -159,7 +159,7 @@ Installers are packaged as standard Microsoft Windows Installer (`.msi`) package
 ### GUI Installation
 
 1. Navigate to the `Release/` directory.
-2. Right-click `CrossShell-for-UNIX-15.7.msi` and select **Run as administrator**.
+2. Right-click `CrossShell-for-UNIX-15.7.1.msi` and select **Run as administrator**.
 3. Accept the User Account Control (UAC) prompt.
 4. Accept the BSD 3-Clause license agreement and follow the setup wizard to complete installation.
 
@@ -168,7 +168,7 @@ Installers are packaged as standard Microsoft Windows Installer (`.msi`) package
 Open an elevated Command Prompt or PowerShell terminal and run:
 
 ```cmd
-msiexec /i "Release\CrossShell-for-UNIX-15.7.msi"
+msiexec /i "Release\CrossShell-for-UNIX-15.7.1.msi"
 ```
 
 ### Silent Installation
@@ -176,16 +176,32 @@ msiexec /i "Release\CrossShell-for-UNIX-15.7.msi"
 To perform an unattended deployment with detailed logging:
 
 ```cmd
-msiexec /i "Release\CrossShell-for-UNIX-15.7.msi" /qn /L*V "Release\install.log"
+msiexec /i "Release\CrossShell-for-UNIX-15.7.1.msi" /qn /L*V "Release\install.log"
 ```
 
 ### Portable Installation (ZIP)
 
 The `.zip` file in the [Release/](Release/) directory (`CrossShell-For-UNIX-bin.zip`) can be used for portable installation without running an installer:
 
-1. Decompress the `.zip` file to any folder of your choice (e.g., `C:\Tools\CrossShell` or `D:\CrossShell\bin`).
-2. Add the decompressed directory containing the `.exe` files to your `PATH` environment variable (either System `PATH` or User `PATH`).
-3. Open a new Command Prompt, PowerShell, or Windows Terminal window to begin using all 250 CrossShell commands immediately.
+1. Extract the entire `.zip` file to any folder of your choice (e.g., `C:\Tools\CrossShell`).
+2. Run the utilities from the extracted `bin` folder, or optionally add that folder to your User `PATH`.
+3. Open a new terminal after configuring `PATH`. Extracting the ZIP alone does not install anything or modify your system.
+
+For an **optional system-wide installation**, open PowerShell **as administrator**, change to the extracted folder, and run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
+```
+
+The script copies the utilities to `C:\Program Files\bin` and appends that directory to the System `PATH` without duplicating an existing entry. It overwrites files with matching names but does not remove other files. Existing PATH entries retain their order, so commands earlier in PATH take precedence. Sign out and back in to ensure new terminals inherit the updated PATH. Add `-WhatIf` to preview without making changes.
+
+This optional installation does not register in **Installed apps**. See the included `README.txt` for manual removal instructions.
+
+To rebuild the ZIP from the current `bin` executables:
+
+```powershell
+.\portable\build.ps1
+```
 
 ### RPM Package (RPM)
 
@@ -246,6 +262,14 @@ The scripts can be invoked from any working directory. By default, they also
 copy the resulting executable to the project's `bin/` directory; use
 `-NoInstall` (PowerShell) or `--no-install` (batch/shell) to skip that step.
 Cleaning only removes local build artifacts, not installed binaries.
+
+RGX in `src/rgx/` uses native Windows C17 modules, built directly with `clang`
+or `cl` instead of a C++ toolchain. Its original single-file source is retained
+unchanged as `src/rgx/rg.c.orig`; the new `rg.c` is only the entry point. Use
+`./src/rgx/build.ps1 -NoInstall` or `./src/rgx/build.ps1 -Compiler cl -NoInstall`
+to build all implementation files. Batch and shell builds support the same
+`--no-install` and `--clean` flags described above. No third-party libraries,
+package managers, or generated build systems are required.
 
 ---
 

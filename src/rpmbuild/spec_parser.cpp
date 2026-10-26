@@ -10,6 +10,7 @@ SpecParser::SpecParser() {
         macros["_sysconfdir"]    = "C:\\ProgramData\\%{name}\\config";
         macros["_datadir"]       = "C:\\Program Files\\%{name}\\share";
         macros["_defaultdocdir"] = "C:\\Program Files\\%{name}\\doc";
+        macros["_tmppath"]       = fs::temp_directory_path().string();
     }
 
 std::string SpecParser::stripQuotes(const std::string& str) {
@@ -24,6 +25,24 @@ std::string SpecParser::stripQuotes(const std::string& str) {
             }
         }
         return s;
+    }
+
+std::string SpecParser::expandBracedOnly(const std::string& input) {
+        std::string result = input;
+        int depth = 0;
+        while (depth++ < 15) {
+            bool matched = false;
+            std::regex bracedRegex(R"(%\{([a-zA-Z0-9_]+)\})");
+            std::smatch match;
+            if (std::regex_search(result, match, bracedRegex)) {
+                std::string key = match[1].str();
+                std::string val = getMacroValue(key);
+                result = result.substr(0, match.position(0)) + val + result.substr(match.position(0) + match.length(0));
+                matched = true;
+            }
+            if (!matched) break;
+        }
+        return result;
     }
 
 std::string SpecParser::expand(const std::string& input) {
@@ -43,18 +62,25 @@ std::string SpecParser::expand(const std::string& input) {
                 matched = true;
             }
 
-            // 2. Match %macro_name (without braces)
+            // 2. Match %macro_name (without braces) - only if NOT part of Windows batch %VAR%
             if (!matched) {
                 std::regex simpleRegex(R"(%([a-zA-Z0-9_]+))");
                 if (std::regex_search(result, match, simpleRegex)) {
-                    std::string key = match[1].str();
-                    // Avoid expanding directives like %prep, %build, %files etc. if encountered in code
-                    if (key != "prep" && key != "build" && key != "install" && key != "clean" &&
-                        key != "pre" && key != "post" && key != "preun" && key != "postun" &&
-                        key != "files" && key != "description" && key != "package") {
-                        std::string val = getMacroValue(key);
-                        result = result.substr(0, match.position(0)) + val + result.substr(match.position(0) + match.length(0));
-                        matched = true;
+                    size_t afterMatch = match.position(0) + match.length(0);
+                    if (afterMatch < result.size() && result[afterMatch] == '%') {
+                        // Skip Windows environment variables like %BUILDROOT%
+                    } else {
+                        std::string key = match[1].str();
+                        if (key != "prep" && key != "build" && key != "install" && key != "clean" &&
+                            key != "pre" && key != "post" && key != "preun" && key != "postun" &&
+                            key != "files" && key != "description" && key != "package" &&
+                            key != "setup" && key != "autosetup" && key != "patch") {
+                            std::string val = getMacroValue(key);
+                            if (!val.empty() || macros.count(key) > 0) {
+                                result = result.substr(0, match.position(0)) + val + result.substr(match.position(0) + match.length(0));
+                                matched = true;
+                            }
+                        }
                     }
                 }
             }
@@ -65,12 +91,21 @@ std::string SpecParser::expand(const std::string& input) {
     }
 
 std::string SpecParser::getMacroValue(const std::string& key) {
-        if (key == "name") return !name.empty() ? name : (macros.count("name") ? macros["name"] : "");
-        if (key == "version") return !version.empty() ? version : (macros.count("version") ? macros["version"] : "");
-        if (key == "release") return !release.empty() ? release : (macros.count("release") ? macros["release"] : "");
-        if (key == "epoch") return !epoch.empty() ? epoch : (macros.count("epoch") ? macros["epoch"] : "0");
-        if (key == "buildroot" || key == "build_root") return !buildRoot.empty() ? buildRoot : (macros.count("buildroot") ? macros["buildroot"] : "");
-        if (macros.find(key) != macros.end()) return macros[key];
+        std::string lowerKey = key;
+        for (char& c : lowerKey) c = (char)tolower((unsigned char)c);
+
+        if (lowerKey == "name") return !name.empty() ? name : (macros.count("name") ? macros["name"] : "");
+        if (lowerKey == "version") return !version.empty() ? version : (macros.count("version") ? macros["version"] : "");
+        if (lowerKey == "release") return !release.empty() ? release : (macros.count("release") ? macros["release"] : "");
+        if (lowerKey == "epoch") return !epoch.empty() ? epoch : (macros.count("epoch") ? macros["epoch"] : "0");
+        if (lowerKey == "buildroot" || lowerKey == "build_root") return !buildRoot.empty() ? buildRoot : (macros.count("buildroot") ? macros["buildroot"] : "");
+        if (lowerKey == "_tmppath") return fs::temp_directory_path().string();
+
+        auto it = macros.find(key);
+        if (it != macros.end()) return it->second;
+        auto itLower = macros.find(lowerKey);
+        if (itLower != macros.end()) return itLower->second;
+
         return "";
     }
 
@@ -89,15 +124,16 @@ bool SpecParser::parseFile(const fs::path& specPath) {
             std::string content = sectionBuffer.str();
             sectionBuffer.str("");
             sectionBuffer.clear();
-            if (currentSection == "%prep") prepScript = content;
-            else if (currentSection == "%build") buildScript = content;
-            else if (currentSection == "%install") installScript = content;
-            else if (currentSection == "%clean") cleanScript = content;
-            else if (currentSection == "%pre") preScript = content;
-            else if (currentSection == "%post") postScript = content;
-            else if (currentSection == "%preun") preunScript = content;
-            else if (currentSection == "%postun") postunScript = content;
-            else if (currentSection == "%description") description = content;
+            std::string expanded = expandBracedOnly(content);
+            if (currentSection == "%prep") prepScript = expanded;
+            else if (currentSection == "%build") buildScript = expanded;
+            else if (currentSection == "%install") installScript = expanded;
+            else if (currentSection == "%clean") cleanScript = expanded;
+            else if (currentSection == "%pre") preScript = expanded;
+            else if (currentSection == "%post") postScript = expanded;
+            else if (currentSection == "%preun") preunScript = expanded;
+            else if (currentSection == "%postun") postunScript = expanded;
+            else if (currentSection == "%description") description = expanded;
         };
 
         bool firstLine = true;
@@ -123,10 +159,19 @@ bool SpecParser::parseFile(const fs::path& specPath) {
                 size_t vFirst = val.find_first_not_of(" \t");
                 if (vFirst != std::string::npos) val = val.substr(vFirst);
                 val = stripQuotes(val);
-                macros[key] = val;
-                if (key == "name") name = val;
-                else if (key == "version") version = val;
-                else if (key == "release") release = val;
+                bool isCliDefined = false;
+                for (const auto& m : cliDefinedMacros) {
+                    if (_stricmp(m.c_str(), key.c_str()) == 0) {
+                        isCliDefined = true;
+                        break;
+                    }
+                }
+                if (!isCliDefined) {
+                    macros[key] = val;
+                    if (key == "name") name = val;
+                    else if (key == "version") version = val;
+                    else if (key == "release") release = val;
+                }
                 continue;
             }
 
@@ -155,22 +200,35 @@ bool SpecParser::parseFile(const fs::path& specPath) {
                     std::string val = trimmed.substr(sep + 1);
                     size_t vFirst = val.find_first_not_of(" \t");
                     if (vFirst != std::string::npos) val = val.substr(vFirst);
-                    val = stripQuotes(val);
+                    val = expand(stripQuotes(val));
 
-                    if (_stricmp(key.c_str(), "Name") == 0) { name = val; macros["name"] = val; }
-                    else if (_stricmp(key.c_str(), "Version") == 0) { version = val; macros["version"] = val; }
-                    else if (_stricmp(key.c_str(), "Release") == 0) { release = val; macros["release"] = val; }
-                    else if (_stricmp(key.c_str(), "Epoch") == 0) { epoch = val; macros["epoch"] = val; }
-                    else if (_stricmp(key.c_str(), "Summary") == 0) summary = val;
-                    else if (_stricmp(key.c_str(), "License") == 0) license = val;
-                    else if (_stricmp(key.c_str(), "Group") == 0) group = val;
-                    else if (_stricmp(key.c_str(), "URL") == 0) url = val;
-                    else if (_stricmp(key.c_str(), "Vendor") == 0) vendor = val;
-                    else if (_stricmp(key.c_str(), "BuildArch") == 0) buildArch = val;
-                    else if (_stricmp(key.c_str(), "BuildRoot") == 0) buildRoot = val;
-                    else if (_stricmp(key.c_str(), "Requires") == 0) parseDependencyList(val, requirements);
-                    else if (_stricmp(key.c_str(), "Provides") == 0) parseDependencyList(val, provides);
-                    else if (_stricmp(key.c_str(), "Conflicts") == 0) parseDependencyList(val, conflicts);
+                    std::string lowerKey = key;
+                    for (char& c : lowerKey) c = (char)tolower((unsigned char)c);
+
+                    auto isCli = [&](const std::string& k) {
+                        for (const auto& m : cliDefinedMacros) {
+                            if (_stricmp(m.c_str(), k.c_str()) == 0) return true;
+                        }
+                        return false;
+                    };
+
+                    if (lowerKey == "name") { if (!isCli("name")) { name = val; macros["name"] = val; } }
+                    else if (lowerKey == "version") { if (!isCli("version")) { version = val; macros["version"] = val; } }
+                    else if (lowerKey == "release") { if (!isCli("release")) { release = val; macros["release"] = val; } }
+                    else if (lowerKey == "epoch") { epoch = val; macros["epoch"] = val; }
+                    else if (lowerKey == "summary") summary = val;
+                    else if (lowerKey == "license") license = val;
+                    else if (lowerKey == "group") group = val;
+                    else if (lowerKey == "url") url = val;
+                    else if (lowerKey == "vendor") vendor = val;
+                    else if (lowerKey == "packager") packager = val;
+                    else if (lowerKey == "buildarch") buildArch = val;
+                    else if (lowerKey == "buildroot") buildRoot = val;
+                    else if (lowerKey.rfind("source", 0) == 0) sources.push_back(val);
+                    else if (lowerKey.rfind("patch", 0) == 0) patches.push_back(val);
+                    else if (lowerKey == "requires") parseDependencyList(val, requirements);
+                    else if (lowerKey == "provides") parseDependencyList(val, provides);
+                    else if (lowerKey == "conflicts") parseDependencyList(val, conflicts);
                 }
             } else if (currentSection == "%files") {
                 parseFileDirective(trimmed);
@@ -188,25 +246,40 @@ bool SpecParser::parseFile(const fs::path& specPath) {
     }
 
 void SpecParser::parseDependencyList(const std::string& line, std::vector<DependencySpec>& list) {
-        // Split dependencies by comma
-        std::stringstream ss(line);
-        std::string item;
-        while (std::getline(ss, item, ',')) {
-            std::istringstream iss(item);
-            std::string depName, op, depVer;
-            if (iss >> depName) {
-                DependencySpec spec;
-                spec.name = stripQuotes(depName);
-                if (iss >> op >> depVer) {
-                    spec.version = stripQuotes(depVer);
+        std::vector<std::string> tokens;
+        std::string current;
+        for (char c : line) {
+            if (c == ',' || isspace((unsigned char)c)) {
+                if (!current.empty()) {
+                    tokens.push_back(stripQuotes(current));
+                    current.clear();
+                }
+            } else {
+                current.push_back(c);
+            }
+        }
+        if (!current.empty()) tokens.push_back(stripQuotes(current));
+
+        auto isOp = [](const std::string& s) {
+            return s == ">=" || s == "<=" || s == "=" || s == "==" || s == ">" || s == "<";
+        };
+
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            if (tokens[i].empty()) continue;
+            DependencySpec spec;
+            spec.name = tokens[i];
+            if (i + 1 < tokens.size() && isOp(tokens[i + 1])) {
+                std::string op = tokens[++i];
+                if (i + 1 < tokens.size()) {
+                    spec.version = tokens[++i];
                     if (op == ">=") spec.flags = RPMSENSE_GREATER | RPMSENSE_EQUAL;
                     else if (op == "<=") spec.flags = RPMSENSE_LESS | RPMSENSE_EQUAL;
                     else if (op == "=" || op == "==") spec.flags = RPMSENSE_EQUAL;
                     else if (op == ">") spec.flags = RPMSENSE_GREATER;
                     else if (op == "<") spec.flags = RPMSENSE_LESS;
                 }
-                list.push_back(spec);
             }
+            list.push_back(spec);
         }
     }
 

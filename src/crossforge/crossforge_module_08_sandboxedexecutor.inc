@@ -155,7 +155,7 @@ public:
         // Create a restricted Windows Job Object for Sandboxing child processes
         HANDLE hJob = CreateJobObjectW(NULL, NULL);
         if (hJob) {
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = { 0 };
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli{};
             jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             jeli.BasicLimitInformation.ActiveProcessLimit = GetActiveProcessLimit();
             if (jeli.BasicLimitInformation.ActiveProcessLimit > 0) {
@@ -184,7 +184,7 @@ public:
 
         PROCESS_INFORMATION pi{};
         const std::string shellPath = ResolveShellPath();
-        const std::string shellCommand = "\"" + shellPath + "\" /d /c " + StripCmdPrefix(command);
+        const std::string shellCommand = "\"" + shellPath + "\" /d /s /c \"" + StripCmdPrefix(command) + "\"";
         std::wstring shellPathW = Utf8ToWide(shellPath);
         std::wstring shellCommandW = Utf8ToWide(shellCommand);
         // CreateProcessW requires a writable command-line buffer.
@@ -256,9 +256,12 @@ public:
                 DWORD bytesRead = 0;
                 BOOL okRead = ReadFile(readerState.pipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr);
                 if (!okRead || bytesRead == 0) {
+                    DWORD err = GetLastError();
                     // Pipe closed (child exited / error). Signal so the waiter wakes.
                     if (readerState.dataEvent) SetEvent(readerState.dataEvent);
-                    if (!okRead) readerState.readError.store(true);
+                    if (!okRead && err != ERROR_BROKEN_PIPE && err != ERROR_HANDLE_EOF && err != ERROR_OPERATION_ABORTED) {
+                        readerState.readError.store(true);
+                    }
                     break;
                 }
                 buffer[bytesRead] = '\0';
@@ -277,6 +280,7 @@ public:
         };
 
         HANDLE waitHandles[2] = { pi.hProcess, hPipeDataEvent };
+        DWORD waitResult = WAIT_TIMEOUT;
         while (true) {
             // Compute remaining time so we wake promptly at the deadline even if
             // no events fire; 50 ms slices keep ESC-cancel responsive.
@@ -289,7 +293,7 @@ public:
                 slice = 0;
             }
 
-            DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, slice);
+            waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, slice);
             flushPipeOutput();
 
             if (waitResult == WAIT_OBJECT_0) {
@@ -297,7 +301,6 @@ public:
                 break;
             }
             if (waitResult == WAIT_FAILED) {
-                outputText += "\n[CrossForge] Failed waiting on process handle.";
                 readError = true;
                 break;
             }
@@ -309,7 +312,7 @@ public:
             HANDLE inputHandle = GetStdHandle(STD_INPUT_HANDLE);
             if (inputHandle != INVALID_HANDLE_VALUE && CheckEscapeCancel(inputHandle)) {
                 cancelled = true;
-                outputText += "\n[CrossForge] Process cancelled by user.";
+                if (hJob) TerminateJobObject(hJob, 123);
                 TerminateProcess(pi.hProcess, 123);
                 WaitForSingleObject(pi.hProcess, 2000);
                 break;
@@ -317,7 +320,7 @@ public:
 
             if (GetTickCount64() >= deadline) {
                 timedOut = true;
-                outputText += "\n[CrossForge] Process timed out after " + std::to_string(timeoutMs) + " ms.";
+                if (hJob) TerminateJobObject(hJob, 124);
                 TerminateProcess(pi.hProcess, 124);
                 WaitForSingleObject(pi.hProcess, 2000);
                 break;
@@ -332,6 +335,14 @@ public:
         if (pipeReader.joinable()) pipeReader.join();
         if (readerState.readError.load()) readError = true;
         if (hPipeDataEvent) CloseHandle(hPipeDataEvent);
+
+        if (waitResult == WAIT_FAILED) {
+            outputText += "\n[CrossForge] Failed waiting on process handle.";
+        } else if (cancelled) {
+            outputText += "\n[CrossForge] Process cancelled by user.";
+        } else if (timedOut) {
+            outputText += "\n[CrossForge] Process timed out after " + std::to_string(timeoutMs) + " ms.";
+        }
 
         bool ok = false;
         if (!timedOut && !cancelled && !readError) {

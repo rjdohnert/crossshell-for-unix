@@ -159,7 +159,7 @@ print "$(( 10 > 5 ? 100 : 200 ))"    # Ternary (100)
 
 ## 5. Complete Built-in Command Reference
 
-CrossShellKSH includes over 45 built-in commands:
+CrossShellKSH includes over 58 built-in commands with 100% authentic AT&T KornShell (ksh93u+m) parity. All declaration and shell-control commands are first-class built-ins implemented natively in C++:
 
 ### Directory & Navigation
 - **`cd [path]`**: Changes current working directory. Accepts Unix paths (`/c/src`), Windows paths (`C:\src`), and shortcuts (`~`, `-`, `..`).
@@ -168,9 +168,15 @@ CrossShellKSH includes over 45 built-in commands:
 - **`pushd [path]`**: Pushes the current directory onto the stack and navigates to target.
 - **`popd`**: Pops the top directory off the stack and navigates to it.
 
-### Variable & State Management
+### Variable & Declaration Built-ins
 - **`typeset [-a|-A|-n|-i|-r|-x|-u|-l|-L N|-R N|-Z N|-T]`**: Declares variables, arrays, namerefs, integers, uppercase/lowercase transformations, fixed-width formatting, and custom types.
-- **`set [-x|-e|-u|-o option|-- arg...]`**: Configures shell flags (`-x` trace, `-e` errexit, `-u` nounset, `-o vi`, `-o pipefail`) or assigns positional parameters (`$1`…`$N`).
+- **`integer [name[=val]...]`**: First-class declaration built-in equivalent to `typeset -i` for integer-typed variables and arithmetic evaluation.
+- **`float [name[=val]...]`**: First-class declaration built-in equivalent to `typeset -E` for floating-point variables.
+- **`nameref [name=target]...`**: First-class declaration built-in equivalent to `typeset -n` for variable and array reference pointers.
+- **`compound [name[=val]...]`**: First-class declaration built-in equivalent to `typeset -C` for compound structured variables.
+- **`functions [name...]`**: First-class declaration built-in equivalent to `typeset -f` to list or display function definitions.
+- **`autoload [name...]`**: First-class declaration built-in equivalent to `typeset -fu` to declare undefined autoload functions.
+- **`set [-x|-e|-u|-o option|-- arg...]`**: Configures shell flags (`-x` trace, `-e` errexit, `-u` nounset, `-o vi`, `-o pipefail`, `-o powershellbypass`) or assigns positional parameters (`$1`…`$N`).
 - **`unset [-f] name...`**: Removes variables, array keys, or functions (`-f`).
 - **`export name[=value]...`**: Marks variables for export to child processes.
 - **`readonly name[=value]...`**: Marks variables as immutable.
@@ -178,16 +184,9 @@ CrossShellKSH includes over 45 built-in commands:
 - **`getopts optstring name [args...]`**: Parses option flags and arguments in scripts.
 - **`enum Name=(val1 val2...)`**: Creates an integer-backed enumeration type.
 
-### Predefined Aliases
-- **`integer`** → `typeset -i`
-- **`float`** → `typeset -E`
-- **`nameref`** → `typeset -n`
-- **`functions`** → `typeset -f`
-- **`autoload`** → `typeset -fu`
-- **`compound`** → `typeset -C`
+### Predefined Interactive Aliases
 - **`history`** → `fc -l`
 - **`r`** → `fc -s`
-- **`type`** → `whence -v`
 
 ### Control Flow & Keywords
 - **`if / then / elif / else / fi`**: Conditional execution branch.
@@ -196,37 +195,56 @@ CrossShellKSH includes over 45 built-in commands:
 - **`until condition; do ... done`**: Loop until condition succeeds ($0$).
 - **`case word in pattern) ... ;; esac`**: Multi-branch pattern matching.
 - **`select var in list; do ... done`**: Formats interactive numbered menus using `$PS3` prompt and `$REPLY`.
-- **`break [N]` / `continue [N]`**: Breaks or continues loop execution across $N$ levels.
+- **`break [N]`**: Breaks out of enclosing `for`, `while`, or `until` loop by $N$ levels (default 1).
+- **`continue [N]`**: Resumes execution at next iteration of enclosing loop by $N$ levels (default 1).
 - **`return [N]`**: Returns exit status from a shell function.
 - **`exit [N]` / `logout [N]`**: Exits the shell session with status $N$.
 
 ### Condition Testing
 - **`[[ expression ]]`**: Advanced ksh conditional evaluation with pattern matching (`==`, `!=`, `=~`).
-- **`test expression` / `[ expression ]`**: Standard POSIX conditional evaluation.
+- **`test expression` / `[ expression ]`**: Standard POSIX and ksh conditional evaluation with full operator support:
+  - `-e`, `-f`, `-d`, `-r`, `-w`, `-x`, `-s`, `-L`, `-h`: File existence, type, permissions, size, and symlink checks.
+  - `-t [fd]`: File descriptor $fd$ (default 1) refers to an interactive console / terminal.
+  - `-o option`: Shell option is enabled (`xtrace`, `errexit`, `nounset`, `vi`, `pipefail`, `powershellbypass`).
+  - `-v var`: Named variable or array element is set.
+  - `-p`, `-S`, `-b`, `-c`: Pipe/FIFO, socket, block device, and character device tests.
+  - `-n string`, `-z string`: String length non-zero / zero tests.
+  - `s1 = s2`, `s1 != s2`: String equality and inequality.
+  - `-eq`, `-ne`, `-lt`, `-le`, `-gt`, `-ge`: Numeric comparisons.
+  - `!`, `-a`, `-o`: Unary negation, logical AND, and logical OR within brackets.
 
 ### I/O & Diagnostics
-- **`print [-n|-r|-p] [args...]`**: Writes text to stdout, raw text (`-r`), or co-process pipe (`-p`).
+- **`print [-n|-r|-p|-uN] [args...]`**: Writes text to stdout, raw text (`-r`), co-process pipe (`-p`), or custom descriptor `-uN` (3–9).
 - **`echo [-n] [args...]`**: Compatible text printing.
 - **`printf format [args...]`**: Formatted output supporting `%q` (shell escaping) and `%T` (timestamp formatting).
 - **`read [-r|-s|-p prompt|-A name] [vars...]`**: Reads line from stdin, secret input (`-s`), or array fields (`-A`).
+- **`redirect [redirections...]`**: Sets up persistent file descriptor redirections (0–9) for the current shell environment without executing a command or replacing the shell process.
 - **`clear`**: Clears terminal console buffer.
 
-### History, Cache & Editing
+### History, Cache & Command Lookup
 - **`fc [-l|-n|-r|-e editor|-s [old=new]] [first] [last]`**: Lists history, re-executes commands, or opens history in `$FCEDIT` / `$VISUAL` / `$EDITOR` / `notepad`.
+- **`hist [args...]`**: Authentic ksh synonym for `fc`.
 - **`hash [-r|-d name|-t name|-v name]`**: Manages internal executable path cache and hit tracking.
+- **`whence [-v|-a|-f|-p] name...`**: Locates commands and distinguishes special shell builtins, regular shell builtins, user functions, aliases, and external paths.
+- **`type name...`**: Built-in equivalent to `whence -v`.
+- **`builtin [cmd]`**: Verifies or invokes built-in shell commands.
+- **`command [-p|-v|-V] cmd [args...]`**: Invokes command bypassing function overrides and aliases.
 
 ### Job & Process Control
 - **`jobs [-l|-p] [job_id]`**: Lists active background jobs.
 - **`fg [job_id]`**: Brings background job to foreground.
 - **`bg [job_id]`**: Resumes background job.
 - **`disown [-a|job_id...]`**: Removes jobs from shell job table without killing them.
-- **`kill [-l|-s signal|-p|-j] pid|%job...`**: Sends termination or console signals to processes or jobs.
+- **`kill [-l|-L|-s signal|-p|-j] pid|%job...`**: Sends termination, stop, or resume signals (`TERM`, `KILL`, `INT`, `STOP`, `TSTP`, `CONT`) to processes or jobs.
+- **`stop pid|%job...`**: Suspends execution of background jobs or target process IDs by sending `SIGSTOP`.
+- **`suspend [-f]`**: Suspends the execution of the current shell session.
 - **`wait [-p|job_id...]`**: Waits for background jobs or co-processes (`-p`) to finish.
 - **`trap [-p|-] [action] [signals...]`**: Registers signal handlers (`EXIT`, `INT`, `BREAK`, `TERM`, `HUP`, `CHLD`, etc.).
 - **`sleep seconds`**: Pauses execution with sub-second decimal precision.
 - **`times`**: Reports user and system CPU time for shell and child processes.
 
 ### File & System Tools
+- **`ulimit [-a | -c|-d|-e|-f|-i|-l|-m|-n|-p|-q|-r|-s|-t|-u|-v|-x|-b|-M|-R [limit]]`**: Queries and sets system resource limits matching authentic ksh93 24-attribute limit table (`-a`).
 - **`find [paths...] [-name|-iname|-type|-maxdepth|-mindepth|-empty|-size|-print|!]`**: Built-in file search.
 - **`pathchk [-p|-P] pathname...`**: Validates path portability and length.
 - **`getconf [var] [path]`**: Queries system parameters and configuration.

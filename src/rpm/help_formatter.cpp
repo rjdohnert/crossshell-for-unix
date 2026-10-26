@@ -27,6 +27,8 @@ OPTIONS
             List files in package.
         -p, --package
             Query an uninstalled package file.
+        -f, --file
+            Query package owning FILE.
         --whatprovides CAPABILITY
             Query package providing specific capability.
         --whatrequires CAPABILITY
@@ -73,6 +75,12 @@ EXAMPLES
 
     rpm -ql package-name
         List files installed by a package.
+
+    rpm -qf path\to\file
+        Query package owning a file.
+
+    rpm -Va
+        Verify integrity of all installed packages.
 
     rpm -U package.rpm --test
         Validate an upgrade without extracting files.

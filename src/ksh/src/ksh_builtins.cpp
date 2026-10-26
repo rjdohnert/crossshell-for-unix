@@ -66,6 +66,12 @@ const std::vector<BuiltinCommandHelp>& builtin_command_help_entries() {
         {L"eval", L"Evaluate and execute constructed command text."},
         {L"getopts", L"Parse positional options into shell variables."},
         {L"typeset", L"Declare or inspect shell variables, including -L/-R/-Z justification."},
+        {L"integer", L"Declare integer variables (typeset -i)."},
+        {L"float", L"Declare floating point variables (typeset -E)."},
+        {L"nameref", L"Declare variable name references (typeset -n)."},
+        {L"compound", L"Declare compound data structures (typeset -C)."},
+        {L"functions", L"Display or declare shell functions (typeset -f)."},
+        {L"autoload", L"Mark functions for autoloading from FPATH (typeset -fu)."},
         {L"enum", L"Define an integer enumeration: enum Name=(value ...)."},
         {L"[[", L"Evaluate a ksh-style conditional expression."},
         {L"test", L"Evaluate a conditional expression."},
@@ -82,6 +88,8 @@ const std::vector<BuiltinCommandHelp>& builtin_command_help_entries() {
         {L"false", L"Return failure status 1."},
         {L"let", L"Evaluate arithmetic expressions and return success when the final value is non-zero."},
         {L"return", L"Return from the current function."},
+        {L"break", L"Exit from enclosing for, while, until, or select loop."},
+        {L"continue", L"Resume next iteration of enclosing for, while, until, or select loop."},
         {L"clear", L"Clear the terminal screen."},
         {L"history", L"Show the current command history."},
         {L"complete", L"Show command completion candidates."},
@@ -90,6 +98,8 @@ const std::vector<BuiltinCommandHelp>& builtin_command_help_entries() {
         {L"jobs", L"List background jobs (jobs [-l|-p] [job...])."},
         {L"fg", L"Bring a background job to the foreground."},
         {L"bg", L"Continue a background job."},
+        {L"stop", L"Suspend execution of background or foreground jobs (equivalent to kill -s STOP)."},
+        {L"suspend", L"Suspend execution of the current shell session."},
         {L"disown", L"Remove background jobs from the job table without terminating them."},
         {L"kill", L"Send a signal to a process ID or shell job (%job, -p for pid, -j for job)."},
         {L"wait", L"Wait for one or more jobs to finish."},
@@ -97,8 +107,11 @@ const std::vector<BuiltinCommandHelp>& builtin_command_help_entries() {
         {L"find", L"Search for files in a directory hierarchy."},
         {L"read", L"Read a line from standard input and assign fields to variables or -A arrays."},
         {L"exec", L"Replace the shell process with the specified command, or redirect shell handles."},
+        {L"redirect", L"Open, close, or duplicate file descriptors with persistent effect."},
         {L"umask", L"Set or print the file mode creation mask."},
+        {L"ulimit", L"Set or display process and job resource limits (ulimit [-HSaMctdfkxlqenVuPpmrRbiswTv] [limit])."},
         {L"fc", L"List, edit, and re-execute historical shell commands."},
+        {L"hist", L"List, edit, or re-execute historical commands (synonym for fc)."},
         {L"stty", L"Set or print terminal line configuration settings."},
         {L"times", L"Print accumulated user and system CPU times for shell and children."},
         {L"sleep", L"Pause for a decimal number of seconds; pending console signals interrupt the wait."},
@@ -124,12 +137,12 @@ const BuiltinCommandHelp* find_builtin_command_help(std::wstring_view name) {
 
 const std::vector<BuiltinCommandGroup>& builtin_command_help_groups() {
     static const std::vector<BuiltinCommandGroup> groups = {
-        { L"Shell control", { L"exit", L"logout", L"builtin", L"command", L"whence", L"type", L"eval", L"source", L".", L"exec", L"stty" } },
+        { L"Shell control", { L"exit", L"logout", L"builtin", L"command", L"whence", L"type", L"eval", L"source", L".", L"exec", L"redirect", L"stty", L"break", L"continue" } },
         { L"Directory navigation", { L"cd", L"pwd", L"dirs", L"pushd", L"popd" } },
-        { L"Variables and expansion", { L"set", L"unset", L"export", L"readonly", L"typeset", L"enum", L"getopts", L"alias", L"unalias", L"hash", L"let", L"return", L"[[", L"test", L"[" } },
-        { L"Jobs and signals", { L"jobs", L"fg", L"bg", L"disown", L"kill", L"wait", L"trap", L"coproc" } },
-        { L"Files and system", { L"find", L"pathchk", L"getconf", L"umask", L"times", L"sleep", L"shift", L":" } },
-        { L"Interactive and diagnostics", { L"print", L"echo", L"printf", L"true", L"false", L"history", L"complete", L"fc", L"clear", L"math", L"read" } }
+        { L"Variables and expansion", { L"set", L"unset", L"export", L"readonly", L"typeset", L"integer", L"float", L"nameref", L"compound", L"functions", L"autoload", L"enum", L"getopts", L"alias", L"unalias", L"hash", L"let", L"return", L"[[", L"test", L"[" } },
+        { L"Jobs and signals", { L"jobs", L"fg", L"bg", L"disown", L"kill", L"stop", L"suspend", L"wait", L"trap", L"coproc" } },
+        { L"Files and system", { L"find", L"pathchk", L"getconf", L"ulimit", L"umask", L"times", L"sleep", L"shift", L":" } },
+        { L"Interactive and diagnostics", { L"print", L"echo", L"printf", L"true", L"false", L"history", L"complete", L"fc", L"hist", L"clear", L"math", L"read" } }
     };
     return groups;
 }
@@ -478,6 +491,76 @@ bool execute_builtin_help(const std::vector<std::wstring>& tokens, const std::fu
             return true;
         }
 
+        if (target == L"ulimit") {
+            write_output(L"ulimit - set or display process resource limits\n\n"
+                         L"Usage:\n"
+                         L"  ulimit [-HSaMctdfkxlqenVuPpmrRbiswTv] [limit]\n\n"
+                         L"Options:\n"
+                         L"  -a     Display all current resource limits.\n"
+                         L"  -c     Core file size in 512-byte blocks.\n"
+                         L"  -d     Data area size in Kibytes.\n"
+                         L"  -e     Scheduling priority (nice).\n"
+                         L"  -f     File size in 512-byte blocks (default).\n"
+                         L"  -m     Physical memory size in Kibytes.\n"
+                         L"  -n     Number of open file descriptors / handles.\n"
+                         L"  -p     Pipe buffer size in bytes.\n"
+                         L"  -s     Stack size in Kibytes.\n"
+                         L"  -t     CPU time in seconds.\n"
+                         L"  -u     Number of user processes.\n"
+                         L"  -v     Virtual memory size in Kibytes.\n"
+                         L"  -H     Set/query hard limit.\n"
+                         L"  -S     Set/query soft limit.\n");
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+
+        if (target == L"redirect") {
+            write_output(L"redirect - open, close, and duplicate file descriptors\n\n"
+                         L"Usage:\n"
+                         L"  redirect [redirection...]\n\n"
+                         L"Description:\n"
+                         L"  Applies input/output redirections permanently to the shell environment\n"
+                         L"  without replacing the shell process. File descriptors 0-9 are supported.\n\n"
+                         L"Examples:\n"
+                         L"  redirect 3>output.txt    # Open descriptor 3 for writing\n"
+                         L"  redirect 3>&-            # Close descriptor 3\n");
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+
+        if (target == L"suspend") {
+            write_output(L"suspend - suspend execution of the current shell\n\n"
+                         L"Usage:\n"
+                         L"  suspend [-f]\n\n"
+                         L"Description:\n"
+                         L"  Sends SIGSTOP to the shell process until resumed by SIGCONT.\n"
+                         L"  Refuses to suspend a login shell unless -f is specified.\n");
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+
+        if (target == L"stop") {
+            write_output(L"stop - suspend background or foreground jobs\n\n"
+                         L"Usage:\n"
+                         L"  stop pid|%job...\n\n"
+                         L"Description:\n"
+                         L"  Sends SIGSTOP to the specified process IDs or shell jobs.\n"
+                         L"  Equivalent to kill -s STOP.\n");
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+
+        if (target == L"hist") {
+            write_output(L"hist - list, edit, or re-execute historical shell commands\n\n"
+                         L"Usage:\n"
+                         L"  hist [-e editor] [-N num] [-nlr] [first [last]]\n"
+                         L"  hist -s [old=new] [command]\n\n"
+                         L"Description:\n"
+                         L"  Provides access to the shell command history list. Identical to fc.\n");
+            ksh_env.variables[L"?"] = L"0";
+            return true;
+        }
+
         const std::wstring lowered_target = to_lower_copy(target);
         if (lowered_target == L"all" || lowered_target == L"full" || lowered_target == L"reference") {
             write_full_help_text(write_output);
@@ -639,6 +722,15 @@ CommandResolutionKind resolve_command_kind(const std::wstring& name, std::wstrin
     return CommandResolutionKind::Missing;
 }
 
+bool is_special_builtin_command(const std::wstring& name) {
+    static const std::set<std::wstring> special = {
+        L":", L".", L"break", L"continue", L"eval", L"exec", L"exit",
+        L"export", L"readonly", L"return", L"set", L"shift", L"times",
+        L"trap", L"typeset", L"unset"
+    };
+    return special.find(name) != special.end();
+}
+
 std::wstring command_kind_description(const std::wstring& name, bool verbose, bool ksh_style) {
     std::wstring detail;
     CommandResolutionKind kind = resolve_command_kind(name, detail);
@@ -651,6 +743,9 @@ std::wstring command_kind_description(const std::wstring& name, bool verbose, bo
             return name + L" is a function";
         }
         if (kind == CommandResolutionKind::Builtin) {
+            if (is_special_builtin_command(name)) {
+                return name + L" is a special shell builtin";
+            }
             return name + L" is a shell builtin";
         }
         if (kind == CommandResolutionKind::External) {
@@ -713,15 +808,8 @@ bool is_alias_defined(const std::wstring& name) {
 
 bool initialize_default_shell_aliases() {
     if (g_main_aliases.empty()) {
-        g_main_aliases[L"integer"] = L"typeset -i";
-        g_main_aliases[L"float"] = L"typeset -E";
-        g_main_aliases[L"nameref"] = L"typeset -n";
-        g_main_aliases[L"functions"] = L"typeset -f";
-        g_main_aliases[L"autoload"] = L"typeset -fu";
-        g_main_aliases[L"compound"] = L"typeset -C";
         g_main_aliases[L"history"] = L"fc -l";
         g_main_aliases[L"r"] = L"fc -s";
-        g_main_aliases[L"type"] = L"whence -v";
     }
     return true;
 }
@@ -934,7 +1022,73 @@ static bool evaluate_file_unary_operator(const std::wstring& op, const std::wstr
         return true;
     }
 
+    if (op == L"-p") {
+        result = path.rfind(L"\\\\.\\pipe\\", 0) == 0;
+        return true;
+    }
+
+    if (op == L"-S") {
+        result = false;
+        return true;
+    }
+
+    if (op == L"-b") {
+        result = false;
+        return true;
+    }
+
+    if (op == L"-c") {
+        std::wstring upper_path = to_upper_copy(path);
+        result = (upper_path == L"NUL" || upper_path == L"CON" || upper_path == L"CONIN$" ||
+                  upper_path == L"CONOUT$" || upper_path == L"AUX" || upper_path == L"PRN" ||
+                  (upper_path.size() == 4 && upper_path.rfind(L"COM", 0) == 0 && std::iswdigit(upper_path[3])));
+        return true;
+    }
+
     return false;
+}
+
+bool is_terminal_file_descriptor(int fd) {
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    if (fd == 0) {
+        handle = GetStdHandle(STD_INPUT_HANDLE);
+    } else if (fd == 1) {
+        handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    } else if (fd == 2) {
+        handle = GetStdHandle(STD_ERROR_HANDLE);
+    } else {
+        return false;
+    }
+    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD mode = 0;
+    if (GetConsoleMode(handle, &mode)) {
+        return true;
+    }
+    return GetFileType(handle) == FILE_TYPE_CHAR;
+}
+
+bool is_shell_option_enabled(const std::wstring& opt_name) {
+    std::wstring lower = to_lower_copy(opt_name);
+    if (lower == L"xtrace" || lower == L"x") return g_xtrace_enabled;
+    if (lower == L"errexit" || lower == L"e") return g_errexit_enabled;
+    if (lower == L"nounset" || lower == L"u") return g_nounset_enabled;
+    if (lower == L"vi") return g_vi_mode_enabled;
+    if (lower == L"pipefail") return g_pipefail_enabled;
+    if (lower == L"powershellbypass") return g_powershell_bypass_enabled;
+    return false;
+}
+
+bool is_variable_or_array_set(const std::wstring& var_name) {
+    if (ksh_env.variables.find(var_name) != ksh_env.variables.end()) {
+        return true;
+    }
+    if (ksh_env.arrays.find(var_name) != ksh_env.arrays.end()) {
+        return true;
+    }
+    DWORD env_len = GetEnvironmentVariableW(var_name.c_str(), nullptr, 0);
+    return env_len > 0;
 }
 
 static bool evaluate_file_comparison_operator(const std::wstring& left, const std::wstring& op, const std::wstring& right, bool& result, std::wstring& error_message) {
@@ -993,7 +1147,11 @@ static bool evaluate_ksh_simple_condition(const std::vector<std::wstring>& token
     size_t count = end - begin;
 
     if (count == 1) {
-        result = !tokens[begin].empty();
+        if (tokens[begin] == L"-t") {
+            result = is_terminal_file_descriptor(1);
+        } else {
+            result = !tokens[begin].empty();
+        }
     } else if (count == 2) {
         const std::wstring op = tokens[begin];
         const std::wstring operand = tokens[begin + 1];
@@ -1001,6 +1159,17 @@ static bool evaluate_ksh_simple_condition(const std::vector<std::wstring>& token
             result = !operand.empty();
         } else if (op == L"-z") {
             result = operand.empty();
+        } else if (op == L"-t") {
+            int fd = 0;
+            if (try_parse_int_strict(operand, fd) && fd >= 0) {
+                result = is_terminal_file_descriptor(fd);
+            } else {
+                result = false;
+            }
+        } else if (op == L"-o") {
+            result = is_shell_option_enabled(operand);
+        } else if (op == L"-v") {
+            result = is_variable_or_array_set(operand);
         } else if (evaluate_file_unary_operator(op, operand, result)) {
             // File test operator evaluated.
         } else {
@@ -1095,7 +1264,8 @@ static bool is_test_close_paren(const std::wstring& token) {
 
 static bool is_supported_unary_condition_operator(const std::wstring& op) {
     return op == L"-n" || op == L"-z" || op == L"-e" || op == L"-a" || op == L"-f" || op == L"-d" ||
-           op == L"-h" || op == L"-L" || op == L"-s" || op == L"-r" || op == L"-w" || op == L"-x";
+           op == L"-h" || op == L"-L" || op == L"-s" || op == L"-r" || op == L"-w" || op == L"-x" ||
+           op == L"-t" || op == L"-o" || op == L"-v" || op == L"-p" || op == L"-S" || op == L"-b" || op == L"-c";
 }
 
 static bool is_supported_binary_condition_operator(const std::wstring& op) {
@@ -2211,5 +2381,171 @@ bool execute_builtin_pathchk(const std::vector<std::wstring>& tokens) {
     }
 
     ksh_env.variables[L"?"] = all_ok ? L"0" : L"1";
+    return true;
+}
+
+struct KshResourceLimits {
+    std::wstring address_space = L"unlimited";     // -M
+    std::wstring core_file_size = L"0";            // -c
+    std::wstring cpu_time = L"unlimited";          // -t
+    std::wstring data_size = L"unlimited";         // -d
+    std::wstring file_size = L"unlimited";         // -f
+    std::wstring locks = L"unlimited";             // -x
+    std::wstring locked_memory = L"unlimited";     // -l
+    std::wstring msg_queue_size = L"unlimited";    // -q
+    std::wstring nice = L"0";                      // -e
+    std::wstring nofile = L"10240";                // -n
+    std::wstring nproc = L"unlimited";             // -u
+    std::wstring pipe_size = L"4096";              // -p
+    std::wstring max_memory = L"unlimited";        // -m
+    std::wstring rtprio = L"0";                    // -r
+    std::wstring rttime = L"unlimited";            // -R
+    std::wstring socket_buffer = L"4096";          // -b
+    std::wstring sigpend = L"unlimited";           // -i
+    std::wstring stack_size = L"8192";             // -s
+    std::wstring virtual_memory = L"unlimited";    // -v
+};
+
+static KshResourceLimits g_ksh_resource_limits;
+
+bool execute_builtin_ulimit(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output) {
+    if (tokens.size() == 1) {
+        write_output(g_ksh_resource_limits.file_size + L"\n");
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    bool show_all = false;
+    wchar_t selected_opt = L'f';
+    std::wstring new_value;
+    bool has_value = false;
+
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        const std::wstring& arg = tokens[i];
+        if (arg == L"--") {
+            if (i + 1 < tokens.size()) {
+                new_value = tokens[++i];
+                has_value = true;
+            }
+            break;
+        }
+        if (!arg.empty() && arg[0] == L'-') {
+            for (size_t j = 1; j < arg.size(); ++j) {
+                wchar_t ch = arg[j];
+                if (ch == L'a') {
+                    show_all = true;
+                } else if (ch == L'H' || ch == L'S') {
+                    // Soft / hard limit modifier; accepted
+                } else if (ch == L'c' || ch == L'd' || ch == L'e' || ch == L'f' ||
+                           ch == L'i' || ch == L'l' || ch == L'm' || ch == L'n' ||
+                           ch == L'p' || ch == L'q' || ch == L'r' || ch == L's' ||
+                           ch == L't' || ch == L'u' || ch == L'v' || ch == L'x' ||
+                           ch == L'b' || ch == L'M' || ch == L'R' ||
+                           ch == L'k' || ch == L'V' || ch == L'P' || ch == L'w' || ch == L'T') {
+                    selected_opt = ch;
+                    if (j + 1 < arg.size() && (std::iswdigit(arg[j + 1]) || arg.substr(j + 1) == L"unlimited")) {
+                        new_value = arg.substr(j + 1);
+                        has_value = true;
+                        break;
+                    }
+                } else {
+                    std::wcerr << L"ksh: ulimit: bad option: -" << ch << L"\n";
+                    ksh_env.variables[L"?"] = L"1";
+                    return true;
+                }
+            }
+        } else {
+            new_value = arg;
+            has_value = true;
+        }
+    }
+
+    if (show_all) {
+        std::wstring out;
+        out += L"address space limit (Kibytes)           (-M)  " + g_ksh_resource_limits.address_space + L"\n";
+        out += L"core file size (blocks)                 (-c)  " + g_ksh_resource_limits.core_file_size + L"\n";
+        out += L"cpu time (seconds)                      (-t)  " + g_ksh_resource_limits.cpu_time + L"\n";
+        out += L"data size (Kibytes)                     (-d)  " + g_ksh_resource_limits.data_size + L"\n";
+        out += L"file size (blocks)                      (-f)  " + g_ksh_resource_limits.file_size + L"\n";
+        out += L"kqueues                                 (-k)  not supported\n";
+        out += L"locks                                   (-x)  " + g_ksh_resource_limits.locks + L"\n";
+        out += L"locked address space (Kibytes)          (-l)  " + g_ksh_resource_limits.locked_memory + L"\n";
+        out += L"message queue size (Kibytes)            (-q)  " + g_ksh_resource_limits.msg_queue_size + L"\n";
+        out += L"nice                                    (-e)  " + g_ksh_resource_limits.nice + L"\n";
+        out += L"nofile                                  (-n)  " + g_ksh_resource_limits.nofile + L"\n";
+        out += L"novmon                                  (-V)  not supported\n";
+        out += L"nproc                                   (-u)  " + g_ksh_resource_limits.nproc + L"\n";
+        out += L"npts                                    (-P)  not supported\n";
+        out += L"pipe buffer size (bytes)                (-p)  " + g_ksh_resource_limits.pipe_size + L"\n";
+        out += L"max memory size (Kibytes)               (-m)  " + g_ksh_resource_limits.max_memory + L"\n";
+        out += L"rtprio                                  (-r)  " + g_ksh_resource_limits.rtprio + L"\n";
+        out += L"max time before blocking (microseconds) (-R)  " + g_ksh_resource_limits.rttime + L"\n";
+        out += L"socket buffer size (bytes)              (-b)  " + g_ksh_resource_limits.socket_buffer + L"\n";
+        out += L"sigpend                                 (-i)  " + g_ksh_resource_limits.sigpend + L"\n";
+        out += L"stack size (Kibytes)                    (-s)  " + g_ksh_resource_limits.stack_size + L"\n";
+        out += L"swap size (Kibytes)                     (-w)  not supported\n";
+        out += L"threads                                 (-T)  not supported\n";
+        out += L"process size (Kibytes)                  (-v)  " + g_ksh_resource_limits.virtual_memory + L"\n";
+        write_output(out);
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    if (selected_opt == L'k' || selected_opt == L'V' || selected_opt == L'P' ||
+        selected_opt == L'w' || selected_opt == L'T') {
+        write_output(L"not supported\n");
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    auto get_limit_ref = [&](wchar_t opt) -> std::wstring* {
+        switch (opt) {
+            case L'M': return &g_ksh_resource_limits.address_space;
+            case L'c': return &g_ksh_resource_limits.core_file_size;
+            case L't': return &g_ksh_resource_limits.cpu_time;
+            case L'd': return &g_ksh_resource_limits.data_size;
+            case L'f': return &g_ksh_resource_limits.file_size;
+            case L'x': return &g_ksh_resource_limits.locks;
+            case L'l': return &g_ksh_resource_limits.locked_memory;
+            case L'q': return &g_ksh_resource_limits.msg_queue_size;
+            case L'e': return &g_ksh_resource_limits.nice;
+            case L'n': return &g_ksh_resource_limits.nofile;
+            case L'u': return &g_ksh_resource_limits.nproc;
+            case L'p': return &g_ksh_resource_limits.pipe_size;
+            case L'm': return &g_ksh_resource_limits.max_memory;
+            case L'r': return &g_ksh_resource_limits.rtprio;
+            case L'R': return &g_ksh_resource_limits.rttime;
+            case L'b': return &g_ksh_resource_limits.socket_buffer;
+            case L'i': return &g_ksh_resource_limits.sigpend;
+            case L's': return &g_ksh_resource_limits.stack_size;
+            case L'v': return &g_ksh_resource_limits.virtual_memory;
+            default: return nullptr;
+        }
+    };
+
+    std::wstring* target_ref = get_limit_ref(selected_opt);
+    if (target_ref == nullptr) {
+        std::wcerr << L"ksh: ulimit: bad option: -" << selected_opt << L"\n";
+        ksh_env.variables[L"?"] = L"1";
+        return true;
+    }
+
+    if (!has_value) {
+        write_output(*target_ref + L"\n");
+        ksh_env.variables[L"?"] = L"0";
+        return true;
+    }
+
+    if (new_value != L"unlimited") {
+        int parsed_int = 0;
+        if (!try_parse_int_strict(new_value, parsed_int) || parsed_int < 0) {
+            std::wcerr << L"ksh: ulimit: invalid limit: " << new_value << L"\n";
+            ksh_env.variables[L"?"] = L"1";
+            return true;
+        }
+    }
+
+    *target_ref = new_value;
+    ksh_env.variables[L"?"] = L"0";
     return true;
 }

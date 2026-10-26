@@ -54,22 +54,28 @@
             for (const auto& year : years) {
                 for (const auto& ed : editions) {
                     fs::path msvcRoot = base / year / ed / "VC/Tools/MSVC";
-                    if (!fs::exists(msvcRoot) || !fs::is_directory(msvcRoot)) {
+                    std::error_code ec;
+                    if (!fs::exists(msvcRoot, ec) || ec || !fs::is_directory(msvcRoot, ec) || ec) {
                         continue;
                     }
 
-                    for (const auto& entry : fs::directory_iterator(msvcRoot)) {
-                        if (!entry.is_directory()) {
-                            continue;
+                    try {
+                        for (const auto& entry : fs::directory_iterator(msvcRoot, ec)) {
+                            if (ec) break;
+                            std::error_code ecEntry;
+                            if (!entry.is_directory(ecEntry) || ecEntry) {
+                                continue;
+                            }
+
+                            fs::path hostX64x64 = entry.path() / "bin/Hostx64/x64";
+                            fs::path hostX64x86 = entry.path() / "bin/Hostx64/x86";
+                            fs::path hostX86x86 = entry.path() / "bin/Hostx86/x86";
+
+                            if (fs::exists(hostX64x64 / "cl.exe", ecEntry) && !ecEntry) result.push_back(hostX64x64.string());
+                            if (fs::exists(hostX64x86 / "cl.exe", ecEntry) && !ecEntry) result.push_back(hostX64x86.string());
+                            if (fs::exists(hostX86x86 / "cl.exe", ecEntry) && !ecEntry) result.push_back(hostX86x86.string());
                         }
-
-                        fs::path hostX64x64 = entry.path() / "bin/Hostx64/x64";
-                        fs::path hostX64x86 = entry.path() / "bin/Hostx64/x86";
-                        fs::path hostX86x86 = entry.path() / "bin/Hostx86/x86";
-
-                        if (fs::exists(hostX64x64 / "cl.exe")) result.push_back(hostX64x64.string());
-                        if (fs::exists(hostX64x86 / "cl.exe")) result.push_back(hostX64x86.string());
-                        if (fs::exists(hostX86x86 / "cl.exe")) result.push_back(hostX86x86.string());
+                    } catch (...) {
                     }
                 }
             }
@@ -97,13 +103,14 @@
             for (const auto& year : years) {
                 for (const auto& ed : editions) {
                     fs::path root = base / year / ed;
-                    if (!fs::exists(root) || !fs::is_directory(root)) {
+                    std::error_code ec;
+                    if (!fs::exists(root, ec) || ec || !fs::is_directory(root, ec) || ec) {
                         continue;
                     }
                     fs::path vsdev = root / "Common7/Tools/VsDevCmd.bat";
-                    if (fs::exists(vsdev)) return vsdev.string();
+                    if (fs::exists(vsdev, ec) && !ec) return vsdev.string();
                     fs::path vcvars = root / "VC/Auxiliary/Build/vcvars64.bat";
-                    if (fs::exists(vcvars)) return vcvars.string();
+                    if (fs::exists(vcvars, ec) && !ec) return vcvars.string();
                 }
             }
         }
@@ -117,9 +124,10 @@ private:
 
         std::stringstream ss(pathValue);
         std::string item;
+        std::error_code ec;
         while (std::getline(ss, item, ';')) {
             fs::path p = fs::path(item) / exeName;
-            if (fs::exists(p)) {
+            if (fs::exists(p, ec) && !ec) {
                 return p.string();
             }
         }
@@ -128,9 +136,10 @@ private:
 
     static std::string SearchVisualStudio() {
         std::vector<std::string> dirs = GetVisualStudioBuildToolDirs();
+        std::error_code ec;
         for (const auto& dir : dirs) {
             fs::path clPath = fs::path(dir) / "cl.exe";
-            if (fs::exists(clPath)) {
+            if (fs::exists(clPath, ec) && !ec) {
                 return clPath.string();
             }
         }

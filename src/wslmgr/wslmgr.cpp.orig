@@ -1,0 +1,1848 @@
+/*
+ * BSD 3-Clause License
+ *
+ * Copyright (c) 2024-2026, Roberto J Dohnert
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+// Single-file index:
+//   1. Feature flags, standard library includes, and color definitions
+//   2. Shared data types: ProcessResult, DistroInfo, OnlineDistro, WslProcess
+//   3. ConsoleGuard: console modes, alternate screen, synchronized redraw,
+//      cleanup, buffer handling, and signal restoration
+//   4. Sys: process execution, encoding, terminal launch, jobs, timeouts,
+//      filesystem path conversion, and spinners
+//   5. WSL: distro discovery, online catalog, process listing, and process
+//      termination commands
+//   6. App input: keyboard, F8/F9 shortcuts, mouse clicks, and mouse wheel
+//   7. App layout: responsive console sizing, tab hitboxes, and output cleanup
+//   8. App views: Explorer, Catalog, Import, Diagnostics, Lifecycle, and Help
+//   9. App workflows: distro actions, scrollable process/Help viewports,
+//      verbose Lifecycle reporting, and import/export operations
+//  10. main: application entry point
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#pragma comment(lib, "Shell32.lib")
+#include <windows.h>
+#include <shellapi.h>
+#include <conio.h>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <iomanip>
+#include <filesystem>
+#include <algorithm>
+#include <future>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <functional>
+#include <cstring>
+
+namespace fs = std::filesystem;
+
+namespace Color {
+    inline std::string RESET        = "\033[0m";
+    inline std::string BOLD         = "\033[1m";
+    inline std::string RED          = "\033[91m";
+    inline std::string GREEN        = "\033[92m";
+    inline std::string YELLOW       = "\033[93m";
+    inline std::string BLUE         = "\033[94m";
+    inline std::string MAGENTA      = "\033[95m";
+    inline std::string CYAN         = "\033[96m";
+    inline std::string WHITE        = "\033[97m";
+    inline std::string HEADER_TEXT  = "\033[97m";
+    inline std::string BG_DARK      = "\033[48;5;235m";
+    inline std::string BG_BLUE      = "\033[44m";
+    inline std::string BG_HIGHLIGHT = "\033[48;5;238m";
+    inline std::string CLEAR_LINE   = "\033[K";
+}
+
+enum class ThemeName {
+    Silver,
+    Blue,
+    Orange,
+    Black
+};
+
+enum class GlyphStyle {
+    Ascii,
+    Unicode,
+    NerdFont
+};
+
+struct ThemePalette {
+    std::string headerBg;
+    std::string headerText;
+    std::string tabBg;
+    std::string tabSelected;
+    std::string accent;
+    std::string success;
+    std::string warning;
+    std::string danger;
+    std::string muted;
+    std::string highlight;
+};
+
+namespace Glyph {
+    inline std::string check = "✓";
+    inline std::string cross = "✗";
+    inline std::string dot = "•";
+    inline std::string arrow = "→";
+    inline std::string active = "▶";
+    inline std::string menu = "▣";
+    inline std::string warn = "⚠";
+    inline std::string theme = "◐";
+}
+
+static ThemePalette MakePalette(ThemeName theme) {
+    switch (theme) {
+    case ThemeName::Silver:
+        return {
+            "\033[48;5;251m", "\033[30m", "\033[48;5;240m", "\033[38;5;17m\033[48;5;250m",
+            "\033[38;5;17m", "\033[38;5;28m", "\033[38;5;214m", "\033[38;5;196m", "\033[38;5;238m",
+            "\033[48;5;252m"
+        };
+    case ThemeName::Orange:
+        return {
+            "\033[48;5;208m", "\033[30m", "\033[48;5;238m", "\033[38;5;232m\033[48;5;214m",
+            "\033[38;5;208m", "\033[38;5;76m", "\033[38;5;220m", "\033[38;5;203m", "\033[38;5;245m",
+            "\033[48;5;237m"
+        };
+    case ThemeName::Black:
+        return {
+            "\033[48;5;234m", "\033[97m", "\033[48;5;236m", "\033[38;5;255m\033[48;5;240m",
+            "\033[38;5;117m", "\033[38;5;82m", "\033[38;5;226m", "\033[38;5;203m", "\033[38;5;240m",
+            "\033[48;5;238m"
+        };
+    case ThemeName::Blue:
+    default:
+        return {
+            "\033[44m", "\033[97m", "\033[48;5;235m", "\033[96m\033[48;5;238m",
+            "\033[94m", "\033[92m", "\033[93m", "\033[91m", "\033[38;5;245m",
+            "\033[48;5;238m"
+        };
+    }
+}
+
+static void ApplyTheme(ThemeName theme) {
+    const auto palette = MakePalette(theme);
+    Color::RESET = "\033[0m";
+    Color::BOLD = "\033[1m";
+    Color::RED = "\033[91m";
+    Color::GREEN = "\033[92m";
+    Color::YELLOW = "\033[93m";
+    Color::BLUE = "\033[94m";
+    Color::MAGENTA = "\033[95m";
+    Color::CYAN = "\033[96m";
+    Color::WHITE = "\033[97m";
+    Color::HEADER_TEXT = palette.headerText;
+    Color::BG_DARK = palette.tabBg;
+    Color::BG_BLUE = palette.headerBg;
+    Color::BG_HIGHLIGHT = palette.highlight;
+    Color::CLEAR_LINE = "\033[K";
+
+    // Keep a stable accent color for themed rendering.
+    (void)palette;
+}
+
+static void ApplyGlyphs(GlyphStyle style) {
+    switch (style) {
+    case GlyphStyle::Ascii:
+        Glyph::check = "OK";
+        Glyph::cross = "X";
+        Glyph::dot = "*";
+        Glyph::arrow = ">";
+        Glyph::active = ">";
+        Glyph::menu = "[]";
+        Glyph::warn = "!";
+        Glyph::theme = "T";
+        break;
+    case GlyphStyle::NerdFont:
+        Glyph::check = "";
+        Glyph::cross = "";
+        Glyph::dot = "";
+        Glyph::arrow = "";
+        Glyph::active = "";
+        Glyph::menu = "";
+        Glyph::warn = "";
+        Glyph::theme = "";
+        break;
+    case GlyphStyle::Unicode:
+    default:
+        Glyph::check = "✓";
+        Glyph::cross = "✗";
+        Glyph::dot = "•";
+        Glyph::arrow = "→";
+        Glyph::active = "▶";
+        Glyph::menu = "▣";
+        Glyph::warn = "⚠";
+        Glyph::theme = "◐";
+        break;
+    }
+}
+
+struct ProcessResult {
+    int exitCode = -1;
+    std::string stdOut;
+    std::string stdErr;
+    bool success() const { return exitCode == 0; }
+};
+
+struct DistroInfo {
+    bool isDefault = false;
+    std::string name;
+    std::string state;
+    std::string version;
+};
+
+struct OnlineDistro {
+    std::string id;
+    std::string friendlyName;
+};
+
+struct WslProcess {
+    unsigned long pid = 0;
+    std::string name;
+    std::string command;
+};
+
+// -----------------------------------------------------------------------------
+// RAII Terminal Guard: Alternate Buffer, State Restoration & Signal Handling
+// -----------------------------------------------------------------------------
+
+class ConsoleGuard {
+private:
+    DWORD origOutMode = 0;
+    DWORD origInMode = 0;
+    UINT origOutCP = 0;
+    UINT origInCP = 0;
+    HANDLE hOut = INVALID_HANDLE_VALUE;
+    HANDLE hIn = INVALID_HANDLE_VALUE;
+    bool initialized = false;
+
+    static ConsoleGuard* instance;
+
+    void ClearBuffer() {
+        if (hOut == INVALID_HANDLE_VALUE) return;
+
+        CONSOLE_SCREEN_BUFFER_INFO info = {};
+        if (!GetConsoleScreenBufferInfo(hOut, &info)) return;
+
+        const COORD origin = { 0, 0 };
+        const DWORD cellCount = static_cast<DWORD>(info.dwSize.X) * static_cast<DWORD>(info.dwSize.Y);
+        DWORD written = 0;
+        FillConsoleOutputCharacterW(hOut, L' ', cellCount, origin, &written);
+        FillConsoleOutputAttribute(hOut, info.wAttributes, cellCount, origin, &written);
+        SetConsoleCursorPosition(hOut, origin);
+    }
+
+    static BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
+        if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT || signal == CTRL_BREAK_EVENT) {
+            if (instance) {
+                instance->Restore();
+            }
+            return FALSE;
+        }
+        return FALSE;
+    }
+
+public:
+    ConsoleGuard() {
+        instance = this;
+        hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        hIn = GetStdHandle(STD_INPUT_HANDLE);
+
+        if (hOut != INVALID_HANDLE_VALUE && hIn != INVALID_HANDLE_VALUE &&
+            GetConsoleMode(hOut, &origOutMode) && GetConsoleMode(hIn, &origInMode)) {
+            origOutCP = GetConsoleOutputCP();
+            origInCP = GetConsoleCP();
+
+            const DWORD outMode = origOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT;
+            const DWORD inMode = ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_PROCESSED_INPUT;
+            if (!SetConsoleMode(hOut, outMode) || !SetConsoleMode(hIn, inMode) ||
+                !SetConsoleOutputCP(CP_UTF8) || !SetConsoleCP(CP_UTF8)) {
+                SetConsoleMode(hOut, origOutMode);
+                SetConsoleMode(hIn, origInMode);
+                if (origOutCP != 0) SetConsoleOutputCP(origOutCP);
+                if (origInCP != 0) SetConsoleCP(origInCP);
+                return;
+            }
+
+            SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+            initialized = true;
+            FlushConsoleInputBuffer(hIn);
+
+            // Switch to Alternate Screen Buffer & hide cursor
+            std::cout << "\033[?1049h\033[?25l" << std::flush;
+            ClearBuffer();
+        }
+    }
+
+    bool IsReady() const { return initialized; }
+
+    void Restore() {
+        if (initialized) {
+            // Restore Main Buffer, cursor visibility, and color styling
+            std::cout << "\033[?25h\033[0m\033[?1049l" << std::flush;
+            if (hOut != INVALID_HANDLE_VALUE) {
+                SetConsoleMode(hOut, origOutMode);
+                SetConsoleOutputCP(origOutCP);
+            }
+            if (hIn != INVALID_HANDLE_VALUE) {
+                SetConsoleMode(hIn, origInMode);
+                SetConsoleCP(origInCP);
+            }
+            initialized = false;
+        }
+    }
+
+    ~ConsoleGuard() {
+        Restore();
+    }
+};
+
+ConsoleGuard* ConsoleGuard::instance = nullptr;
+
+// -----------------------------------------------------------------------------
+// Win32 Process Execution Engine (Deadlock-Free Async Pipes & Safe Spawning)
+// -----------------------------------------------------------------------------
+
+class Sys {
+public:
+    static std::wstring Utf8ToWide(const std::string& text) {
+        if (text.empty()) return {};
+        int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), NULL, 0);
+        if (length <= 0) return std::wstring(text.begin(), text.end());
+        std::wstring result(length, L'\0');
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), result.data(), length);
+        return result;
+    }
+
+    static std::wstring QuoteArg(const std::wstring& arg) {
+        if (arg.empty()) return L"\"\"";
+        if (arg.find_first_of(L" \t\n\v\"") == std::wstring::npos) return arg;
+        std::wstring out = L"\"";
+        for (auto it = arg.begin(); it != arg.end(); ++it) {
+            unsigned int backslashes = 0;
+            while (it != arg.end() && *it == L'\\') {
+                ++it;
+                ++backslashes;
+            }
+            if (it == arg.end()) {
+                out.append(backslashes * 2, L'\\');
+                break;
+            } else if (*it == L'"') {
+                out.append(backslashes * 2 + 1, L'\\');
+                out.push_back(*it);
+            } else {
+                out.append(backslashes, L'\\');
+                out.push_back(*it);
+            }
+        }
+        out += L"\"";
+        return out;
+    }
+
+    static bool IsValidArg(const std::wstring& value) {
+        if (value.empty()) return false;
+        for (wchar_t ch : value) {
+            if (ch == L'\0') return false;
+            if (ch < 0x20 || ch == 0x7F) return false;
+            if (ch == L'"' || ch == L'|' || ch == L'&' || ch == L';' || ch == L'`') return false;
+        }
+        return true;
+    }
+
+    static bool IsValidDistroName(const std::wstring& value) {
+        if (!IsValidArg(value)) return false;
+        if (value == L"." || value == L"..") return false;
+        if (value.find_first_of(L"\\/:*?\"<>|") != std::wstring::npos) return false;
+        if (value.front() == L' ' || value.back() == L' ') return false;
+        return true;
+    }
+
+    static bool IsValidFilesystemPath(const std::wstring& value, bool requireExistingFile = false) {
+        if (!IsValidArg(value)) return false;
+        if (value.find_first_of(L"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F") != std::wstring::npos) return false;
+        if (value.length() > 32767) return false;
+        if (value.find(L"\\\\?\\") == 0 || value.find(L"//") == 0 || value.find(L"\\\\") == 0) {
+            return false;
+        }
+        if (requireExistingFile) {
+            const fs::path p = fs::path(value);
+            return fs::exists(p) && fs::is_regular_file(p);
+        }
+        return true;
+    }
+
+    static std::wstring ResolveExecutable(const std::wstring& name) {
+        wchar_t systemDir[MAX_PATH] = {};
+        const UINT size = GetSystemDirectoryW(systemDir, MAX_PATH);
+        if (size > 0 && size < MAX_PATH) {
+            const std::wstring candidate = std::wstring(systemDir) + L"\\" + name;
+            if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                return candidate;
+            }
+        }
+
+        wchar_t resolved[MAX_PATH] = {};
+        DWORD len = SearchPathW(nullptr, name.c_str(), nullptr, MAX_PATH, resolved, nullptr);
+        return len > 0 && len < MAX_PATH ? std::wstring(resolved) : name;
+    }
+
+    static std::string DecodeBuffer(const std::vector<char>& raw) {
+        if (raw.empty()) return "";
+
+        // Check for UTF-16LE or null-separated byte outputs
+        if (raw.size() >= 2 && (raw[1] == '\0' || ((unsigned char)raw[0] == 0xFF && (unsigned char)raw[1] == 0xFE))) {
+            size_t offset = ((unsigned char)raw[0] == 0xFF && (unsigned char)raw[1] == 0xFE) ? 2 : 0;
+            std::vector<wchar_t> wide;
+            wide.reserve((raw.size() - offset) / 2);
+            for (size_t i = offset; i + 1 < raw.size(); i += 2) {
+                wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(raw[i]) |
+                    (static_cast<unsigned char>(raw[i + 1]) << 8)));
+            }
+            int wlen = static_cast<int>(wide.size());
+            int u8len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wlen, NULL, 0, NULL, NULL);
+            if (u8len > 0) {
+                std::string out(u8len, '\0');
+                WideCharToMultiByte(CP_UTF8, 0, wide.data(), wlen, &out[0], u8len, NULL, NULL);
+                out.erase(std::remove(out.begin(), out.end(), '\0'), out.end());
+                out.erase(std::remove(out.begin(), out.end(), '\r'), out.end());
+                return out;
+            }
+        }
+
+        std::string out(raw.begin(), raw.end());
+        out.erase(std::remove(out.begin(), out.end(), '\0'), out.end());
+        out.erase(std::remove(out.begin(), out.end(), '\r'), out.end());
+        return out;
+    }
+
+    static ProcessResult Exec(const std::vector<std::wstring>& args, DWORD timeoutMs = 30000) {
+        ProcessResult res;
+        std::wstring wslExe = ResolveExecutable(L"wsl.exe");
+        if (!IsValidArg(wslExe)) return res;
+
+        std::wstring cmdLine = QuoteArg(wslExe);
+        for (const auto& a : args) {
+            if (!IsValidArg(a)) {
+                res.stdErr = "Rejected invalid WSL argument.";
+                return res;
+            }
+            cmdLine += L" " + QuoteArg(a);
+        }
+
+        HANDLE hOutRead = INVALID_HANDLE_VALUE, hOutWrite = INVALID_HANDLE_VALUE;
+        HANDLE hErrRead = INVALID_HANDLE_VALUE, hErrWrite = INVALID_HANDLE_VALUE;
+        HANDLE hJob = NULL;
+        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+
+        if (!CreatePipe(&hOutRead, &hOutWrite, &sa, 0)) return res;
+        SetHandleInformation(hOutRead, HANDLE_FLAG_INHERIT, 0);
+
+        if (!CreatePipe(&hErrRead, &hErrWrite, &sa, 0)) {
+            CloseHandle(hOutRead);
+            CloseHandle(hOutWrite);
+            return res;
+        }
+        SetHandleInformation(hErrRead, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOW si = { sizeof(STARTUPINFOW) };
+        si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        si.hStdOutput = hOutWrite;
+        si.hStdError = hErrWrite;
+        si.wShowWindow = SW_HIDE;
+
+        PROCESS_INFORMATION pi = { 0 };
+        std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
+        cmdBuf.push_back(L'\0');
+
+        BOOL created = CreateProcessW(
+            wslExe.c_str(), cmdBuf.data(), NULL, NULL, TRUE,
+            CREATE_NO_WINDOW, NULL, NULL, &si, &pi
+        );
+
+        CloseHandle(hOutWrite);
+        CloseHandle(hErrWrite);
+
+        if (!created) {
+            CloseHandle(hOutRead);
+            CloseHandle(hErrRead);
+            res.stdErr = "Failed to spawn wsl.exe process.";
+            return res;
+        }
+
+        hJob = CreateJobObjectW(NULL, NULL);
+        if (hJob != NULL) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+            AssignProcessToJobObject(hJob, pi.hProcess);
+        }
+
+        auto ReadStream = [](HANDLE h) -> std::string {
+            std::vector<char> buf;
+            char temp[4096];
+            DWORD read = 0;
+            while (ReadFile(h, temp, sizeof(temp), &read, NULL) && read > 0) {
+                buf.insert(buf.end(), temp, temp + read);
+            }
+            CloseHandle(h);
+            return DecodeBuffer(buf);
+        };
+
+        // Concurrent asynchronous pipe readers prevent pipe deadlocks
+        auto futureOut = std::async(std::launch::async, ReadStream, hOutRead);
+        auto futureErr = std::async(std::launch::async, ReadStream, hErrRead);
+
+        DWORD waitRes = WaitForSingleObject(pi.hProcess, timeoutMs);
+        if (waitRes == WAIT_TIMEOUT) {
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 5000);
+            if (hJob != NULL) {
+                CloseHandle(hJob);
+                hJob = NULL;
+            }
+            res.exitCode = -1;
+            res.stdErr = "[Timeout]: Subsystem operation exceeded timeout threshold.";
+        } else if (waitRes == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            GetExitCodeProcess(pi.hProcess, &code);
+            res.exitCode = static_cast<int>(code);
+        } else {
+            res.exitCode = -1;
+            res.stdErr = "Failed while waiting for wsl.exe.";
+        }
+
+        res.stdOut = futureOut.get();
+        std::string errOutput = futureErr.get();
+        if (!errOutput.empty()) {
+            res.stdErr = errOutput;
+        }
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        if (hJob != NULL) CloseHandle(hJob);
+        return res;
+    }
+
+    static bool LaunchInTerminal(const std::wstring& distroName) {
+        if (!IsValidDistroName(distroName)) return false;
+
+        const std::wstring wslExe = ResolveExecutable(L"wsl.exe");
+        const std::wstring wtExe = ResolveExecutable(L"wt.exe");
+        const std::wstring conhostExe = ResolveExecutable(L"conhost.exe");
+        const std::wstring wtParams = QuoteArg(wslExe) + L" -d " + QuoteArg(distroName);
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.fMask = SEE_MASK_FLAG_NO_UI;
+        sei.lpFile = wtExe.c_str();
+        sei.lpParameters = wtParams.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+
+        if (ShellExecuteExW(&sei) == TRUE) return true;
+
+        const std::wstring conhostParams = QuoteArg(wslExe) + L" -d " + QuoteArg(distroName);
+        sei.lpFile = conhostExe.c_str();
+        sei.lpParameters = conhostParams.c_str();
+        return ShellExecuteExW(&sei) == TRUE;
+    }
+
+    static bool LaunchInstallWindow(const std::wstring& distroId) {
+        if (!IsValidDistroName(distroId)) return false;
+
+        const std::wstring wslExe = ResolveExecutable(L"wsl.exe");
+        const std::wstring wtExe = ResolveExecutable(L"wt.exe");
+        const std::wstring conhostExe = ResolveExecutable(L"conhost.exe");
+        const std::wstring wtParams = QuoteArg(wslExe) + L" --install -d " + QuoteArg(distroId);
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.fMask = SEE_MASK_FLAG_NO_UI;
+        sei.lpFile = wtExe.c_str();
+        sei.lpParameters = wtParams.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+
+        if (ShellExecuteExW(&sei) == TRUE) return true;
+
+        const std::wstring conhostParams = QuoteArg(wslExe) + L" --install -d " + QuoteArg(distroId);
+        sei.lpFile = conhostExe.c_str();
+        sei.lpParameters = conhostParams.c_str();
+        return ShellExecuteExW(&sei) == TRUE;
+    }
+
+    static ProcessResult RunWithSpinner(const std::string& message, std::function<ProcessResult()> task) {
+        std::atomic<bool> done{ false };
+        auto futureRes = std::async(std::launch::async, [&]() {
+            ProcessResult res;
+            try {
+                res = task();
+            } catch (const std::exception& error) {
+                res.exitCode = -1;
+                res.stdErr = error.what();
+            } catch (...) {
+                res.exitCode = -1;
+                res.stdErr = "Operation failed unexpectedly.";
+            }
+            done = true;
+            return res;
+        });
+
+        const char spinnerChars[] = { '|', '/', '-', '\\' };
+        int sIdx = 0;
+
+        std::cout << "\033[?25l";
+        while (!done) {
+            std::cout << "\r " << Color::CYAN << "[" << spinnerChars[sIdx % 4] << "]" << Color::RESET 
+                      << " " << message << "..." << Color::CLEAR_LINE << std::flush;
+            sIdx++;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::cout << "\r" << Color::CLEAR_LINE << std::flush;
+        return futureRes.get();
+    }
+};
+
+// -----------------------------------------------------------------------------
+// Whitespace-Resilient WSL Data Parsing Engine
+// -----------------------------------------------------------------------------
+
+class WSL {
+public:
+    static std::vector<WslProcess> ListProcesses(const std::wstring& distroName) {
+        std::vector<WslProcess> processes;
+        ProcessResult result = Sys::Exec({ L"-d", distroName, L"--", L"ps", L"-eo", L"pid=,comm=,args=" }, 5000);
+        if (!result.success()) return processes;
+
+        std::istringstream lines(result.stdOut);
+        std::string line;
+        while (std::getline(lines, line)) {
+            std::istringstream fields(line);
+            WslProcess process;
+            if (!(fields >> process.pid >> process.name)) continue;
+            std::getline(fields, process.command);
+            const size_t first = process.command.find_first_not_of(" \t");
+            if (first != std::string::npos) process.command.erase(0, first);
+            if (process.command.empty()) process.command = process.name;
+            processes.push_back(process);
+        }
+        return processes;
+    }
+
+    static ProcessResult StopProcess(const std::wstring& distroName, unsigned long pid) {
+        return Sys::Exec({ L"-d", distroName, L"--", L"kill", L"-TERM", std::to_wstring(pid) }, 5000);
+    }
+
+    static std::vector<DistroInfo> ListDistros() {
+        std::vector<DistroInfo> list;
+        ProcessResult r = Sys::Exec({ L"-l", L"-v" }, 5000);
+        if (!r.success()) return list;
+
+        std::istringstream iss(r.stdOut);
+        std::string line;
+        bool headerPassed = false;
+
+        while (std::getline(iss, line)) {
+            if (line.empty() || line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+            if (!headerPassed) {
+                if (line.find("NAME") != std::string::npos && line.find("STATE") != std::string::npos) {
+                    headerPassed = true;
+                }
+                continue;
+            }
+
+            std::istringstream lss(line);
+            std::string tok;
+            std::vector<std::string> toks;
+            while (lss >> tok) toks.push_back(tok);
+
+            if (toks.size() < 3) continue;
+
+            DistroInfo d;
+            size_t startIdx = 0;
+            if (toks[0] == "*") {
+                d.isDefault = true;
+                startIdx = 1;
+            }
+
+            // Right-to-Left parsing guarantees distro names with spaces are preserved
+            d.version = toks.back();
+            toks.pop_back();
+            d.state = toks.back();
+            toks.pop_back();
+
+            std::string nameBuilder;
+            for (size_t i = startIdx; i < toks.size(); ++i) {
+                if (!nameBuilder.empty()) nameBuilder += " ";
+                nameBuilder += toks[i];
+            }
+            d.name = nameBuilder;
+
+            if (!d.name.empty()) list.push_back(d);
+        }
+        return list;
+    }
+
+    static std::vector<OnlineDistro> ListOnline() {
+        std::vector<OnlineDistro> catalog;
+        ProcessResult r = Sys::Exec({ L"--list", L"--online" }, 10000);
+        if (!r.success()) return catalog;
+
+        std::istringstream iss(r.stdOut);
+        std::string line;
+        bool headerPassed = false;
+
+        while (std::getline(iss, line)) {
+            if (line.empty()) continue;
+            if (line.find("NAME") != std::string::npos && line.find("FRIENDLY NAME") != std::string::npos) {
+                headerPassed = true;
+                continue;
+            }
+            if (headerPassed) {
+                std::istringstream lss(line);
+                std::string id, friendly;
+                if (lss >> id) {
+                    if (id == "*") {
+                        if (!(lss >> id)) continue;
+                    }
+                    std::getline(lss, friendly);
+                    friendly.erase(0, friendly.find_first_not_of(" \t"));
+                    catalog.push_back({ id, friendly.empty() ? id : friendly });
+                }
+            }
+        }
+        return catalog;
+    }
+};
+
+// -----------------------------------------------------------------------------
+// Interactive TUI Application Controller
+// -----------------------------------------------------------------------------
+
+class App {
+private:
+    enum class InputKey {
+        None,
+        Character,
+        Up,
+        Down,
+        Left,
+        Right,
+        Enter,
+        Space,
+        ProcessList,
+        Lifecycle,
+        FullDiagnostics
+    };
+
+    struct InputEvent {
+        InputKey key = InputKey::None;
+        int character = 0;
+        bool mouseClick = false;
+        bool doubleClick = false;
+        int mouseWheel = 0;
+        bool readError = false;
+        COORD mousePosition = {};
+    };
+
+    int currentTab = 1;
+    size_t selectedRow = 0;
+    bool onlineCatalogLoaded = false;
+    std::string statusMsg = "Ready.";
+    std::string statusColor = Color::GREEN;
+    std::string diagnosticsStatus = "Not loaded. Press [F7] to open Full Diagnostics.";
+    std::string diagnosticsVersion = "Not loaded.";
+    std::vector<std::string> diagnosticsReportLines;
+    std::string lifecycleDetails = "No lifecycle operation has been run.";
+    std::vector<WslProcess> diagnosticsProcesses;
+    size_t selectedProcess = 0;
+    size_t diagnosticsProcessOffset = 0;
+    bool showDiagnosticsProcesses = false;
+    bool showFullDiagnostics = false;
+    ThemeName currentTheme = ThemeName::Blue;
+    GlyphStyle currentGlyphStyle = GlyphStyle::Unicode;
+    size_t diagnosticsReportOffset = 0;
+    size_t helpScrollOffset = 0;
+    size_t catalogOffset = 0;
+    std::vector<DistroInfo> cachedDistros;
+    std::vector<OnlineDistro> cachedCatalog;
+    std::vector<std::pair<SHORT, SHORT>> tabHitBoxes;
+
+    SHORT ConsoleWidth() const {
+        CONSOLE_SCREEN_BUFFER_INFO info = {};
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (hOut != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(hOut, &info)) {
+            return std::max<SHORT>(80, info.srWindow.Right - info.srWindow.Left + 1);
+        }
+        return 104;
+    }
+
+    SHORT ConsoleHeight() const {
+        CONSOLE_SCREEN_BUFFER_INFO info = {};
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (hOut != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(hOut, &info)) {
+            return std::max<SHORT>(1, info.srWindow.Bottom - info.srWindow.Top + 1);
+        }
+        return 40;
+    }
+
+    size_t VisibleDiagnosticProcessRows() const {
+        const SHORT reservedRows = 24;
+        const SHORT availableRows = static_cast<SHORT>(ConsoleHeight() - reservedRows);
+        return availableRows > 0 ? std::min<size_t>(10, static_cast<size_t>(availableRows)) : 0;
+    }
+
+    size_t VisibleHelpRows() const {
+        const SHORT reservedRows = 24;
+        const SHORT availableRows = static_cast<SHORT>(ConsoleHeight() - reservedRows);
+        return availableRows > 0 ? std::min<size_t>(10, static_cast<size_t>(availableRows)) : 0;
+    }
+
+    size_t VisibleFullDiagnosticsRows() const {
+        const SHORT reservedRows = 16;
+        const SHORT availableRows = static_cast<SHORT>(ConsoleHeight() - reservedRows);
+        return availableRows > 0 ? std::min<size_t>(10, static_cast<size_t>(availableRows)) : 0;
+    }
+
+    size_t VisibleCatalogRows() const {
+        const SHORT reservedRows = 14;
+        const SHORT availableRows = static_cast<SHORT>(ConsoleHeight() - reservedRows);
+        return availableRows > 0 ? std::min<size_t>(5, static_cast<size_t>(availableRows)) : 0;
+    }
+
+    std::string PadLine(const std::string& line, SHORT width) const {
+        if (static_cast<SHORT>(line.size()) >= width) return line;
+        return line + std::string(static_cast<size_t>(width - line.size()), ' ');
+    }
+
+    std::string ClipText(const std::string& text, size_t width) const {
+        if (text.size() <= width) return text;
+        if (width < 4) return text.substr(0, width);
+        return text.substr(0, width - 3) + "...";
+    }
+
+    std::string DistroLogo(const std::string& distroName) const {
+        std::string name = distroName;
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+
+        if (name.find("ubuntu") != std::string::npos) return "◉";
+        if (name.find("debian") != std::string::npos) return "◈";
+        if (name.find("kali") != std::string::npos) return "◢";
+        if (name.find("arch") != std::string::npos) return "△";
+        if (name.find("fedora") != std::string::npos) return "●";
+        if (name.find("alpine") != std::string::npos) return "▲";
+        if (name.find("opensuse") != std::string::npos || name.find("suse") != std::string::npos) return "◆";
+        if (name.find("oracle") != std::string::npos) return "◎";
+        if (name.find("rocky") != std::string::npos) return "●";
+        if (name.find("alma") != std::string::npos) return "●";
+        return "○";
+    }
+
+    std::string FillLine(const std::string& color, SHORT width, char fill = '=') const {
+        return color + std::string(static_cast<size_t>(width), fill) + Color::RESET + "\n";
+    }
+
+    InputEvent ReadInput() {
+        HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+        INPUT_RECORD record = {};
+        DWORD eventsRead = 0;
+
+        while (true) {
+            DWORD waitResult = WaitForSingleObject(hIn, 250);
+            if (waitResult == WAIT_TIMEOUT) continue;
+            if (waitResult != WAIT_OBJECT_0) break;
+            if (!ReadConsoleInputW(hIn, &record, 1, &eventsRead)) break;
+
+            if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown) {
+                const KEY_EVENT_RECORD& key = record.Event.KeyEvent;
+                InputEvent input;
+                input.character = key.uChar.UnicodeChar;
+
+                switch (key.wVirtualKeyCode) {
+                case VK_UP: input.key = InputKey::Up; break;
+                case VK_DOWN: input.key = InputKey::Down; break;
+                case VK_LEFT: input.key = InputKey::Left; break;
+                case VK_RIGHT: input.key = InputKey::Right; break;
+                case VK_RETURN: input.key = InputKey::Enter; break;
+                case VK_SPACE: input.key = InputKey::Space; break;
+                case VK_F9: input.key = InputKey::ProcessList; break;
+                case VK_F8: input.key = InputKey::Lifecycle; break;
+                case VK_F7: input.key = InputKey::FullDiagnostics; break;
+                default:
+                    if (key.uChar.UnicodeChar != L'\0') {
+                        input.key = InputKey::Character;
+                    }
+                    break;
+                }
+
+                if (input.key != InputKey::None) return input;
+            } else if (record.EventType == MOUSE_EVENT) {
+                const MOUSE_EVENT_RECORD& mouse = record.Event.MouseEvent;
+                if (mouse.dwEventFlags == MOUSE_WHEELED) {
+                    InputEvent input;
+                    input.mouseWheel = static_cast<SHORT>(HIWORD(mouse.dwButtonState));
+                    input.mousePosition = mouse.dwMousePosition;
+                    return input;
+                }
+                const bool leftPressed = (mouse.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+                const bool leftClicked = mouse.dwEventFlags == 0 && leftPressed;
+                const bool leftDoubleClicked = mouse.dwEventFlags == DOUBLE_CLICK && leftPressed;
+                if (leftClicked || leftDoubleClicked) {
+                    InputEvent input;
+                    input.mouseClick = true;
+                    input.doubleClick = leftDoubleClicked;
+                    input.mousePosition = mouse.dwMousePosition;
+                    return input;
+                }
+            }
+        }
+
+        InputEvent input;
+        input.readError = true;
+        return input;
+    }
+
+    void SelectTab(int tab) {
+        if (tab >= 1 && tab <= 6) {
+            currentTab = tab;
+        }
+    }
+
+    void RefreshDiagnosticsProcesses() {
+        diagnosticsProcesses.clear();
+        selectedProcess = 0;
+        diagnosticsProcessOffset = 0;
+        if (cachedDistros.empty() || selectedRow >= cachedDistros.size()) return;
+        if (cachedDistros[selectedRow].state != "Running") {
+            SetStatus("Selected distro is stopped. Start it first to view processes.", Color::YELLOW);
+            return;
+        }
+        diagnosticsProcesses = WSL::ListProcesses(Sys::Utf8ToWide(cachedDistros[selectedRow].name));
+    }
+
+    void MoveDiagnosticSelection(int delta) {
+        if (!showDiagnosticsProcesses || diagnosticsProcesses.empty()) return;
+
+        if (delta < 0) {
+            if (selectedProcess > 0) --selectedProcess;
+        } else if (selectedProcess + 1 < diagnosticsProcesses.size()) {
+            ++selectedProcess;
+        }
+
+        const size_t visibleRows = VisibleDiagnosticProcessRows();
+        if (visibleRows == 0) return;
+        if (selectedProcess < diagnosticsProcessOffset) {
+            diagnosticsProcessOffset = selectedProcess;
+        } else if (selectedProcess >= diagnosticsProcessOffset + visibleRows) {
+            diagnosticsProcessOffset = selectedProcess - visibleRows + 1;
+        }
+    }
+
+    void MoveHelpSelection(int delta) {
+        if (currentTab != 6) return;
+        const size_t visibleRows = VisibleHelpRows();
+        if (visibleRows == 0) return;
+
+        if (delta < 0) {
+            if (helpScrollOffset > 0) --helpScrollOffset;
+        } else {
+            const size_t lineCount = 36;
+            if (helpScrollOffset + visibleRows < lineCount) ++helpScrollOffset;
+        }
+    }
+
+    void MoveCatalog(int delta) {
+        if (cachedCatalog.empty()) return;
+        const size_t visibleRows = VisibleCatalogRows();
+        if (visibleRows == 0) return;
+
+        if (delta < 0) {
+            if (catalogOffset > 0) --catalogOffset;
+        } else if (catalogOffset + visibleRows < cachedCatalog.size()) {
+            ++catalogOffset;
+        }
+    }
+
+    void MoveFullDiagnostics(int delta) {
+        if (!showFullDiagnostics || diagnosticsReportLines.empty()) return;
+        const size_t visibleRows = VisibleFullDiagnosticsRows();
+        if (visibleRows == 0) return;
+
+        if (delta < 0) {
+            if (diagnosticsReportOffset > 0) --diagnosticsReportOffset;
+        } else if (diagnosticsReportOffset + visibleRows < diagnosticsReportLines.size()) {
+            ++diagnosticsReportOffset;
+        }
+    }
+
+    void RebuildDiagnosticsReport() {
+        diagnosticsReportLines.clear();
+        auto append = [&](const std::string& heading, const std::string& value) {
+            diagnosticsReportLines.push_back(heading);
+            std::istringstream lines(value);
+            std::string line;
+            while (std::getline(lines, line)) diagnosticsReportLines.push_back(line);
+            if (value.empty()) diagnosticsReportLines.push_back("(no output)");
+        };
+        append("WSL SUBSYSTEM STATUS", diagnosticsStatus);
+        append("INSTALLED BINARY REVISIONS", diagnosticsVersion);
+        diagnosticsReportOffset = 0;
+    }
+
+    void LoadDiagnostics() {
+        auto status = Sys::RunWithSpinner("Reading WSL status", [&]() {
+            return Sys::Exec({ L"--status" }, 5000);
+        });
+        diagnosticsStatus = status.stdOut.empty() ? status.stdErr : status.stdOut;
+
+        auto version = Sys::RunWithSpinner("Reading WSL version", [&]() {
+            return Sys::Exec({ L"--version" }, 5000);
+        });
+        diagnosticsVersion = version.stdOut.empty() ? version.stdErr : version.stdOut;
+        RebuildDiagnosticsReport();
+    }
+
+    void ClearDiagnostics() {
+        diagnosticsStatus = "Not loaded. Press [F7] to open Full Diagnostics.";
+        diagnosticsVersion.clear();
+        diagnosticsReportLines.clear();
+        diagnosticsReportOffset = 0;
+        diagnosticsProcesses.clear();
+        selectedProcess = 0;
+        diagnosticsProcessOffset = 0;
+        showDiagnosticsProcesses = false;
+    }
+
+    void ClearProcessList() {
+        diagnosticsProcesses.clear();
+        selectedProcess = 0;
+        diagnosticsProcessOffset = 0;
+        showDiagnosticsProcesses = false;
+    }
+
+    void HandleMouse(const InputEvent& input) {
+        const SHORT x = input.mousePosition.X;
+        const SHORT y = input.mousePosition.Y;
+
+        if (y == 4) {
+            for (size_t tab = 0; tab < tabHitBoxes.size(); ++tab) {
+                if (x >= tabHitBoxes[tab].first && x < tabHitBoxes[tab].second) {
+                    SelectTab(static_cast<int>(tab + 1));
+                    break;
+                }
+            }
+            return;
+        }
+
+        if (currentTab == 1 && y >= 10 && !cachedDistros.empty()) {
+            const size_t row = static_cast<size_t>(y - 10);
+            if (row < cachedDistros.size()) {
+                selectedRow = row;
+                if (input.doubleClick) HandleActionKeys(13);
+            }
+        }
+    }
+
+    void SetStatus(const std::string& msg, const std::string& col = Color::GREEN) {
+        statusMsg = msg;
+        statusColor = col;
+    }
+
+    void CycleTheme() {
+        const auto next = static_cast<int>(currentTheme) + 1;
+        currentTheme = static_cast<ThemeName>(next % 4);
+        ApplyTheme(currentTheme);
+        SetStatus("Theme: " + std::string(currentTheme == ThemeName::Silver ? "Silver" : currentTheme == ThemeName::Blue ? "Blue" : currentTheme == ThemeName::Orange ? "Orange" : "Black") + ".", Color::CYAN);
+    }
+
+    void CycleGlyphStyle() {
+        const auto next = static_cast<int>(currentGlyphStyle) + 1;
+        currentGlyphStyle = static_cast<GlyphStyle>(next % 3);
+        ApplyGlyphs(currentGlyphStyle);
+        SetStatus("Glyphs: " + std::string(currentGlyphStyle == GlyphStyle::Ascii ? "Ascii" : currentGlyphStyle == GlyphStyle::Unicode ? "Unicode" : "Nerd Font") + ".", Color::MAGENTA);
+    }
+
+    void RefreshDistroCache() {
+        cachedDistros = WSL::ListDistros();
+        if (cachedDistros.empty()) {
+            selectedRow = 0;
+        } else if (selectedRow >= cachedDistros.size()) {
+            selectedRow = cachedDistros.size() - 1;
+        }
+    }
+
+    std::string PromptLine(const std::string& promptText) {
+        HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        GetConsoleMode(hIn, &mode);
+
+        FlushConsoleInputBuffer(hIn);
+        std::cin.clear();
+
+        SetConsoleMode(hIn, mode | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+        std::cout << "\033[?25h" << promptText << std::flush;
+
+        std::string input;
+        std::getline(std::cin, input);
+
+        SetConsoleMode(hIn, mode);
+        FlushConsoleInputBuffer(hIn);
+        std::cout << "\033[?25l";
+
+        const auto begin = input.find_first_not_of(" \t\r\n");
+        if (begin == std::string::npos) return "";
+        const auto end = input.find_last_not_of(" \t\r\n");
+        return input.substr(begin, end - begin + 1);
+    }
+
+    bool ConfirmAction(const std::string& action, const std::string& details) {
+        std::cout << "\033[?25h" << Color::RED << "\n [!] " << action << " " << details << " (y/N): " << Color::RESET;
+        std::string confirmation = PromptLine("");
+        std::cout << "\033[?25l";
+        return confirmation == "y" || confirmation == "Y";
+    }
+
+    fs::path Utf8Path(const std::string& text) const {
+        return fs::path(Sys::Utf8ToWide(text));
+    }
+
+    std::string RenderHeaderString() {
+        std::ostringstream out;
+        std::ostringstream tabs;
+        const SHORT width = ConsoleWidth();
+        SHORT visibleTabWidth = 1;
+        tabHitBoxes.clear();
+        out << "\033[?2026h\033[2J\033[3J\033[H" << Color::BG_BLUE << Color::HEADER_TEXT << Color::BOLD;
+        out << FillLine(Color::BG_BLUE + Color::HEADER_TEXT + Color::BOLD, width);
+        out << Color::BG_BLUE << Color::HEADER_TEXT << PadLine("  WSL MANAGER v4.5 -- Windows Subsystem for Linux", width) << Color::RESET << "\n";
+        out << Color::BG_BLUE << Color::HEADER_TEXT << PadLine("  Copyright (c) 2024 - 2026 Roberto J Dohnert. All rights reserved.", width) << Color::RESET << "\n";
+        out << FillLine(Color::BG_BLUE + Color::HEADER_TEXT + Color::BOLD, width) << Color::RESET;
+
+        auto tab = [&](int id, const std::string& label) {
+            const SHORT start = tabHitBoxes.empty() ? 1 : tabHitBoxes.back().second;
+            if (id == currentTab) {
+                tabs << Color::WHITE << Color::BOLD << " [" << id << "] " << label << " " << Color::RESET << Color::BG_DARK;
+            } else {
+                tabs << Color::WHITE << "  " << id << "  " << label << "  ";
+            }
+            const SHORT tabWidth = static_cast<SHORT>((id == currentTab ? 6 : 7) + label.size());
+            tabHitBoxes.push_back({ start, static_cast<SHORT>(start + tabWidth) });
+            visibleTabWidth = static_cast<SHORT>(visibleTabWidth + tabWidth);
+        };
+
+        tabs << Color::BG_DARK << " ";
+        tab(1, "Distros");
+        tab(2, "Online");
+        tab(3, "Import");
+        tab(4, "Diagnostics");
+        tab(5, "Lifecycle");
+        tab(6, "Help");
+        const SHORT quitWidth = 10;
+        tabs << " [Q] Quit ";
+        visibleTabWidth = static_cast<SHORT>(visibleTabWidth + quitWidth);
+        if (visibleTabWidth < width) {
+            tabs << std::string(static_cast<size_t>(width - visibleTabWidth), ' ');
+        }
+        std::string tabLine = tabs.str();
+        out << Color::BG_DARK << tabLine << Color::RESET << "\n";
+        out << FillLine(Color::BG_BLUE + Color::HEADER_TEXT + Color::BOLD, width);
+        return out.str();
+    }
+
+    std::string RenderFooterString() {
+        std::ostringstream out;
+        const SHORT width = ConsoleWidth();
+        out << "\n" << FillLine(Color::BG_DARK, width, '-') ;
+        out << PadLine(" Status  : " + statusColor + statusMsg + Color::RESET, width) << Color::CLEAR_LINE << "\n";
+        out << PadLine(" Controls: [↑/↓] Select | [←/→] Tabs | [Enter/Space] Activate | [1-6] Tabs | [T] Theme | [G] Glyphs | Mouse | [Q] Exit", width) << Color::CLEAR_LINE << "\n";
+        return out.str();
+    }
+
+public:
+    void Run() {
+        ApplyTheme(currentTheme);
+        ApplyGlyphs(currentGlyphStyle);
+
+        ConsoleGuard guard;
+        if (!guard.IsReady()) {
+            std::cerr << "WSL Manager requires an interactive Windows console with VT and mouse input support.\n";
+            return;
+        }
+        Sys::RunWithSpinner("Loading installed WSL distributions", [&]() {
+            RefreshDistroCache();
+            return ProcessResult{ 0, "", "" };
+        });
+
+        while (true) {
+            std::cout << "\033[?2026h";
+            if (currentTab == 1) RenderExplorer();
+            else if (currentTab == 2) RenderCatalog();
+            else if (currentTab == 3) RenderImportPage();
+            else if (currentTab == 4) RenderDiagnostics();
+            else if (currentTab == 5) RenderLifecycle();
+            else if (currentTab == 6) RenderHelp();
+            std::cout << "\033[?2026l" << std::flush;
+
+            InputEvent input = ReadInput();
+            if (input.readError) {
+                std::cerr << "Console input failed: " << GetLastError() << "\n";
+                break;
+            }
+            if (input.mouseWheel != 0) {
+                const int steps = input.mouseWheel / WHEEL_DELTA;
+                if (currentTab == 4 && showDiagnosticsProcesses) {
+                    for (int step = 0; step < std::abs(steps); ++step) {
+                        MoveDiagnosticSelection(steps > 0 ? -1 : 1);
+                    }
+                } else if (currentTab == 6) {
+                    for (int step = 0; step < std::abs(steps); ++step) {
+                        MoveHelpSelection(steps > 0 ? -1 : 1);
+                    }
+                } else if (currentTab == 2) {
+                    for (int step = 0; step < std::abs(steps); ++step) {
+                        MoveCatalog(steps > 0 ? -1 : 1);
+                    }
+                } else if (currentTab == 4 && showFullDiagnostics) {
+                    for (int step = 0; step < std::abs(steps); ++step) {
+                        MoveFullDiagnostics(steps > 0 ? -1 : 1);
+                    }
+                } else if (currentTab == 1 && !cachedDistros.empty()) {
+                    for (int step = 0; step < std::abs(steps); ++step) {
+                        if (steps > 0) {
+                            if (selectedRow > 0) --selectedRow;
+                        } else if (selectedRow + 1 < cachedDistros.size()) {
+                            ++selectedRow;
+                        }
+                    }
+                }
+                continue;
+            }
+            if (input.mouseClick) {
+                HandleMouse(input);
+                continue;
+            }
+
+            if (input.key == InputKey::Up) {
+                if (currentTab == 4) {
+                    if (showDiagnosticsProcesses) MoveDiagnosticSelection(-1);
+                    else if (showFullDiagnostics) MoveFullDiagnostics(-1);
+                } else if (currentTab == 6) {
+                    MoveHelpSelection(-1);
+                } else if (currentTab == 2) {
+                    MoveCatalog(-1);
+                } else if (selectedRow > 0) {
+                    --selectedRow;
+                }
+                continue;
+            }
+            if (input.character == 't' || input.character == 'T') {
+                CycleTheme();
+                continue;
+            }
+            if (input.character == 'g' || input.character == 'G') {
+                CycleGlyphStyle();
+                continue;
+            }
+            if (input.key == InputKey::Down) {
+                if (currentTab == 4) {
+                    if (showDiagnosticsProcesses) MoveDiagnosticSelection(1);
+                    else if (showFullDiagnostics) MoveFullDiagnostics(1);
+                } else if (currentTab == 6) {
+                    MoveHelpSelection(1);
+                } else if (currentTab == 2) {
+                    MoveCatalog(1);
+                } else if (!cachedDistros.empty() && selectedRow + 1 < cachedDistros.size()) {
+                    ++selectedRow;
+                }
+                continue;
+            }
+            if (input.key == InputKey::ProcessList) {
+                if (currentTab == 4) HandleTabInput(4, 0, input);
+                continue;
+            }
+            if (input.key == InputKey::FullDiagnostics) {
+                if (currentTab == 4) HandleTabInput(4, 0, input);
+                continue;
+            }
+            if (input.key == InputKey::Lifecycle) {
+                SelectTab(5);
+                continue;
+            }
+            if (input.key == InputKey::Left) {
+                SelectTab(currentTab == 1 ? 6 : currentTab - 1);
+                continue;
+            }
+            if (input.key == InputKey::Right) {
+                SelectTab(currentTab == 6 ? 1 : currentTab + 1);
+                continue;
+            }
+
+            int ch = input.character;
+            if (input.key == InputKey::Enter || input.key == InputKey::Space) ch = 13;
+            if (ch == 'q' || ch == 'Q') break;
+            if (currentTab == 5 && ch >= '1' && ch <= '3') {
+                HandleTabInput(5, ch, input);
+                continue;
+            }
+            if (ch >= '1' && ch <= '6') {
+                SelectTab(ch - '0');
+                continue;
+            }
+
+            if (currentTab == 1) HandleActionKeys(ch);
+            else HandleTabInput(currentTab, ch, input);
+        }
+    }
+
+    void HandleTabInput(int tab, int ch, const InputEvent& input) {
+        if (tab == 2) {
+            if (ch == 'i' || ch == 'I') {
+                std::string id = PromptLine("\n Enter Distro ID to install (e.g. Ubuntu-24.04): ");
+                if (!id.empty()) {
+                    Sys::LaunchInstallWindow(Sys::Utf8ToWide(id));
+                    SetStatus("Installation process spawned in new window.", Color::GREEN);
+                }
+            } else if (ch == 'r' || ch == 'R') {
+                cachedCatalog = WSL::ListOnline();
+                onlineCatalogLoaded = true;
+                catalogOffset = 0;
+                SetStatus("Online catalog refreshed.", Color::GREEN);
+            } else if (ch == 'm' || ch == 'M' || ch == 13) {
+                currentTab = 1;
+            }
+            return;
+        }
+
+        if (tab == 3) {
+            if (ch == 13 || ch == 'i' || ch == 'I') {
+                RunImportWorkflow();
+            } else if (ch == 'm' || ch == 'M') {
+                currentTab = 1;
+            }
+            return;
+        }
+
+        if (tab == 5) {
+            if (ch == '1') {
+                if (!ConfirmAction("Shutdown all running WSL distributions", "This stops every active distro and frees host memory.")) {
+                    SetStatus("Shutdown cancelled.", Color::YELLOW);
+                    return;
+                }
+                Sys::RunWithSpinner("Shutting down WSL subsystem", [&]() {
+                    return Sys::Exec({ L"--shutdown" }, 30000);
+                });
+                RefreshDistroCache();
+                SetStatus("All WSL distributions stopped. Memory cleared.", Color::GREEN);
+            } else if (ch == '2') {
+                if (!ConfirmAction("Update WSL components", "This downloads and installs the latest Microsoft WSL components.")) {
+                    SetStatus("Update cancelled.", Color::YELLOW);
+                    return;
+                }
+                lifecycleDetails = "Preparing WSL component update...\n";
+                auto res = Sys::RunWithSpinner("Updating WSL components", [&]() {
+                    return Sys::Exec({ L"--update" }, 300000);
+                });
+                lifecycleDetails += "Command: wsl.exe --update\n";
+                lifecycleDetails += "Exit code: " + std::to_string(res.exitCode) + "\n";
+                lifecycleDetails += res.stdOut.empty() ? "Output: (none)\n" : "Output:\n" + res.stdOut + "\n";
+                if (!res.stdErr.empty()) lifecycleDetails += "Diagnostics:\n" + res.stdErr + "\n";
+                lifecycleDetails += res.success() ? "Result: WSL update completed successfully." : "Result: WSL update failed.";
+                SetStatus(res.success() ? "WSL updated successfully." : res.stdErr, res.success() ? Color::GREEN : Color::RED);
+            } else if (ch == '3') {
+                if (!ConfirmAction("Rollback the WSL kernel", "This reverts to the previous WSL kernel version.")) {
+                    SetStatus("Kernel rollback cancelled.", Color::YELLOW);
+                    return;
+                }
+                auto res = Sys::RunWithSpinner("Rolling back WSL kernel", [&]() {
+                    return Sys::Exec({ L"--update", L"--rollback" }, 60000);
+                });
+                SetStatus(res.success() ? "WSL kernel rolled back." : res.stdErr, res.success() ? Color::GREEN : Color::RED);
+            }
+            if (ch != '1' && ch != '2' && ch != '3' && input.key != InputKey::Left && input.key != InputKey::Right) {
+                currentTab = 1;
+            }
+            return;
+        }
+
+        if (tab == 4) {
+            if (input.key == InputKey::FullDiagnostics) {
+                if (showFullDiagnostics) {
+                    showFullDiagnostics = false;
+                    ClearDiagnostics();
+                    SetStatus("Full Diagnostics closed. WSL details cleared.", Color::CYAN);
+                } else {
+                    ClearProcessList();
+                    LoadDiagnostics();
+                    showFullDiagnostics = true;
+                    SetStatus("Full Diagnostics shown. F7 hides it.", Color::CYAN);
+                }
+            } else if (input.key == InputKey::ProcessList) {
+                if (showDiagnosticsProcesses) {
+                    ClearProcessList();
+                    SetStatus("Process list closed.", Color::CYAN);
+                } else {
+                    showFullDiagnostics = false;
+                    RefreshDiagnosticsProcesses();
+                    showDiagnosticsProcesses = true;
+                    SetStatus("Process list shown. F9 hides it.", Color::CYAN);
+                }
+            } else if (ch == 'r' || ch == 'R' || ch == 13) {
+                if (!showFullDiagnostics) {
+                    SetStatus("Press F7 to open Full Diagnostics first.", Color::YELLOW);
+                } else {
+                    LoadDiagnostics();
+                    if (showDiagnosticsProcesses) RefreshDiagnosticsProcesses();
+                    SetStatus("Diagnostics refreshed.", Color::GREEN);
+                }
+            } else if (ch == 'k' || ch == 'K' || ch == 'x' || ch == 'X') {
+                if (!showDiagnosticsProcesses) {
+                    SetStatus("Press F9 to show the process list first.", Color::YELLOW);
+                } else if (cachedDistros.empty() || selectedRow >= cachedDistros.size() || diagnosticsProcesses.empty() || selectedProcess >= diagnosticsProcesses.size()) {
+                    SetStatus("No diagnostic process is selected.", Color::YELLOW);
+                } else {
+                    const WslProcess process = diagnosticsProcesses[selectedProcess];
+                    auto result = Sys::RunWithSpinner("Stopping PID " + std::to_string(process.pid), [&]() {
+                        return WSL::StopProcess(Sys::Utf8ToWide(cachedDistros[selectedRow].name), process.pid);
+                    });
+                    RefreshDiagnosticsProcesses();
+                    SetStatus(result.success() ? "PID " + std::to_string(process.pid) + " stopped and diagnostics refreshed." : "Unable to stop PID " + std::to_string(process.pid) + ".", result.success() ? Color::GREEN : Color::RED);
+                }
+            } else {
+                currentTab = 1;
+            }
+            return;
+        }
+
+        if (tab == 6) {
+            currentTab = 1;
+        }
+    }
+
+private:
+    void RenderExplorer() {
+        std::ostringstream out;
+        out << RenderHeaderString();
+        out << Color::BOLD << Color::CYAN << "[*] INSTALLED DISTRIBUTIONS\n" << Color::RESET;
+        out << "--------------------------------------------------------------------------------------------------------\n";
+        out << "  DEF   LOGO NAME                    STATE            WSL VERSION   MANAGEMENT\n";
+        out << "--------------------------------------------------------------------------------------------------------\n";
+
+        if (cachedDistros.empty()) {
+            out << Color::YELLOW << "  No distributions installed. Press [2] to install from the online catalog.\n" << Color::RESET;
+        } else {
+            for (size_t i = 0; i < cachedDistros.size(); ++i) {
+                const auto& d = cachedDistros[i];
+                bool isSel = (i == selectedRow);
+
+                std::string prefix = isSel ? Color::BG_HIGHLIGHT + Color::WHITE + " >" : "  ";
+                std::string defMark = d.isDefault ? Color::GREEN + "[*]" + Color::RESET : "   ";
+                std::string stateCol = (d.state == "Running") ? Color::GREEN : Color::WHITE;
+
+                out << prefix << " " << defMark << "  "
+                    << DistroLogo(d.name) << " " << std::left << std::setw(25) << d.name
+                    << stateCol << std::setw(17) << d.state << Color::RESET
+                    << std::setw(14) << d.version
+                    << (isSel ? Color::CYAN + "[Enter]Launch [T]Stop [E]Export [D]Del" : "")
+                    << Color::RESET << Color::CLEAR_LINE << "\n";
+            }
+        }
+
+        out << "--------------------------------------------------------------------------------------------------------\n";
+        out << Color::BOLD << "SELECTED ACTIONS:\n" << Color::RESET;
+        out << " [Enter] Launch Window   [T] Terminate   [S] Set Default   [2] Upgrade to WSL2   [E] Export   [D] Unregister\n";
+        out << RenderFooterString();
+        std::cout << out.str() << std::flush;
+    }
+
+    void HandleActionKeys(int ch) {
+        if (cachedDistros.empty() || selectedRow >= cachedDistros.size()) {
+            if (ch == 'r' || ch == 'R') {
+                RefreshDistroCache();
+                SetStatus("Distro list refreshed.");
+            }
+            return;
+        }
+
+        const auto& cur = cachedDistros[selectedRow];
+        std::wstring wName = Sys::Utf8ToWide(cur.name);
+
+        if (currentTab == 1) {
+            if (ch == 13) { // ENTER: Launch
+                const std::string distroName = cur.name;
+                if (!Sys::IsValidDistroName(wName)) {
+                    SetStatus("Refusing to launch invalid distro name.", Color::RED);
+                    return;
+                }
+                const bool launched = Sys::LaunchInTerminal(wName);
+                if (launched) {
+                    cachedDistros[selectedRow].state = "Running";
+                    SetStatus("Entered " + distroName + ".", Color::GREEN);
+                } else {
+                    SetStatus("Could not launch " + distroName + ".", Color::RED);
+                }
+            } else if (ch == 't' || ch == 'T') { // Terminate
+                auto res = Sys::RunWithSpinner("Stopping " + cur.name, [&]() {
+                    return Sys::Exec({ L"-t", wName }, 20000);
+                });
+                RefreshDistroCache();
+                SetStatus(res.success() ? cur.name + " stopped." : "Error: " + res.stdErr, res.success() ? Color::GREEN : Color::RED);
+            } else if (ch == 's' || ch == 'S') { // Set Default
+                auto res = Sys::RunWithSpinner("Setting " + cur.name + " as default", [&]() {
+                    return Sys::Exec({ L"--set-default", wName }, 15000);
+                });
+                RefreshDistroCache();
+                SetStatus(res.success() ? cur.name + " is now the default distro." : "Error: " + res.stdErr, res.success() ? Color::GREEN : Color::RED);
+            } else if (ch == '2') { // Convert to WSL2
+                auto res = Sys::RunWithSpinner("Converting " + cur.name + " to WSL 2 architecture", [&]() {
+                    return Sys::Exec({ L"--set-version", wName, L"2" }, 600000);
+                });
+                RefreshDistroCache();
+                SetStatus(res.success() ? cur.name + " converted to WSL 2." : "Conversion error: " + res.stdErr, res.success() ? Color::GREEN : Color::RED);
+            } else if (ch == 'e' || ch == 'E') { // Export
+                std::string tar = PromptLine(" Enter destination tarball path (e.g. D:\\backup.tar): ");
+                if (!tar.empty()) {
+                    std::wstring wTar = Sys::Utf8ToWide(tar);
+                    if (!Sys::IsValidFilesystemPath(wTar)) {
+                        SetStatus("Refusing to export to an invalid path.", Color::RED);
+                        return;
+                    }
+                    fs::path outFile = fs::path(wTar);
+                    if (fs::exists(outFile) && fs::is_directory(outFile)) {
+                        SetStatus("Export path must be a file, not a directory.", Color::RED);
+                        return;
+                    }
+                    if (fs::exists(outFile)) {
+                        std::cout << "\033[?25h" << Color::RED << "\n [!] Overwrite existing file '" << tar << "'? (y/N): " << Color::RESET;
+                        std::string overwrite = PromptLine("");
+                        std::cout << "\033[?25l";
+                        if (!(overwrite == "y" || overwrite == "Y")) {
+                            SetStatus("Export cancelled to avoid overwriting an existing file.", Color::YELLOW);
+                            return;
+                        }
+                    }
+                    auto res = Sys::RunWithSpinner("Exporting " + cur.name + " to " + tar, [&]() {
+                        return Sys::Exec({ L"--export", wName, wTar }, 600000);
+                    });
+                    SetStatus(res.success() ? "Export successful: " + tar : "Export error: " + res.stdErr, res.success() ? Color::GREEN : Color::RED);
+                }
+            } else if (ch == 'd' || ch == 'D') { // Unregister
+                std::cout << "\033[?25h" << Color::RED << "\n [!] Permanently DELETE & UNREGISTER '" << cur.name << "'? (y/N): " << Color::RESET;
+                std::string confirmation = PromptLine("");
+                int confirm = confirmation.empty() ? 0 : confirmation[0];
+                std::cout << "\033[?25l";
+                if (confirm == 'y' || confirm == 'Y') {
+                    if (!Sys::IsValidDistroName(wName)) {
+                        SetStatus("Refusing to unregister invalid distro name.", Color::RED);
+                        return;
+                    }
+                    auto res = Sys::RunWithSpinner("Unregistering " + cur.name, [&]() {
+                        return Sys::Exec({ L"--unregister", wName }, 120000);
+                    });
+                    RefreshDistroCache();
+                    SetStatus(res.success() ? "Unregistered " + cur.name : "Unregister error: " + res.stdErr, res.success() ? Color::GREEN : Color::RED);
+                }
+            } else if (ch == 'r' || ch == 'R') {
+                RefreshDistroCache();
+                SetStatus("Distro list refreshed.");
+            }
+        }
+    }
+
+    void RenderCatalog() {
+        std::ostringstream out;
+        out << RenderHeaderString();
+        out << Color::BOLD << Color::CYAN << "[*] AVAILABLE ONLINE DISTRIBUTIONS (wsl --list --online)\n" << Color::RESET;
+        out << "--------------------------------------------------------------------------------------------------------\n";
+        out << "  LOGO IDENTIFIER (NAME)        FRIENDLY NAME\n";
+        out << "--------------------------------------------------------------------------------------------------------\n";
+
+        if (!onlineCatalogLoaded) {
+            out << Color::YELLOW << "Press [R] to load the online distribution catalog.\n" << Color::RESET;
+        } else if (cachedCatalog.empty()) {
+            out << Color::YELLOW << "No online distributions were returned. Press [R] to retry.\n" << Color::RESET;
+        } else {
+            const size_t visibleRows = VisibleCatalogRows();
+            catalogOffset = std::min(catalogOffset, cachedCatalog.size() - 1);
+            const size_t end = visibleRows == 0 ? catalogOffset : std::min(cachedCatalog.size(), catalogOffset + visibleRows);
+            out << "  Showing " << (catalogOffset + 1) << "-" << end << " of " << cachedCatalog.size() << " distributions\n";
+            for (size_t index = catalogOffset; index < end; ++index) {
+                const auto& item = cachedCatalog[index];
+                out << "  " << DistroLogo(item.id) << " " << Color::GREEN << std::left << std::setw(27) << item.id << Color::RESET << item.friendlyName << "\n";
+            }
+            out << "  [Up/Down] or mouse wheel scroll\n";
+        }
+
+        out << "--------------------------------------------------------------------------------------------------------\n";
+        out << " [I] Install Selected Distro Identifier    [M] Main Menu\n";
+        out << RenderFooterString();
+        std::cout << out.str() << std::flush;
+
+    }
+
+    void RenderImportPage() {
+        std::ostringstream out;
+        out << RenderHeaderString();
+        out << Color::BOLD << Color::CYAN << "[*] IMPORT CUSTOM TARBALL OR CONTAINER ROOTFS\n" << Color::RESET;
+        out << "--------------------------------------------------------------------------------------------------------\n\n";
+        out << "Press [Enter] or [I] to begin the import wizard.\n";
+        out << "Press [M] to return to Distro Explorer.\n";
+        out << RenderFooterString();
+        std::cout << out.str() << std::flush;
+    }
+
+    void RunImportWorkflow() {
+        std::ostringstream out;
+        out << RenderHeaderString();
+        out << Color::BOLD << Color::CYAN << "[*] IMPORT CUSTOM TARBALL OR CONTAINER ROOTFS\n" << Color::RESET;
+        out << "--------------------------------------------------------------------------------------------------------\n\n";
+        std::cout << out.str() << std::flush;
+
+        std::string name = PromptLine(" 1. Target Distro Instance Name : ");
+        if (name.empty()) { currentTab = 1; return; }
+        std::wstring wName = Sys::Utf8ToWide(name);
+        if (!Sys::IsValidDistroName(wName)) {
+            SetStatus("Import Error: Invalid distro name.", Color::RED);
+            currentTab = 1;
+            return;
+        }
+
+        std::string dest = PromptLine(" 2. Target Installation Folder  : ");
+        if (dest.empty()) { currentTab = 1; return; }
+        std::wstring wDest = Sys::Utf8ToWide(dest);
+        if (!Sys::IsValidFilesystemPath(wDest)) {
+            SetStatus("Import Error: Invalid destination folder path.", Color::RED);
+            currentTab = 1;
+            return;
+        }
+
+        std::string tar = PromptLine(" 3. Path to Rootfs Tarball File : ");
+        std::error_code fileError;
+        fs::path tarPath = Utf8Path(tar);
+        if (tar.empty() || !Sys::IsValidFilesystemPath(Sys::Utf8ToWide(tar), true) || !fs::exists(tarPath, fileError) || fileError) {
+            SetStatus("Import Error: Source file does not exist.", Color::RED);
+            currentTab = 1;
+            return;
+        }
+
+        fs::path destinationPath = Utf8Path(dest);
+        fileError.clear();
+        if (fs::exists(destinationPath) && !fs::is_directory(destinationPath)) {
+            SetStatus("Import Error: Destination exists but is not a directory.", Color::RED);
+            currentTab = 1;
+            return;
+        }
+        fs::create_directories(destinationPath, fileError);
+        if (fileError) {
+            SetStatus("Import Error: Cannot create destination folder: " + fileError.message(), Color::RED);
+            currentTab = 1;
+            return;
+        }
+
+        std::wstring wTar = Sys::Utf8ToWide(tar);
+
+        auto res = Sys::RunWithSpinner("Importing archive (WSL 2)", [&]() {
+            return Sys::Exec({ L"--import", wName, wDest, wTar, L"--version", L"2" }, 600000);
+        });
+
+        RefreshDistroCache();
+        SetStatus(res.success() ? "Import completed for " + name : "Import failed: " + res.stdErr, res.success() ? Color::GREEN : Color::RED);
+        currentTab = 1;
+    }
+
+    void RenderDiagnostics() {
+        std::ostringstream out;
+        out << RenderHeaderString();
+        out << Color::BOLD << Color::CYAN << "[*] SUBSYSTEM DIAGNOSTICS & ENGINE HEALTH\n" << Color::RESET;
+        out << "--------------------------------------------------------------------------------------------------------\n";
+
+        if (showDiagnosticsProcesses) {
+            const SHORT width = ConsoleWidth();
+            const size_t innerWidth = width > 6 ? static_cast<size_t>(width - 6) : 1;
+            const size_t visibleRows = VisibleDiagnosticProcessRows();
+            out << Color::BG_DARK << "+-" << std::string(innerWidth, '-') << "-+" << Color::RESET << "\n";
+            out << Color::BG_DARK << "| " << std::left << std::setw(static_cast<int>(innerWidth)) << "PROCESSES (F9 closes)" << " |" << Color::RESET << "\n";
+            out << Color::BG_DARK << "+-" << std::string(innerWidth, '-') << "-+" << Color::RESET << "\n";
+            if (cachedDistros.empty() || selectedRow >= cachedDistros.size()) {
+                out << Color::BG_DARK << "| " << std::left << std::setw(static_cast<int>(innerWidth)) << "No distro is selected." << " |" << Color::RESET << "\n";
+            } else {
+                const std::string title = "Processes in " + cachedDistros[selectedRow].name;
+                out << Color::BG_DARK << "| " << std::left << std::setw(static_cast<int>(innerWidth)) << ClipText(title, innerWidth) << " |" << Color::RESET << "\n";
+                if (diagnosticsProcesses.empty()) {
+                    out << Color::BG_DARK << "| " << std::left << std::setw(static_cast<int>(innerWidth)) << "No processes returned. Refresh with R." << " |" << Color::RESET << "\n";
+                } else if (visibleRows == 0) {
+                    out << Color::BG_DARK << "| " << std::left << std::setw(static_cast<int>(innerWidth)) << "Enlarge the console to view processes." << " |" << Color::RESET << "\n";
+                } else {
+                    const size_t maxOffset = diagnosticsProcesses.size() - 1;
+                    diagnosticsProcessOffset = std::min(diagnosticsProcessOffset, maxOffset);
+                    const size_t end = std::min(diagnosticsProcesses.size(), diagnosticsProcessOffset + visibleRows);
+                    for (size_t index = diagnosticsProcessOffset; index < end; ++index) {
+                        const auto& process = diagnosticsProcesses[index];
+                        const bool selected = index == selectedProcess;
+                        const size_t commandWidth = innerWidth > 36 ? innerWidth - 36 : 8;
+                        std::ostringstream processLine;
+                        processLine << (selected ? "> " : "  ") << std::left << std::setw(9) << process.pid
+                            << std::setw(21) << ClipText(process.name, 20) << ClipText(process.command, commandWidth);
+                        out << Color::BG_DARK << "| " << std::setw(static_cast<int>(innerWidth)) << std::left << ClipText(processLine.str(), innerWidth) << " |" << Color::RESET << "\n";
+                    }
+                }
+            }
+            out << Color::BG_DARK << "+-" << std::string(innerWidth, '-') << "-+" << Color::RESET << "\n";
+            out << "[Up/Down] or mouse wheel scroll   [K/X] Stop selected   [F9] Close\n";
+            out << RenderFooterString();
+            std::cout << out.str() << std::flush;
+            return;
+        }
+
+        if (showFullDiagnostics) {
+            const SHORT width = ConsoleWidth();
+            const size_t innerWidth = width > 6 ? static_cast<size_t>(width - 6) : 1;
+            const size_t visibleRows = VisibleFullDiagnosticsRows();
+            if (diagnosticsReportLines.empty()) RebuildDiagnosticsReport();
+            if (!diagnosticsReportLines.empty()) {
+                diagnosticsReportOffset = std::min(diagnosticsReportOffset, diagnosticsReportLines.size() - 1);
+            }
+
+            out << Color::BG_DARK << "+-" << std::string(innerWidth, '-') << "-+" << Color::RESET << "\n";
+            out << Color::BG_DARK << "| " << std::left << std::setw(static_cast<int>(innerWidth)) << "FULL DIAGNOSTICS (F7 closes)" << " |" << Color::RESET << "\n";
+            out << Color::BG_DARK << "+-" << std::string(innerWidth, '-') << "-+" << Color::RESET << "\n";
+
+            const size_t end = visibleRows == 0 ? diagnosticsReportOffset : std::min(diagnosticsReportLines.size(), diagnosticsReportOffset + visibleRows);
+            for (size_t index = diagnosticsReportOffset; index < end; ++index) {
+                out << Color::BG_DARK << "| " << std::left << std::setw(static_cast<int>(innerWidth))
+                    << ClipText(diagnosticsReportLines[index], innerWidth) << " |" << Color::RESET << "\n";
+            }
+            for (size_t row = end - diagnosticsReportOffset; row < visibleRows; ++row) {
+                out << Color::BG_DARK << "| " << std::setw(static_cast<int>(innerWidth)) << " " << " |" << Color::RESET << "\n";
+            }
+            out << Color::BG_DARK << "+-" << std::string(innerWidth, '-') << "-+" << Color::RESET << "\n";
+            out << "Showing " << (diagnosticsReportLines.empty() ? 0 : diagnosticsReportOffset + 1) << "-" << end << " of " << diagnosticsReportLines.size() << " report lines\n";
+            out << "[Up/Down] or mouse wheel scroll   [F7] Close full Diagnostics   [R/Enter] Refresh\n";
+            out << RenderFooterString();
+            std::cout << out.str() << std::flush;
+            return;
+        }
+        
+        out << " [F7] Open Full Diagnostics   [F9] Open Processes\n";
+        out << Color::CYAN << "Press [F7] for WSL details or [F9] for the selected distro's processes.\n" << Color::RESET;
+        
+        out << RenderFooterString();
+        std::cout << out.str() << std::flush;
+    }
+
+    void RenderLifecycle() {
+        std::ostringstream out;
+        out << RenderHeaderString();
+        out << Color::BOLD << Color::CYAN << "[*] SUBSYSTEM LIFECYCLE & KERNEL MANAGEMENT\n" << Color::RESET;
+        out << "--------------------------------------------------------------------------------------------------------\n";
+        out << " [1] Clean Subsystem Shutdown (wsl --shutdown)\n";
+        out << "     Terminates all running VM instances and frees locked RAM back to host OS.\n\n";
+        out << " [2] Check and Update Kernel (wsl --update)\n";
+        out << "     Pulls the newest Microsoft WSL2 Linux kernel package.\n\n";
+        out << " [3] Rollback Kernel (wsl --update --rollback)\n";
+        out << "     Reverts back to the previous stable kernel revision.\n\n";
+        out << " [F8] Open Lifecycle   [1] Shutdown   [2] Update   [3] Rollback\n";
+        out << "\n" << Color::BOLD << "Last lifecycle operation:\n" << Color::RESET;
+        std::istringstream detailLines(lifecycleDetails);
+        std::string detailLine;
+        while (std::getline(detailLines, detailLine)) {
+            out << "  " << ClipText(detailLine, ConsoleWidth() > 4 ? static_cast<size_t>(ConsoleWidth() - 4) : 1) << "\n";
+        }
+        out << " [M] Return to Distro Explorer\n";
+        out << RenderFooterString();
+        std::cout << out.str() << std::flush;
+
+    }
+
+    void RenderHelp() {
+        std::ostringstream out;
+        out << RenderHeaderString();
+        out << Color::BOLD << Color::CYAN << "[*] REFERENCE MANUAL & TROUBLESHOOTING\n" << Color::RESET;
+        out << "--------------------------------------------------------------------------------------------------------\n";
+        const std::vector<std::string> helpLines = {
+            "1. Keyboard Navigation:",
+            "   - [UP/DOWN]    Select a distro or scroll this Help page.",
+            "   - [LEFT/RIGHT] Move between management tabs.",
+            "   - [ENTER/SPACE] Activate the selected action.",
+            "   - [MOUSE WHEEL] Scroll distro, process, or Help lists.",
+            "   - [1-6]        Jump immediately to any management tab.",
+            "   - [T]          Cycle color theme (Silver, Blue, Orange, Black).",
+            "   - [G]          Cycle glyph style (Ascii, Unicode, Nerd Font).",
+            "2. Explorer Examples:",
+            "   - Select Ubuntu with [Up/Down], then press [Enter] to open it.",
+            "   - Press [T] to stop, [S] to set default, or [R] to refresh.",
+            "   - Press [E], then enter D:\\Backups\\ubuntu.tar to export.",
+            "   - Press [D], then type Y and Enter to unregister permanently.",
+            "3. Diagnostics Examples:",
+            "   - Select a distro, open Diagnostics with [4], then press [F7].",
+            "   - Press [F9], use [Up/Down] or the wheel to select a process.",
+            "   - Press [K] or [X] to send the selected process SIGTERM.",
+            "   - Press [F9] again to hide the process list.",
+            "4. Import and Online Store:",
+            "   - Online Store: press [2], then [R] to load distro identifiers.",
+            "   - Import: press [3], then [Enter], and provide the requested paths.",
+            "   - Example rootfs: C:\\WSL\\Images\\debian-rootfs.tar.",
+            "5. Useful WSL Commands:",
+            "   - List distros: wsl --list --verbose",
+            "   - Run a command: wsl -d Ubuntu -- uname -a",
+            "   - Stop all distros: wsl --shutdown",
+            "6. Lifecycle and Shortcuts:",
+            "   - [F7] opens a framed Full Diagnostics window; press F7 to close it.",
+            "   - [F8] opens Lifecycle; [1] shutdown, [2] update, [3] rollback.",
+            "   - Lifecycle Update displays command output and exit details.",
+            "7. Virtualization Errors:",
+            "   - 0x80370102 usually means virtualization is disabled in firmware.",
+            "   - 0x80040326 usually means the WSL2 kernel needs an update.",
+            "8. Container Rootfs Workflow:",
+            "   - Export: docker export <container_id> > rootfs.tar",
+            "   - Import: register the rootfs from Tab [3].",
+            "9. Page Controls:",
+            "   - Help shows 10 lines at a time. Use Up/Down or the mouse wheel.",
+            "   - [Q] exits from any screen."
+        };
+        const size_t visibleRows = VisibleHelpRows();
+        const size_t maxOffset = helpLines.empty() ? 0 : helpLines.size() - 1;
+        helpScrollOffset = std::min(helpScrollOffset, maxOffset);
+        const size_t end = visibleRows == 0 ? helpScrollOffset : std::min(helpLines.size(), helpScrollOffset + visibleRows);
+        out << "Showing " << (helpLines.empty() ? 0 : helpScrollOffset + 1) << "-" << end << " of " << helpLines.size() << " help lines\n";
+        for (size_t index = helpScrollOffset; index < end; ++index) {
+            out << ClipText(helpLines[index], ConsoleWidth() > 2 ? static_cast<size_t>(ConsoleWidth() - 2) : 1) << "\n";
+        }
+        out << "\n[Up/Down] or mouse wheel scroll   [1-6] Tabs   [Q] Exit";
+        std::cout << out.str() << std::flush;
+    }
+};
+
+int main() {
+    App app;
+    app.Run();
+    return 0;
+}

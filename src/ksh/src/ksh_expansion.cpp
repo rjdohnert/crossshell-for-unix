@@ -430,6 +430,10 @@ private:
             result = parse_unary();
         } else if (consume(L'-')) {
             result = -parse_unary();
+        } else if (consume(L'~')) {
+            result = static_cast<double>(~to_safe_int64(parse_unary()));
+        } else if (consume(L'!')) {
+            result = (parse_unary() == 0.0) ? 1.0 : 0.0;
         } else {
             result = parse_primary();
         }
@@ -440,7 +444,7 @@ private:
     std::wstring parse_identifier() {
         skip_spaces();
         std::wstring identifier;
-        while (pos < expr.size() && (std::iswalnum(expr[pos]) || expr[pos] == L'_')) {
+        while (pos < expr.size() && (std::iswalnum(expr[pos]) || expr[pos] == L'_' || expr[pos] == L'.')) {
             identifier.push_back(expr[pos]);
             pos++;
         }
@@ -450,6 +454,50 @@ private:
     double parse_number() {
         skip_spaces();
         size_t start = pos;
+
+        if (pos + 1 < expr.size() && expr[pos] == L'0') {
+            wchar_t prefix = expr[pos + 1];
+            if (prefix == L'x' || prefix == L'X') {
+                pos += 2;
+                size_t hex_start = pos;
+                while (pos < expr.size() && std::iswxdigit(expr[pos])) {
+                    pos++;
+                }
+                if (pos == hex_start) {
+                    throw std::runtime_error("hexadecimal digits expected after 0x");
+                }
+                wchar_t* end_ptr = nullptr;
+                unsigned long long hex_val = std::wcstoull(expr.c_str() + hex_start, &end_ptr, 16);
+                return static_cast<double>(hex_val);
+            }
+            if (prefix == L'b' || prefix == L'B') {
+                pos += 2;
+                size_t bin_start = pos;
+                while (pos < expr.size() && (expr[pos] == L'0' || expr[pos] == L'1')) {
+                    pos++;
+                }
+                if (pos == bin_start) {
+                    throw std::runtime_error("binary digits expected after 0b");
+                }
+                wchar_t* end_ptr = nullptr;
+                unsigned long long bin_val = std::wcstoull(expr.c_str() + bin_start, &end_ptr, 2);
+                return static_cast<double>(bin_val);
+            }
+            if (prefix == L'o' || prefix == L'O') {
+                pos += 2;
+                size_t oct_start = pos;
+                while (pos < expr.size() && expr[pos] >= L'0' && expr[pos] <= L'7') {
+                    pos++;
+                }
+                if (pos == oct_start) {
+                    throw std::runtime_error("octal digits expected after 0o");
+                }
+                wchar_t* end_ptr = nullptr;
+                unsigned long long oct_val = std::wcstoull(expr.c_str() + oct_start, &end_ptr, 8);
+                return static_cast<double>(oct_val);
+            }
+        }
+
         size_t digit_start = pos;
         while (pos < expr.size() && std::iswdigit(expr[pos])) {
             pos++;
@@ -1675,6 +1723,63 @@ std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_
         return L"";
     };
 
+    auto apply_parameter_operator = [&](wchar_t op, const std::wstring& parameter_name, const std::wstring& parameter_word, bool colon_operator) -> std::wstring {
+        std::wstring existing_value;
+        bool is_set = false;
+        try_get_parameter_value(parameter_name, existing_value, is_set);
+        const bool is_missing = !is_set || (colon_operator && existing_value.empty());
+
+        if (op == L'-') {
+            return is_missing ? expand_substitutions_left_to_right(parameter_word) : existing_value;
+        }
+
+        if (op == L'=') {
+            if (!is_missing) {
+                return existing_value;
+            }
+
+            std::wstring assigned_value = expand_substitutions_left_to_right(parameter_word);
+            if (g_expansion_error) {
+                return L"";
+            }
+
+            if (!is_assignable_parameter_name(parameter_name)) {
+                std::wcerr << L"ksh: bad substitution for := operator\n";
+                ksh_env.variables[L"?"] = L"1";
+                g_expansion_error = true;
+                return L"";
+            }
+
+            std::wstring assignment_error;
+            if (!assign_parameter_value(parameter_name, assigned_value, false, false, assignment_error)) {
+                std::wcerr << L"ksh: " << assignment_error << L"\n";
+                ksh_env.variables[L"?"] = L"1";
+                g_expansion_error = true;
+                return L"";
+            }
+            return assigned_value;
+        }
+
+        if (op == L'+') {
+            return is_missing ? L"" : expand_substitutions_left_to_right(parameter_word);
+        }
+
+        if (is_missing) {
+            std::wstring message = expand_substitutions_left_to_right(parameter_word);
+            if (message.empty()) {
+                message = colon_operator
+                    ? L"parameter '" + parameter_name + L"' is unset or empty"
+                    : L"parameter '" + parameter_name + L"' is unset";
+            }
+            std::wcerr << L"ksh: " << message << L"\n";
+            ksh_env.variables[L"?"] = L"1";
+            g_expansion_error = true;
+            return L"";
+        }
+
+        return existing_value;
+    };
+
     if (next_index >= input.length()) {
         return L"$";
     }
@@ -1863,6 +1968,20 @@ std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_
         return resolved_value;
     }
 
+    if (braced && next_index < input.length() &&
+        (input[next_index] == L'-' || input[next_index] == L'=' || input[next_index] == L'+' || input[next_index] == L'?')) {
+        const wchar_t op = input[next_index];
+        std::wstring parameter_word;
+        size_t after_word = next_index + 1;
+        if (!parse_braced_parameter_word(input, next_index + 1, parameter_word, after_word)) {
+            return fail_bad_substitution();
+        }
+
+        next_index = after_word;
+        closing_brace_consumed = true;
+        return apply_parameter_operator(op, var_name, parameter_word, false);
+    }
+
     if (braced && next_index < input.length() && input[next_index] == L':' && (next_index + 1) < input.length()) {
         wchar_t op = input[next_index + 1];
         if (op != L'-' && op != L'=' && op != L'+' && op != L'?') {
@@ -1976,60 +2095,7 @@ std::wstring expand_variable_reference(const std::wstring& input, size_t dollar_
 
             next_index = after_word;
             closing_brace_consumed = true;
-
-            std::wstring existing_value;
-            bool is_set = false;
-            try_get_parameter_value(var_name, existing_value, is_set);
-            bool is_null_or_unset = (!is_set || existing_value.empty());
-
-            if (op == L'-') {
-                if (is_null_or_unset) {
-                    return expand_substitutions_left_to_right(parameter_word);
-                }
-                return existing_value;
-            }
-
-            if (op == L'=') {
-                if (!is_null_or_unset) {
-                    return existing_value;
-                }
-
-                std::wstring assigned_value = expand_substitutions_left_to_right(parameter_word);
-                if (g_expansion_error) {
-                    return L"";
-                }
-
-                if (!is_assignable_parameter_name(var_name)) {
-                    std::wcerr << L"ksh: bad substitution for := operator\n";
-                    ksh_env.variables[L"?"] = L"1";
-                    g_expansion_error = true;
-                    return L"";
-                }
-
-                ksh_env.variables[var_name] = assigned_value;
-                SetEnvironmentVariableW(var_name.c_str(), assigned_value.c_str());
-                return assigned_value;
-            }
-
-            if (op == L'+') {
-                if (is_null_or_unset) {
-                    return L"";
-                }
-                return expand_substitutions_left_to_right(parameter_word);
-            }
-
-            if (is_null_or_unset) {
-                std::wstring message = expand_substitutions_left_to_right(parameter_word);
-                if (message.empty()) {
-                    message = L"parameter '" + var_name + L"' is unset or empty";
-                }
-                std::wcerr << L"ksh: " << message << L"\n";
-                ksh_env.variables[L"?"] = L"1";
-                g_expansion_error = true;
-                return L"";
-            }
-
-            return existing_value;
+            return apply_parameter_operator(op, var_name, parameter_word, true);
         }
     }
 

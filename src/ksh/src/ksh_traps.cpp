@@ -262,6 +262,18 @@ bool parse_kill_builtin_signal(const std::wstring& raw_signal, KillBuiltinSignal
         signal = KillBuiltinSignal::Kill;
         return true;
     }
+    if (upper_signal == L"STOP" || upper_signal == L"17" || upper_signal == L"19" || upper_signal == L"23") {
+        signal = KillBuiltinSignal::Stop;
+        return true;
+    }
+    if (upper_signal == L"TSTP" || upper_signal == L"18" || upper_signal == L"20" || upper_signal == L"24") {
+        signal = KillBuiltinSignal::Tstp;
+        return true;
+    }
+    if (upper_signal == L"CONT" || upper_signal == L"25") {
+        signal = KillBuiltinSignal::Cont;
+        return true;
+    }
 
     return false;
 }
@@ -292,6 +304,56 @@ bool graceful_kill_process_by_pid(DWORD pid) {
         return force_kill_process_by_pid(pid);
     }
     return true;
+}
+
+bool suspend_process_by_pid(DWORD pid) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    bool found = false;
+    if (Thread32First(snapshot, &te)) {
+        do {
+            if (te.th32OwnerProcessID == pid) {
+                HANDLE thread_handle = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+                if (thread_handle != nullptr) {
+                    SuspendThread(thread_handle);
+                    CloseHandle(thread_handle);
+                    found = true;
+                }
+            }
+        } while (Thread32Next(snapshot, &te));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
+bool resume_process_by_pid(DWORD pid) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    bool found = false;
+    if (Thread32First(snapshot, &te)) {
+        do {
+            if (te.th32OwnerProcessID == pid) {
+                HANDLE thread_handle = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+                if (thread_handle != nullptr) {
+                    ResumeThread(thread_handle);
+                    CloseHandle(thread_handle);
+                    found = true;
+                }
+            }
+        } while (Thread32Next(snapshot, &te));
+    }
+    CloseHandle(snapshot);
+    return found;
 }
 
 bool send_console_event_to_pid(DWORD pid, DWORD control_event) {

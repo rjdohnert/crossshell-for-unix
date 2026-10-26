@@ -73,7 +73,8 @@ bool execute_pipeline_segments(
     DWORD& background_pid,
     std::vector<HANDLE>* background_handles = nullptr,
     std::vector<DWORD>* background_pids = nullptr,
-    std::vector<std::wstring>* temp_files_out = nullptr);
+    std::vector<std::wstring>* temp_files_out = nullptr,
+    bool force_isolated_shell_stages = false);
 
 bool strip_trailing_unquoted_background_marker(const std::wstring& input, std::wstring& stripped_output);
 bool strip_trailing_unquoted_coprocess_marker(const std::wstring& input, std::wstring& stripped_output);

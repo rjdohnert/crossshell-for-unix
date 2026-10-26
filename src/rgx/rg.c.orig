@@ -1,0 +1,1494 @@
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <io.h>
+#include <fcntl.h>
+
+#define RGX_VERSION "1.0.0"
+#define MAX_PATH_LEN 32768
+#define INITIAL_BUF_SIZE 65536
+
+static bool rgx_had_error = false;
+static bool rgx_match_error = false;
+static bool rgx_found = false;
+static uint64_t rgx_search_work = 0;
+
+static void* rgx_calloc(size_t count, size_t size) {
+    if (size != 0 && count > SIZE_MAX / size) {
+        fprintf(stderr, "rgx: allocation size overflow\n");
+        exit(2);
+    }
+    void* allocation = calloc(count, size);
+    if (!allocation) {
+        fprintf(stderr, "rgx: out of memory\n");
+        exit(2);
+    }
+    return allocation;
+}
+
+static void* rgx_malloc(size_t size) {
+    void* allocation = malloc(size ? size : 1);
+    if (!allocation) {
+        fprintf(stderr, "rgx: out of memory\n");
+        exit(2);
+    }
+    return allocation;
+}
+
+static char* rgx_strdup(const char* text) {
+    size_t length = strlen(text);
+    char* copy = (char*)rgx_malloc(length + 1);
+    memcpy(copy, text, length + 1);
+    return copy;
+}
+
+static void* rgx_realloc_array(void* pointer, size_t count, size_t size) {
+    if (size && count > SIZE_MAX / size) {
+        fprintf(stderr, "rgx: allocation size overflow\n");
+        exit(2);
+    }
+    void* allocation = realloc(pointer, count && size ? count * size : 1);
+    if (!allocation) {
+        fprintf(stderr, "rgx: out of memory\n");
+        exit(2);
+    }
+    return allocation;
+}
+
+/* ========================================================================= */
+/*                          1. CONFIGURATION & OPTIONS                       */
+/* ========================================================================= */
+
+typedef enum {
+    COLOR_NEVER,
+    COLOR_AUTO,
+    COLOR_ALWAYS
+} ColorMode;
+
+typedef struct RgxOptions {
+    char** patterns;
+    size_t pattern_count;
+    char** paths;
+    size_t path_count;
+
+    /* Match qualifiers */
+    bool fixed_strings;      /* -F, --fixed-strings */
+    bool ignore_case;        /* -i, --ignore-case */
+    bool smart_case;         /* -S, --smart-case */
+    bool case_sensitive;     /* -s, --case-sensitive */
+    bool invert_match;       /* -v, --invert-match */
+    bool word_regexp;        /* -w, --word-regexp */
+
+    /* Output qualifiers */
+    bool show_line_numbers;  /* -n, --line-number */
+    bool count_only;         /* -c, --count */
+    bool files_with_matches; /* -l, --files-with-matches */
+    bool files_without_match;/* --files-without-match */
+    bool only_matching;      /* -o, --only-matching */
+    bool quiet;              /* -q, --quiet */
+    ColorMode color_mode;    /* --color <when> */
+
+    /* Context qualifiers */
+    size_t before_context;   /* -B, --before-context */
+    size_t after_context;    /* -A, --after-context */
+    size_t max_count;        /* -m, --max-count (0 = unlimited) */
+
+    /* Traversal qualifiers */
+    size_t max_depth;        /* --max-depth (0 = unlimited) */
+    bool search_hidden;      /* --hidden */
+    bool no_ignore;          /* --no-ignore */
+    bool text;
+    bool crlf;
+    bool line_regexp;
+    bool max_count_set;
+    bool max_depth_set;
+    bool files_only;
+    bool count_matches;
+    int filename_mode;
+    char** globs;
+    size_t glob_count;
+    bool pattern_source_set;
+    size_t option_string_bytes;
+} RgxOptions;
+
+RgxOptions* RgxOptions_New(void) {
+    RgxOptions* opts = (RgxOptions*)rgx_calloc(1, sizeof(RgxOptions));
+    DWORD console_mode;
+    opts->show_line_numbers = GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &console_mode) != 0;
+    opts->filename_mode = -1;
+    opts->color_mode = COLOR_AUTO;
+    opts->max_depth = 0;
+    opts->max_count = 0;
+    return opts;
+}
+
+void RgxOptions_Free(RgxOptions* self) {
+    if (!self) return;
+    for (size_t i = 0; i < self->pattern_count; i++) free(self->patterns[i]);
+    free(self->patterns);
+    for (size_t i = 0; i < self->path_count; i++) free(self->paths[i]);
+    free(self->paths);
+    for (size_t index = 0; index < self->glob_count; ++index) free(self->globs[index]);
+    free(self->globs);
+    free(self);
+}
+
+/* ========================================================================= */
+/*                   2. OOP MATCHER INTERFACE & IMPLEMENTATIONS              */
+/* ========================================================================= */
+
+typedef struct MatchSpan {
+    size_t start;
+    size_t length;
+} MatchSpan;
+
+typedef struct IMatcher IMatcher;
+typedef struct IMatcherVTable {
+    bool (*FindMatch)(IMatcher* self, const char* text, size_t text_len, size_t offset, MatchSpan* out_span);
+    void (*Destroy)(IMatcher* self);
+} IMatcherVTable;
+
+struct IMatcher {
+    const IMatcherVTable* vptr;
+};
+
+/* --- Literal Matcher (Boyer-Moore / Substring with Word boundary) --- */
+typedef struct LiteralMatcher {
+    IMatcher base;
+    char* needle;
+    size_t needle_len;
+    bool ignore_case;
+    bool word_boundary;
+    bool full_line;
+} LiteralMatcher;
+
+static inline bool is_word_char(char c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
+
+static uint32_t utf8_rune(const char* text, size_t length, size_t* width);
+static uint32_t rune_fold(uint32_t rune);
+static bool rune_word(uint32_t rune);
+static uint32_t previous_rune(const char* text, size_t position);
+
+static bool LiteralMatcher_FindMatch(IMatcher* super, const char* text, size_t text_len, size_t offset, MatchSpan* out_span) {
+    LiteralMatcher* self = (LiteralMatcher*)super;
+    if (offset > text_len) return false;
+    if (self->full_line && offset) return false;
+
+    for (size_t i = offset; i <= text_len;) {
+        if (++rgx_search_work > 50000000ULL) {
+            fprintf(stderr, "rgx: literal search work limit exceeded\n");
+            rgx_had_error = rgx_match_error = true;
+            return false;
+        }
+        bool match = true;
+        size_t end = i, needle_position = 0;
+        while (needle_position < self->needle_len) {
+            if (++rgx_search_work > 50000000ULL) {
+                fprintf(stderr, "rgx: literal search work limit exceeded\n");
+                rgx_had_error = rgx_match_error = true;
+                return false;
+            }
+            if (end == text_len) { match = false; break; }
+            size_t text_width, needle_width;
+            uint32_t text_rune = utf8_rune(text + end, text_len - end, &text_width);
+            uint32_t needle_rune = utf8_rune(self->needle + needle_position, self->needle_len - needle_position, &needle_width);
+            if (self->ignore_case ? rune_fold(text_rune) != rune_fold(needle_rune) : text_rune != needle_rune) { match = false; break; }
+            end += text_width; needle_position += needle_width;
+        }
+
+        if (self->full_line && end != text_len) match = false;
+        if (match) {
+            if (self->word_boundary) {
+                size_t width;
+                bool start_ok = i == 0 || !rune_word(previous_rune(text, i));
+                bool end_ok = end == text_len || !rune_word(utf8_rune(text + end, text_len - end, &width));
+                match = start_ok && end_ok;
+            }
+            if (match && out_span) {
+                out_span->start = i;
+                out_span->length = end - i;
+            }
+            if (match) return true;
+        }
+        if (i == text_len || self->full_line) break;
+        size_t width; utf8_rune(text + i, text_len - i, &width); i += width;
+    }
+    return false;
+}
+
+static void LiteralMatcher_Destroy(IMatcher* super) {
+    LiteralMatcher* self = (LiteralMatcher*)super;
+    if (self) {
+        free(self->needle);
+        free(self);
+    }
+}
+
+static const IMatcherVTable LITERAL_MATCHER_VTBL = {
+    LiteralMatcher_FindMatch,
+    LiteralMatcher_Destroy
+};
+
+IMatcher* LiteralMatcher_New(const char* pattern, bool ignore_case, bool word_boundary) {
+    LiteralMatcher* m = (LiteralMatcher*)rgx_calloc(1, sizeof(LiteralMatcher));
+    m->base.vptr = &LITERAL_MATCHER_VTBL;
+    m->needle = rgx_strdup(pattern);
+    m->needle_len = strlen(pattern);
+    m->ignore_case = ignore_case;
+    m->word_boundary = word_boundary;
+    return (IMatcher*)m;
+}
+
+/* --- Bounded, ordered Thompson NFA; all regex implementation stays here. --- */
+#define RX_LIMIT 8192
+#define RX_DEPTH 128
+#define RX_TERMS 32
+#define RX_WORK_LIMIT 50000000ULL
+
+static uint32_t utf8_rune(const char* text, size_t length, size_t* width) {
+    unsigned char first = (unsigned char)text[0];
+    *width = 1;
+    if (first < 128) return first;
+    size_t count = first >= 0xC2 && first <= 0xDF ? 2 : first >= 0xE0 && first <= 0xEF ? 3 : first >= 0xF0 && first <= 0xF4 ? 4 : 0;
+    if (!count || length < count) return 0x110000U + first;
+    uint32_t value = first & (count == 2 ? 31U : count == 3 ? 15U : 7U);
+    for (size_t index = 1; index < count; ++index) {
+        unsigned char next = (unsigned char)text[index];
+        if ((next & 0xC0) != 0x80) return 0x110000U + first;
+        value = (value << 6) | (next & 63U);
+    }
+    if ((count == 3 && value < 0x800) || (count == 4 && value < 0x10000) || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) return 0x110000U + first;
+    *width = count;
+    return value;
+}
+
+static WORD rune_type(uint32_t rune, DWORD type) {
+    if (rune > 0x10FFFF) return 0;
+    wchar_t chars[2]; WORD info[2] = {0, 0}; int count = 1;
+    if (rune > 0xFFFF) { chars[0] = (wchar_t)(0xD800 + ((rune - 0x10000) >> 10)); chars[1] = (wchar_t)(0xDC00 + ((rune - 0x10000) & 1023)); count = 2; }
+    else chars[0] = (wchar_t)rune;
+    if (!GetStringTypeW(type, chars, count, info)) return 0;
+    return info[0] | info[1];
+}
+
+static bool rune_word(uint32_t rune) {
+    if (rune < 128) return is_word_char((char)rune);
+    return (rune_type(rune, CT_CTYPE1) & (C1_ALPHA | C1_DIGIT)) != 0 || (rune_type(rune, CT_CTYPE3) & (C3_NONSPACING | C3_DIACRITIC)) != 0;
+}
+
+static uint32_t rune_fold(uint32_t rune) {
+    if (rune < 128) return (uint32_t)tolower((unsigned char)rune);
+    if (rune > 0xFFFF) return rune;
+    wchar_t input = (wchar_t)rune, output;
+    if (LCMapStringW(LOCALE_INVARIANT, LCMAP_LOWERCASE, &input, 1, &output, 1) == 1) return (uint32_t)output;
+    return rune;
+}
+
+typedef enum { RX_EMPTY, RX_CHAR, RX_ANY, RX_CLASS, RX_BOL, RX_EOL, RX_WORD, RX_NOTWORD, RX_LEFTWORD, RX_RIGHTWORD, RX_CONCAT, RX_ALT, RX_REPEAT, RX_SPLIT, RX_MATCH } RxOp;
+typedef struct { uint32_t low, high; int category; bool inverse; } RxTerm;
+typedef struct {
+    RxOp op; int left, right, minimum, maximum; uint32_t rune;
+    bool ignore_case, lazy, inverted; int term_count; RxTerm terms[RX_TERMS];
+} RxNode;
+typedef struct { RxOp op; int next, alternate, node; } RxInstruction;
+typedef struct { int instruction; size_t start; } RxThread;
+typedef struct RegexMatcher {
+    IMatcher base; RxNode* nodes; size_t node_count, node_capacity;
+    RxInstruction* code; size_t code_count, code_capacity; int start;
+    const char* cursor; const char* error; bool ignore_case; unsigned depth;
+    RxThread *current, *next, *stack; unsigned char* seen; uint64_t work;
+} RegexMatcher;
+
+static int rx_node(RegexMatcher* matcher, RxNode node) {
+    if (matcher->node_count == RX_LIMIT) { matcher->error = "regex exceeds node limit"; return -1; }
+    if (matcher->node_count == matcher->node_capacity) {
+        matcher->node_capacity = matcher->node_capacity ? matcher->node_capacity * 2 : 32;
+        matcher->nodes = (RxNode*)rgx_realloc_array(matcher->nodes, matcher->node_capacity, sizeof(RxNode));
+    }
+    matcher->nodes[matcher->node_count] = node;
+    return (int)matcher->node_count++;
+}
+
+static RxTerm rx_escape(RegexMatcher* matcher, bool in_class, RxOp* assertion) {
+    RxTerm term = {0}; char escape = *matcher->cursor++;
+    if (!escape) { --matcher->cursor; matcher->error = "trailing backslash"; return term; }
+    if (escape == 'd' || escape == 'D' || escape == 'w' || escape == 'W' || escape == 's' || escape == 'S') {
+        term.category = escape == 'd' || escape == 'D' ? 1 : escape == 'w' || escape == 'W' ? 2 : 3;
+        term.inverse = escape == 'D' || escape == 'W' || escape == 'S'; return term;
+    }
+    if (!in_class && (escape == 'b' || escape == 'B' || escape == 'A' || escape == 'z')) {
+        *assertion = escape == 'b' ? RX_WORD : escape == 'B' ? RX_NOTWORD : escape == 'A' ? RX_BOL : RX_EOL; return term;
+    }
+    if (escape == 'n') term.low = '\n'; else if (escape == 'r') term.low = '\r';
+    else if (escape == 't') term.low = '\t'; else if (escape == 'f') term.low = '\f';
+    else if (escape == 'v') term.low = '\v'; else if (escape == 'a') term.low = '\a';
+    else if (escape == 'b' && in_class) term.low = '\b';
+    else if (escape == 'x' || escape == 'u') {
+        unsigned digits = escape == 'x' ? 2 : 4; bool braces = *matcher->cursor == '{';
+        if (braces) { ++matcher->cursor; digits = 6; }
+        unsigned consumed = 0;
+        while (consumed < digits && isxdigit((unsigned char)*matcher->cursor)) {
+            char digit = *matcher->cursor++; term.low = (term.low << 4) | (uint32_t)(isdigit((unsigned char)digit) ? digit - '0' : tolower((unsigned char)digit) - 'a' + 10); ++consumed;
+        }
+        if ((!braces && consumed != digits) || (braces && (!consumed || *matcher->cursor != '}')) || term.low > 0x10FFFF || (term.low >= 0xD800 && term.low <= 0xDFFF)) matcher->error = "invalid hexadecimal escape";
+        else if (braces) ++matcher->cursor;
+    } else if (isalnum((unsigned char)escape)) matcher->error = "unsupported escape (backreferences and Unicode properties are not supported)";
+    else term.low = (unsigned char)escape;
+    term.high = term.low; return term;
+}
+
+static int rx_expression(RegexMatcher* matcher);
+static int rx_atom(RegexMatcher* matcher) {
+    RxNode node = {0}; node.ignore_case = matcher->ignore_case;
+    char token = *matcher->cursor++;
+    if (token == '(') {
+        if (++matcher->depth > RX_DEPTH) { matcher->error = "regex nesting limit exceeded"; return -1; }
+        bool old_case = matcher->ignore_case;
+        if (*matcher->cursor == '?') {
+            ++matcher->cursor;
+            if (*matcher->cursor != ':') {
+                bool enable = true, flag = false;
+                while (*matcher->cursor && *matcher->cursor != ':' && *matcher->cursor != ')') {
+                    char option = *matcher->cursor++;
+                    if (option == '-') enable = false;
+                    else if (option == 'i') { matcher->ignore_case = enable; flag = true; }
+                    else { matcher->error = "unsupported group or inline flag"; return -1; }
+                }
+                if (!flag) { matcher->error = "unsupported group"; return -1; }
+                if (*matcher->cursor == ')') { ++matcher->cursor; --matcher->depth; return rx_node(matcher, node); }
+            }
+            if (*matcher->cursor != ':') { matcher->error = "unterminated flag group"; return -1; }
+            ++matcher->cursor;
+        }
+        int child = rx_expression(matcher);
+        if (*matcher->cursor != ')') { matcher->error = "unclosed group"; return -1; }
+        ++matcher->cursor; --matcher->depth; matcher->ignore_case = old_case; return child;
+    }
+    if (token == '[') {
+        node.op = RX_CLASS;
+        if (*matcher->cursor == '^') { node.inverted = true; ++matcher->cursor; }
+        while (*matcher->cursor && (*matcher->cursor != ']' || node.term_count == 0)) {
+            if (node.term_count == RX_TERMS) { matcher->error = "character class exceeds range limit"; return -1; }
+            RxTerm term = {0}; RxOp assertion = RX_EMPTY;
+            if (*matcher->cursor == '\\') { ++matcher->cursor; term = rx_escape(matcher, true, &assertion); }
+            else { size_t width; term.low = utf8_rune(matcher->cursor, strlen(matcher->cursor), &width); matcher->cursor += width; term.high = term.low; }
+            if (!term.category && *matcher->cursor == '-' && matcher->cursor[1] && matcher->cursor[1] != ']') {
+                ++matcher->cursor; RxTerm end = {0};
+                if (*matcher->cursor == '\\') { ++matcher->cursor; end = rx_escape(matcher, true, &assertion); }
+                else { size_t width; end.low = utf8_rune(matcher->cursor, strlen(matcher->cursor), &width); matcher->cursor += width; }
+                if (end.category || end.low < term.low) { matcher->error = "invalid character range"; return -1; }
+                term.high = end.low;
+            }
+            node.terms[node.term_count++] = term;
+            if (matcher->error) return -1;
+        }
+        if (*matcher->cursor != ']') { matcher->error = "unclosed character class"; return -1; }
+        ++matcher->cursor;
+    } else if (token == '.') node.op = RX_ANY;
+    else if (token == '^') node.op = RX_BOL;
+    else if (token == '$') node.op = RX_EOL;
+    else if (token == '\\') {
+        RxOp assertion = RX_EMPTY; RxTerm term = rx_escape(matcher, false, &assertion);
+        if (assertion != RX_EMPTY) node.op = assertion;
+        else if (term.category) { node.op = RX_CLASS; node.term_count = 1; node.terms[0] = term; }
+        else { node.op = RX_CHAR; node.rune = term.low; }
+    } else if (token == '*' || token == '+' || token == '?' || token == '{' || token == '}') { matcher->error = "repetition without a valid operand"; return -1; }
+    else { size_t width; --matcher->cursor; node.op = RX_CHAR; node.rune = utf8_rune(matcher->cursor, strlen(matcher->cursor), &width); matcher->cursor += width; }
+    return matcher->error ? -1 : rx_node(matcher, node);
+}
+
+static int rx_number(RegexMatcher* matcher) {
+    int value = 0;
+    if (!isdigit((unsigned char)*matcher->cursor)) { matcher->error = "expected repetition count"; return 0; }
+    while (isdigit((unsigned char)*matcher->cursor)) { value = value * 10 + (*matcher->cursor++ - '0'); if (value > 1000) { matcher->error = "repetition count exceeds 1000"; return 0; } }
+    return value;
+}
+
+static int rx_concat(RegexMatcher* matcher) {
+    int* parts = NULL; size_t count = 0, capacity = 0;
+    while (*matcher->cursor && *matcher->cursor != ')' && *matcher->cursor != '|' && !matcher->error) {
+        int child = rx_atom(matcher);
+        char quantifier = *matcher->cursor;
+        if (!matcher->error && (quantifier == '*' || quantifier == '+' || quantifier == '?' || quantifier == '{')) {
+            RxNode repeat = {0}; repeat.op = RX_REPEAT; repeat.left = child;
+            ++matcher->cursor; repeat.minimum = quantifier == '+' ? 1 : 0; repeat.maximum = quantifier == '?' ? 1 : -1;
+            if (quantifier == '{') {
+                repeat.minimum = rx_number(matcher); repeat.maximum = repeat.minimum;
+                if (*matcher->cursor == ',') { ++matcher->cursor; repeat.maximum = *matcher->cursor == '}' ? -1 : rx_number(matcher); }
+                if (matcher->error || *matcher->cursor != '}' || (repeat.maximum >= 0 && repeat.maximum < repeat.minimum)) matcher->error = "invalid repetition range";
+                else ++matcher->cursor;
+            }
+            if (*matcher->cursor == '?') { repeat.lazy = true; ++matcher->cursor; }
+            child = matcher->error ? -1 : rx_node(matcher, repeat);
+        }
+        if (child < 0) break;
+        if (count == capacity) { capacity = capacity ? capacity * 2 : 16; parts = (int*)rgx_realloc_array(parts, capacity, sizeof(int)); }
+        parts[count++] = child;
+    }
+    while (count > 1) {
+        size_t remaining = 0;
+        for (size_t index = 0; index < count; index += 2) {
+            if (index + 1 == count) parts[remaining++] = parts[index];
+            else { RxNode concat = {0}; concat.op = RX_CONCAT; concat.left = parts[index]; concat.right = parts[index + 1]; parts[remaining++] = rx_node(matcher, concat); }
+        }
+        count = remaining;
+    }
+    int result = count ? parts[0] : rx_node(matcher, (RxNode){0}); free(parts); return result;
+}
+
+static int rx_expression(RegexMatcher* matcher) {
+    int result = rx_concat(matcher);
+    while (*matcher->cursor == '|' && !matcher->error) { ++matcher->cursor; RxNode alternate = {0}; alternate.op = RX_ALT; alternate.left = result; alternate.right = rx_concat(matcher); result = rx_node(matcher, alternate); }
+    return result;
+}
+
+static int rx_emit(RegexMatcher* matcher, RxOp op, int next, int alternate, int node) {
+    if (matcher->code_count == RX_LIMIT) { matcher->error = "compiled regex exceeds state limit"; return -1; }
+    if (matcher->code_count == matcher->code_capacity) { matcher->code_capacity = matcher->code_capacity ? matcher->code_capacity * 2 : 32; matcher->code = (RxInstruction*)rgx_realloc_array(matcher->code, matcher->code_capacity, sizeof(RxInstruction)); }
+    matcher->code[matcher->code_count] = (RxInstruction){op, next, alternate, node}; return (int)matcher->code_count++;
+}
+
+static int rx_compile(RegexMatcher* matcher, int index, int next, unsigned depth) {
+    if (matcher->error || index < 0) return -1;
+    if (depth > RX_DEPTH * 2) { matcher->error = "regex compilation depth exceeded"; return -1; }
+    RxNode node = matcher->nodes[index];
+    if (node.op == RX_EMPTY) return next;
+    if (node.op == RX_CONCAT) { int right = rx_compile(matcher, node.right, next, depth + 1); return rx_compile(matcher, node.left, right, depth + 1); }
+    if (node.op == RX_ALT) { int left = rx_compile(matcher, node.left, next, depth + 1), right = rx_compile(matcher, node.right, next, depth + 1); return rx_emit(matcher, RX_SPLIT, left, right, -1); }
+    if (node.op == RX_REPEAT) {
+        int head = next;
+        if (node.maximum < 0) {
+            int split = rx_emit(matcher, RX_SPLIT, next, next, -1);
+            if (split < 0) return -1;
+            int body = rx_compile(matcher, node.left, split, depth + 1);
+            matcher->code[split].next = node.lazy ? next : body; matcher->code[split].alternate = node.lazy ? body : next; head = split;
+        } else for (int count = node.maximum; count > node.minimum && !matcher->error; --count) { int body = rx_compile(matcher, node.left, head, depth + 1); head = rx_emit(matcher, RX_SPLIT, node.lazy ? head : body, node.lazy ? body : head, -1); }
+        for (int count = 0; count < node.minimum && !matcher->error; ++count) head = rx_compile(matcher, node.left, head, depth + 1);
+        return head;
+    }
+    return rx_emit(matcher, node.op, next, -1, index);
+}
+
+static bool rx_class_match(const RxNode* node, uint32_t rune) {
+    bool matched = false;
+    for (int index = 0; index < node->term_count; ++index) {
+        RxTerm term = node->terms[index]; bool member;
+        if (term.category == 1) member = rune < 128 ? isdigit((unsigned char)rune) != 0 : (rune_type(rune, CT_CTYPE1) & C1_DIGIT) != 0;
+        else if (term.category == 2) member = rune_word(rune);
+        else if (term.category == 3) member = rune < 128 ? isspace((unsigned char)rune) != 0 : (rune_type(rune, CT_CTYPE1) & C1_SPACE) != 0;
+        else { member = rune >= term.low && rune <= term.high; if (node->ignore_case) { uint32_t folded = rune_fold(rune); member = member || (folded >= rune_fold(term.low) && folded <= rune_fold(term.high)); } }
+        matched = matched || (term.inverse ? !member : member);
+    }
+    return node->inverted ? !matched : matched;
+}
+
+static uint32_t previous_rune(const char* text, size_t position) {
+    if (!position) return 0;
+    size_t begin = position - 1;
+    while (begin && ((unsigned char)text[begin] & 0xC0) == 0x80 && position - begin < 4) --begin;
+    size_t width; return utf8_rune(text + begin, position - begin, &width);
+}
+
+static bool rx_add(RegexMatcher* matcher, RxThread* list, size_t* count, int instruction, size_t start, const char* text, size_t length, size_t position) {
+    size_t pending = 0; matcher->stack[pending++] = (RxThread){instruction, start};
+    while (pending) {
+        RxThread thread = matcher->stack[--pending];
+        if (thread.instruction < 0 || matcher->seen[thread.instruction]) continue;
+        if (++matcher->work > RX_WORK_LIMIT || ++rgx_search_work > RX_WORK_LIMIT) { fprintf(stderr, "rgx: regex work limit exceeded\n"); rgx_had_error = rgx_match_error = true; return false; }
+        matcher->seen[thread.instruction] = 1; RxInstruction state = matcher->code[thread.instruction];
+        if (state.op == RX_SPLIT) { matcher->stack[pending++] = (RxThread){state.alternate, start}; matcher->stack[pending++] = (RxThread){state.next, start}; continue; }
+        bool follow = false;
+        if (state.op == RX_BOL) follow = position == 0;
+        else if (state.op == RX_EOL) follow = position == length;
+        else if (state.op == RX_WORD || state.op == RX_NOTWORD || state.op == RX_LEFTWORD || state.op == RX_RIGHTWORD) {
+            size_t width; bool left = position && rune_word(previous_rune(text, position));
+            bool right = position < length && rune_word(utf8_rune(text + position, length - position, &width));
+            follow = state.op == RX_WORD ? left != right : state.op == RX_NOTWORD ? left == right : state.op == RX_LEFTWORD ? !left : !right;
+        } else { list[(*count)++] = thread; continue; }
+        if (follow) matcher->stack[pending++] = (RxThread){state.next, start};
+    }
+    return true;
+}
+
+static bool RegexMatcher_FindMatch(IMatcher* base, const char* text, size_t length, size_t offset, MatchSpan* span) {
+    RegexMatcher* matcher = (RegexMatcher*)base;
+    if (offset > length) return false;
+    size_t count = 0, position = offset; bool found = false; MatchSpan candidate = {0}; matcher->work = 0;
+    memset(matcher->seen, 0, matcher->code_count);
+    while (true) {
+        if (!found && !rx_add(matcher, matcher->current, &count, matcher->start, position, text, length, position)) return false;
+        size_t active = count;
+        for (size_t index = 0; index < count; ++index) if (matcher->code[matcher->current[index].instruction].op == RX_MATCH) { candidate.start = matcher->current[index].start; candidate.length = position - candidate.start; found = true; active = index; break; }
+        if (found && !active) { if (span) *span = candidate; return true; }
+        if (position == length) break;
+        size_t width; uint32_t rune = utf8_rune(text + position, length - position, &width); size_t next_count = 0;
+        memset(matcher->seen, 0, matcher->code_count);
+        for (size_t index = 0; index < active; ++index) {
+            RxThread thread = matcher->current[index]; RxInstruction state = matcher->code[thread.instruction]; RxNode* node = &matcher->nodes[state.node];
+            bool accepts = state.op == RX_ANY ? rune != '\n' : state.op == RX_CLASS ? rx_class_match(node, rune) : state.op == RX_CHAR && (node->ignore_case ? rune_fold(node->rune) == rune_fold(rune) : node->rune == rune);
+            if (accepts && !rx_add(matcher, matcher->next, &next_count, state.next, thread.start, text, length, position + width)) return false;
+        }
+        RxThread* swap = matcher->current; matcher->current = matcher->next; matcher->next = swap; count = next_count; position += width;
+        if (found && !count) break;
+    }
+    if (found && span) *span = candidate;
+    return found;
+}
+
+static void RegexMatcher_Destroy(IMatcher* base) {
+    RegexMatcher* matcher = (RegexMatcher*)base;
+    if (!matcher) return;
+    free(matcher->nodes); free(matcher->code); free(matcher->current); free(matcher->next); free(matcher->stack); free(matcher->seen); free(matcher);
+}
+static const IMatcherVTable REGEX_MATCHER_VTBL = {RegexMatcher_FindMatch, RegexMatcher_Destroy};
+
+IMatcher* RegexMatcher_New(const char* pattern, bool ignore_case, bool word_boundary) {
+    RegexMatcher* matcher = (RegexMatcher*)rgx_calloc(1, sizeof(RegexMatcher)); matcher->base.vptr = &REGEX_MATCHER_VTBL;
+    matcher->cursor = pattern; matcher->ignore_case = ignore_case;
+    if (strlen(pattern) > 65536) matcher->error = "pattern exceeds 64 KiB";
+    int root = matcher->error ? -1 : rx_expression(matcher);
+    if (!matcher->error && *matcher->cursor) matcher->error = "unexpected closing parenthesis";
+    int accept = rx_emit(matcher, RX_MATCH, -1, -1, -1);
+    if (word_boundary) accept = rx_emit(matcher, RX_RIGHTWORD, accept, -1, -1);
+    matcher->start = rx_compile(matcher, root, accept, 0);
+    if (word_boundary) matcher->start = rx_emit(matcher, RX_LEFTWORD, matcher->start, -1, -1);
+    if (matcher->error) { fprintf(stderr, "rgx: regex error: %s\n", matcher->error); rgx_had_error = true; RegexMatcher_Destroy((IMatcher*)matcher); return NULL; }
+    matcher->current = (RxThread*)rgx_calloc(matcher->code_count, sizeof(RxThread)); matcher->next = (RxThread*)rgx_calloc(matcher->code_count, sizeof(RxThread));
+    matcher->stack = (RxThread*)rgx_calloc(matcher->code_count * 4 + 1, sizeof(RxThread)); matcher->seen = (unsigned char*)rgx_calloc(matcher->code_count, 1);
+    return (IMatcher*)matcher;
+}
+
+typedef struct {
+    IMatcher base;
+    IMatcher** children;
+    size_t count;
+} PatternSet;
+
+static bool PatternSet_Find(IMatcher* base, const char* text, size_t length, size_t offset, MatchSpan* span) {
+    PatternSet* set = (PatternSet*)base;
+    rgx_search_work = 0;
+    bool found = false; MatchSpan best = {0};
+    for (size_t index = 0; index < set->count; ++index) {
+        MatchSpan candidate;
+        if (set->children[index]->vptr->FindMatch(set->children[index], text, length, offset, &candidate) && (!found || candidate.start < best.start)) { best = candidate; found = true; }
+        if (rgx_match_error) return false;
+    }
+    if (found && span) *span = best;
+    return found;
+}
+
+static void PatternSet_Free(IMatcher* base) {
+    PatternSet* set = (PatternSet*)base;
+    for (size_t index = 0; index < set->count; ++index) set->children[index]->vptr->Destroy(set->children[index]);
+    free(set->children); free(set);
+}
+
+static const IMatcherVTable PATTERN_SET_VTBL = {PatternSet_Find, PatternSet_Free};
+
+static IMatcher* PatternSet_New(const RgxOptions* options, bool ignore_case) {
+    PatternSet* set = (PatternSet*)rgx_calloc(1, sizeof(PatternSet)); set->base.vptr = &PATTERN_SET_VTBL;
+    set->children = (IMatcher**)rgx_calloc(options->pattern_count, sizeof(IMatcher*));
+    size_t total_nodes = 0, total_states = 0;
+    for (size_t index = 0; index < options->pattern_count; ++index) {
+        IMatcher* child;
+        if (options->fixed_strings) {
+            child = LiteralMatcher_New(options->patterns[index], ignore_case, options->word_regexp);
+            ((LiteralMatcher*)child)->full_line = options->line_regexp;
+        } else {
+            char* wrapped = NULL;
+            const char* pattern = options->patterns[index];
+            if (options->line_regexp) { size_t length = strlen(pattern); wrapped = (char*)rgx_malloc(length + 8); snprintf(wrapped, length + 8, "^(?:%s)$", pattern); pattern = wrapped; }
+            child = RegexMatcher_New(pattern, ignore_case, options->word_regexp);
+            free(wrapped);
+        }
+        if (!child) { PatternSet_Free((IMatcher*)set); return NULL; }
+        if (!options->fixed_strings) {
+            RegexMatcher* regex = (RegexMatcher*)child;
+            total_nodes += regex->node_count;
+            total_states += regex->code_count;
+            if (total_nodes > 32768 || total_states > 32768) {
+                fprintf(stderr, "rgx: combined regex size exceeds safety limit\n");
+                rgx_had_error = true;
+                child->vptr->Destroy(child);
+                PatternSet_Free((IMatcher*)set);
+                return NULL;
+            }
+        }
+        set->children[set->count++] = child;
+    }
+    return (IMatcher*)set;
+}
+
+/* ========================================================================= */
+/*                          3. OOP PRINTER COMPONENT                         */
+/* ========================================================================= */
+
+typedef struct RgxPrinter {
+    const RgxOptions* opts;
+    bool enable_color;
+    HANDLE hOut;
+} RgxPrinter;
+
+#define ANSI_RED    "\x1b[1;31m"
+#define ANSI_GREEN  "\x1b[32m"
+#define ANSI_CYAN   "\x1b[36m"
+#define ANSI_RESET  "\x1b[0m"
+
+RgxPrinter* RgxPrinter_New(const RgxOptions* opts) {
+    RgxPrinter* p = (RgxPrinter*)rgx_calloc(1, sizeof(RgxPrinter));
+    p->opts = opts;
+    p->hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    if (opts->color_mode == COLOR_ALWAYS) {
+        p->enable_color = true;
+    } else if (opts->color_mode == COLOR_NEVER) {
+        p->enable_color = false;
+    } else {
+        DWORD mode = 0;
+        p->enable_color = (GetConsoleMode(p->hOut, &mode) != 0);
+    }
+
+    if (p->enable_color) {
+        DWORD mode = 0;
+        if (GetConsoleMode(p->hOut, &mode)) {
+            SetConsoleMode(p->hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+    return p;
+}
+
+void RgxPrinter_PrintPath(RgxPrinter* self, const char* path) {
+    if (self->enable_color) printf("%s%s%s\n", ANSI_CYAN, path, ANSI_RESET);
+    else printf("%s\n", path);
+}
+
+void RgxPrinter_PrintCount(RgxPrinter* self, const char* path, size_t count, bool print_path) {
+    if (print_path) {
+        if (self->enable_color) printf("%s%s%s:%zu\n", ANSI_CYAN, path, ANSI_RESET, count);
+        else printf("%s:%zu\n", path, count);
+    } else {
+        printf("%zu\n", count);
+    }
+}
+
+void RgxPrinter_PrintMatch(RgxPrinter* self, const char* path, size_t line_num, const char* line, size_t len, MatchSpan span, bool print_path) {
+    if (span.start > len || span.length > len - span.start) {
+        fprintf(stderr, "rgx: invalid match span\n");
+        exit(2);
+    }
+    if (self->opts->only_matching && !span.length) return;
+    if (print_path) {
+        if (self->enable_color) printf("%s%s%s:", ANSI_CYAN, path, ANSI_RESET);
+        else printf("%s:", path);
+    }
+    if (self->opts->show_line_numbers) {
+        if (self->enable_color) printf("%s%zu%s:", ANSI_GREEN, line_num, ANSI_RESET);
+        else printf("%zu:", line_num);
+    }
+
+    if (self->opts->only_matching) {
+        if (span.length > 0 && span.start < len) {
+            if (self->enable_color) printf("%s", ANSI_RED);
+            fwrite(line + span.start, 1, span.length, stdout);
+            if (self->enable_color) printf("%s", ANSI_RESET);
+            printf("\n");
+        }
+        return;
+    }
+
+    if (self->enable_color && span.length > 0 && span.start < len) {
+        fwrite(line, 1, span.start, stdout);
+        printf("%s", ANSI_RED);
+        fwrite(line + span.start, 1, span.length, stdout);
+        printf("%s", ANSI_RESET);
+        fwrite(line + span.start + span.length, 1, len - (span.start + span.length), stdout);
+        printf("\n");
+    } else {
+        fwrite(line, 1, len, stdout);
+        printf("\n");
+    }
+}
+
+void RgxPrinter_PrintContext(RgxPrinter* self, const char* path, size_t line_num, const char* line, size_t len, bool print_path) {
+    if (print_path) {
+        if (self->enable_color) printf("%s%s%s-", ANSI_CYAN, path, ANSI_RESET);
+        else printf("%s-", path);
+    }
+    if (self->opts->show_line_numbers) {
+        if (self->enable_color) printf("%s%zu%s-", ANSI_GREEN, line_num, ANSI_RESET);
+        else printf("%zu-", line_num);
+    }
+    fwrite(line, 1, len, stdout);
+    printf("\n");
+}
+
+void RgxPrinter_Free(RgxPrinter* self) {
+    if (self) free(self);
+}
+
+/* ========================================================================= */
+/*                      4. FILE SEARCH ENGINE                                */
+/* ========================================================================= */
+
+typedef struct { FILE* stream; unsigned char prefix[3], pending[4]; size_t prefix_count, prefix_index, pending_count, pending_index; int encoding; } TextReader;
+
+static wchar_t* path_to_wide(const char* path) {
+    int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (!required || required >= MAX_PATH_LEN - 16) { fprintf(stderr, "rgx: invalid or excessive path: %s\n", path); rgx_had_error = true; return NULL; }
+    wchar_t* wide = (wchar_t*)rgx_calloc((size_t)required, sizeof(wchar_t));
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, required)) { free(wide); rgx_had_error = true; return NULL; }
+    if (wcsncmp(wide, L"\\\\?\\", 4) == 0 || wcsncmp(wide, L"\\\\.\\", 4) == 0) return wide;
+    DWORD length = GetFullPathNameW(wide, 0, NULL, NULL);
+    if (!length || length >= MAX_PATH_LEN - 16) { fprintf(stderr, "rgx: cannot resolve path: %s\n", path); rgx_had_error = true; free(wide); return NULL; }
+    wchar_t* absolute = (wchar_t*)rgx_calloc((size_t)length + 16, sizeof(wchar_t));
+    if (!GetFullPathNameW(wide, length, absolute + 8, NULL)) { free(wide); free(absolute); rgx_had_error = true; return NULL; }
+    free(wide);
+    if (absolute[8] == L'\\' && absolute[9] == L'\\') { memcpy(absolute, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t)); memmove(absolute + 8, absolute + 10, (wcslen(absolute + 10) + 1) * sizeof(wchar_t)); }
+    else { memcpy(absolute + 4, L"\\\\?\\", 4 * sizeof(wchar_t)); memmove(absolute, absolute + 4, (wcslen(absolute + 4) + 1) * sizeof(wchar_t)); }
+    return absolute;
+}
+
+static int reader_raw(TextReader* reader) {
+    if (reader->prefix_index < reader->prefix_count) return reader->prefix[reader->prefix_index++];
+    return fgetc(reader->stream);
+}
+
+static void reader_init(TextReader* reader, FILE* stream) {
+    memset(reader, 0, sizeof(*reader)); reader->stream = stream;
+    reader->prefix_count = fread(reader->prefix, 1, 3, stream);
+    if (reader->prefix_count >= 2 && reader->prefix[0] == 0xFF && reader->prefix[1] == 0xFE) { reader->encoding = 1; reader->prefix_index = 2; }
+    else if (reader->prefix_count >= 2 && reader->prefix[0] == 0xFE && reader->prefix[1] == 0xFF) { reader->encoding = 2; reader->prefix_index = 2; }
+    else if (reader->prefix_count == 3 && memcmp(reader->prefix, "\xEF\xBB\xBF", 3) == 0) reader->prefix_index = 3;
+}
+
+static int reader_unit(TextReader* reader) {
+    int first = reader_raw(reader), second;
+    if (first == EOF) return EOF;
+    second = reader_raw(reader);
+    if (second == EOF) { fprintf(stderr, "rgx: truncated UTF-16 input\n"); rgx_had_error = true; return EOF; }
+    return reader->encoding == 1 ? first | (second << 8) : (first << 8) | second;
+}
+
+static int reader_byte(TextReader* reader) {
+    if (!reader->encoding) return reader_raw(reader);
+    if (reader->pending_index < reader->pending_count) return reader->pending[reader->pending_index++];
+    int unit = reader_unit(reader); if (unit == EOF) return EOF;
+    uint32_t rune = (uint32_t)unit;
+    if (unit >= 0xD800 && unit <= 0xDBFF) { int low = reader_unit(reader); if (low < 0xDC00 || low > 0xDFFF) { fprintf(stderr, "rgx: invalid UTF-16 surrogate pair\n"); rgx_had_error = true; return EOF; } rune = 0x10000 + (((uint32_t)unit - 0xD800) << 10) + ((uint32_t)low - 0xDC00); }
+    else if (unit >= 0xDC00 && unit <= 0xDFFF) { rgx_had_error = true; return EOF; }
+    if (rune < 128) { reader->pending[0] = (unsigned char)rune; reader->pending_count = 1; }
+    else if (rune < 0x800) { reader->pending[0] = (unsigned char)(0xC0 | (rune >> 6)); reader->pending[1] = (unsigned char)(0x80 | (rune & 63)); reader->pending_count = 2; }
+    else if (rune < 0x10000) { reader->pending[0] = (unsigned char)(0xE0 | (rune >> 12)); reader->pending[1] = (unsigned char)(0x80 | ((rune >> 6) & 63)); reader->pending[2] = (unsigned char)(0x80 | (rune & 63)); reader->pending_count = 3; }
+    else { reader->pending[0] = (unsigned char)(0xF0 | (rune >> 18)); reader->pending[1] = (unsigned char)(0x80 | ((rune >> 12) & 63)); reader->pending[2] = (unsigned char)(0x80 | ((rune >> 6) & 63)); reader->pending[3] = (unsigned char)(0x80 | (rune & 63)); reader->pending_count = 4; }
+    reader->pending_index = 1; return reader->pending[0];
+}
+
+static bool reader_line(TextReader* reader, char** buffer, size_t* capacity, size_t* length) {
+    *length = 0; int byte;
+    while ((byte = reader_byte(reader)) != EOF) {
+        if (byte == '\n') return true;
+        if (*length == 64U * 1024U * 1024U) { fprintf(stderr, "rgx: line exceeds 64 MiB safety limit\n"); rgx_had_error = true; return false; }
+        if (*length == *capacity) { *capacity = *capacity ? *capacity * 2 : 4096; *buffer = (char*)rgx_realloc_array(*buffer, *capacity, 1); }
+        (*buffer)[(*length)++] = (char)byte;
+    }
+    return *length != 0;
+}
+
+typedef struct { char* text; size_t length, number; } ContextLine;
+
+static void context_emit(RgxPrinter* printer, const char* path, ContextLine line, bool print_path, size_t* last_printed, bool match, MatchSpan span) {
+    if (line.number <= *last_printed) return;
+    if (*last_printed && line.number > *last_printed + 1) printf("--\n");
+    if (match) RgxPrinter_PrintMatch(printer, path, line.number, line.text, line.length, span, print_path);
+    else RgxPrinter_PrintContext(printer, path, line.number, line.text, line.length, print_path);
+    *last_printed = line.number;
+}
+
+static void search_stream(FILE* stream, const char* path, const RgxOptions* opts, IMatcher* matcher, RgxPrinter* printer, bool multiple_targets) {
+    TextReader reader; reader_init(&reader, stream); rgx_match_error = false;
+    size_t context_capacity = opts->count_only || opts->quiet || opts->only_matching || opts->files_with_matches || opts->files_without_match ? 0 : opts->before_context;
+    ContextLine* history = context_capacity ? (ContextLine*)rgx_calloc(context_capacity, sizeof(ContextLine)) : NULL;
+    char* line = (char*)rgx_malloc(4096); size_t capacity = 4096, length = 0, number = 0, selected_count = 0, occurrence_count = 0, history_bytes = 0;
+    size_t head = 0, stored = 0, last_printed = 0, after_remaining = 0;
+    bool limited = opts->max_count_set && opts->max_count == 0;
+    bool print_path = opts->filename_mode >= 0 ? opts->filename_mode != 0 : multiple_targets;
+    while ((!limited || after_remaining) && reader_line(&reader, &line, &capacity, &length)) {
+        ++number;
+        if (opts->crlf && length && line[length - 1] == '\r') --length;
+        if (!opts->text && length && memchr(line, 0, length)) break;
+        MatchSpan span = {0}; bool raw_match = !limited && matcher->vptr->FindMatch(matcher, line, length, 0, &span);
+        if (rgx_match_error) break;
+        if (opts->line_regexp && raw_match && (span.start != 0 || span.length != length)) raw_match = false;
+        bool selected = !limited && (opts->invert_match ? !raw_match : raw_match);
+        if (selected) {
+            ++selected_count;
+            if (!opts->files_without_match) rgx_found = true;
+            if (opts->quiet || opts->files_without_match) break;
+            if (opts->files_with_matches) { RgxPrinter_PrintPath(printer, path); break; }
+            if (opts->only_matching || opts->count_matches) {
+                if (!opts->invert_match) {
+                    size_t offset = 0;
+                    do {
+                        ++occurrence_count;
+                        if (span.length && opts->only_matching && !opts->count_only) RgxPrinter_PrintMatch(printer, path, number, line, length, span, print_path);
+                        offset = span.start + span.length;
+                        if (!span.length) { if (offset == length) break; size_t width; utf8_rune(line + offset, length - offset, &width); offset += width; }
+                    } while (offset <= length && matcher->vptr->FindMatch(matcher, line, length, offset, &span) && !rgx_match_error);
+                }
+            } else if (!opts->count_only) {
+                if (opts->before_context || opts->after_context) {
+                    for (size_t index = 0; index < stored; ++index) context_emit(printer, path, history[(head + index) % opts->before_context], print_path, &last_printed, false, (MatchSpan){0});
+                    context_emit(printer, path, (ContextLine){line, length, number}, print_path, &last_printed, true, opts->invert_match ? (MatchSpan){0} : span);
+                } else RgxPrinter_PrintMatch(printer, path, number, line, length, opts->invert_match ? (MatchSpan){0} : span, print_path);
+                after_remaining = opts->after_context;
+            }
+            if (opts->max_count_set && selected_count >= opts->max_count) limited = true;
+        } else if (after_remaining && !opts->count_only && !opts->only_matching) {
+            context_emit(printer, path, (ContextLine){line, length, number}, print_path, &last_printed, false, span); --after_remaining;
+        }
+        if (history) {
+            size_t slot = stored < opts->before_context ? (head + stored++) % opts->before_context : head;
+            if (stored == opts->before_context && history[slot].text) head = (head + 1) % opts->before_context;
+            history_bytes -= history[slot].length;
+            if (length > 64U * 1024U * 1024U - history_bytes) { fprintf(stderr, "rgx: before-context exceeds 64 MiB safety limit\n"); rgx_had_error = true; break; }
+            history_bytes += length;
+            free(history[slot].text); history[slot].text = (char*)rgx_malloc(length ? length : 1);
+            if (length) memcpy(history[slot].text, line, length);
+            history[slot].length = length; history[slot].number = number;
+        }
+    }
+    if (ferror(stream)) { fprintf(stderr, "rgx: read error: %s\n", path); rgx_had_error = true; }
+    if (opts->files_without_match && !selected_count) { rgx_found = true; if (!opts->quiet) RgxPrinter_PrintPath(printer, path); }
+    if (opts->count_only && selected_count && !opts->quiet && !opts->files_with_matches && !opts->files_without_match) RgxPrinter_PrintCount(printer, path, (opts->count_matches || opts->only_matching) && !opts->invert_match ? occurrence_count : selected_count, print_path);
+    for (size_t index = 0; index < context_capacity; ++index) free(history[index].text);
+    free(history); free(line);
+}
+
+static void SearchSingleFile(const char* filepath, const RgxOptions* opts, IMatcher* matcher, RgxPrinter* printer, bool multiple_targets) {
+    if (strcmp(filepath, "-") == 0) { search_stream(stdin, "<stdin>", opts, matcher, printer, multiple_targets); return; }
+    wchar_t* path = path_to_wide(filepath); if (!path) return;
+    FILE* stream = NULL; int error = _wfopen_s(&stream, path, L"rb"); free(path);
+    if (error || !stream) { char message[256] = {0}; strerror_s(message, sizeof(message), error); fprintf(stderr, "rgx: cannot read '%s': %s\n", filepath, message); rgx_had_error = true; return; }
+    search_stream(stream, filepath, opts, matcher, printer, multiple_targets); fclose(stream);
+}
+
+/* ========================================================================= */
+/*                          5. OOP DIRECTORY WALKER                          */
+/* ========================================================================= */
+
+typedef struct IgnoreRule {
+    char* scope;
+    char* pattern;
+    bool negate, directory_only, anchored;
+    struct IgnoreRule* next;
+} IgnoreRule;
+
+typedef struct LoadedScope {
+    char* path;
+    struct LoadedScope* next;
+} LoadedScope;
+
+typedef struct RgxWalker {
+    const RgxOptions* opts; IMatcher* matcher; RgxPrinter* printer; bool multiple_targets;
+    IgnoreRule *rules, *tail; size_t rule_bytes;
+    LoadedScope* loaded;
+    size_t scope_bytes;
+} RgxWalker;
+
+static char* wide_to_utf8(const wchar_t* text) {
+    int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text, -1, NULL, 0, NULL, NULL);
+    if (!required) { fprintf(stderr, "rgx: filename contains invalid Unicode\n"); rgx_had_error = true; return NULL; }
+    char* result = (char*)rgx_malloc((size_t)required);
+    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text, -1, result, required, NULL, NULL)) { free(result); rgx_had_error = true; return NULL; }
+    return result;
+}
+
+static char* path_join(const char* directory, const char* name) {
+    size_t directory_length = strlen(directory), name_length = strlen(name);
+    if (directory_length > 131072 || name_length > 131072 || directory_length + name_length > 131072) { fprintf(stderr, "rgx: path length limit exceeded\n"); rgx_had_error = true; return NULL; }
+    char* result = (char*)rgx_malloc(directory_length + name_length + 2);
+    memcpy(result, directory, directory_length); result[directory_length] = '/'; memcpy(result + directory_length + 1, name, name_length + 1); return result;
+}
+
+static char* absolute_utf8(const char* path) {
+    wchar_t* wide = path_to_wide(path); if (!wide) return NULL;
+    wchar_t* plain = wide;
+    if (wcsncmp(wide, L"\\\\?\\UNC\\", 8) == 0) { wide[6] = L'\\'; plain = wide + 6; }
+    else if (wcsncmp(wide, L"\\\\?\\", 4) == 0) plain = wide + 4;
+    char* result = wide_to_utf8(plain); free(wide);
+    if (result) { for (char* cursor = result; *cursor; ++cursor) if (*cursor == '\\') *cursor = '/'; size_t length = strlen(result); while (length > 3 && result[length - 1] == '/') result[--length] = 0; }
+    return result;
+}
+
+static bool glob_atom(const char** pattern, unsigned char character) {
+    const char* cursor = *pattern;
+    if (*cursor == '?') { *pattern = cursor + 1; return character != '/'; }
+    if (*cursor == '[') {
+        ++cursor; bool negate = *cursor == '!' || *cursor == '^'; if (negate) ++cursor;
+        bool matched = false;
+        while (*cursor && *cursor != ']') {
+            unsigned char low = (unsigned char)*cursor++, high = low;
+            if (*cursor == '-' && cursor[1] && cursor[1] != ']') { ++cursor; high = (unsigned char)*cursor++; }
+            matched = matched || (character >= low && character <= high);
+        }
+        if (*cursor != ']') return false;
+        *pattern = cursor + 1; return character != '/' && (negate ? !matched : matched);
+    }
+    if (*cursor == '\\' && cursor[1]) ++cursor;
+    if ((unsigned char)*cursor != character) return false;
+    *pattern = cursor + 1; return true;
+}
+
+static bool glob_match(const char* pattern, const char* text) {
+    const char *retry_pattern = NULL, *retry_text = NULL; bool cross_directory = false; size_t work = 0;
+    while (*text) {
+        if (++work > 1000000) { fprintf(stderr, "rgx: glob work limit exceeded\n"); rgx_had_error = true; return false; }
+        if (*pattern == '*') {
+            cross_directory = pattern[1] == '*';
+            while (*pattern == '*') ++pattern;
+            if (cross_directory && *pattern == '/') ++pattern;
+            retry_pattern = pattern; retry_text = text;
+            if (!*pattern && (cross_directory || !strchr(text, '/'))) return true;
+            continue;
+        }
+        const char* next = pattern;
+        if (*pattern && glob_atom(&next, (unsigned char)*text)) { pattern = next; ++text; continue; }
+        if (!retry_pattern || !*retry_text || (!cross_directory && *retry_text == '/')) return false;
+        text = ++retry_text; pattern = retry_pattern;
+    }
+    while (*pattern == '*') ++pattern;
+    return *pattern == 0;
+}
+
+static void ignore_load_file(RgxWalker* walker, const char* scope, const char* filename) {
+    char* path = path_join(scope, filename); if (!path) return;
+    wchar_t* wide = path_to_wide(path); if (!wide) { free(path); return; }
+    FILE* file = NULL; int error = _wfopen_s(&file, wide, L"rb"); free(wide);
+    if (error || !file) { if (error != ENOENT && error != ENOTDIR) { fprintf(stderr, "rgx: cannot read ignore file: %s\n", path); rgx_had_error = true; } free(path); return; }
+    TextReader reader; reader_init(&reader, file); char* line = NULL; size_t capacity = 0, length, bytes = 0;
+    while (reader_line(&reader, &line, &capacity, &length)) {
+        bytes += length;
+        if (bytes > 1024U * 1024U || length > 8192) { fprintf(stderr, "rgx: ignore file exceeds safety limit: %s\n", path); rgx_had_error = true; break; }
+        if (length && line[length - 1] == '\r') --length;
+        while (length && line[length - 1] == ' ' && (length == 1 || line[length - 2] != '\\')) --length;
+        if (!length || line[0] == '#') continue;
+        if (memchr(line, 0, length)) { fprintf(stderr, "rgx: NUL byte in ignore file: %s\n", path); rgx_had_error = true; break; }
+        size_t start = 0; bool negate = line[0] == '!'; if (negate) ++start;
+        bool anchored = start < length && line[start] == '/'; if (anchored) ++start;
+        bool directory_only = length > start && line[length - 1] == '/'; if (directory_only) --length;
+        if (length <= start) continue;
+        size_t allocation = strlen(scope) + 1 + length - start + 1 + sizeof(IgnoreRule);
+        if (allocation > 16U * 1024U * 1024U - walker->rule_bytes) { fprintf(stderr, "rgx: ignore rules exceed 16 MiB safety limit\n"); rgx_had_error = true; break; }
+        IgnoreRule* rule = (IgnoreRule*)rgx_calloc(1, sizeof(IgnoreRule)); rule->scope = rgx_strdup(scope);
+        rule->pattern = (char*)rgx_malloc(length - start + 1); memcpy(rule->pattern, line + start, length - start); rule->pattern[length - start] = 0;
+        rule->negate = negate; rule->anchored = anchored; rule->directory_only = directory_only; walker->rule_bytes += allocation;
+        if (walker->tail) walker->tail->next = rule; else walker->rules = rule; walker->tail = rule;
+    }
+    if (ferror(file)) { fprintf(stderr, "rgx: error reading ignore file: %s\n", path); rgx_had_error = true; }
+    free(line); fclose(file); free(path);
+}
+
+static void ignore_load_directory(RgxWalker* walker, const char* scope) {
+    if (walker->opts->no_ignore) return;
+    for (LoadedScope* entry = walker->loaded; entry; entry = entry->next) {
+        if (strcmp(entry->path, scope) == 0) return;
+    }
+    size_t cost = strlen(scope) + 1 + sizeof(LoadedScope);
+    if (cost > 16U * 1024U * 1024U - walker->scope_bytes) {
+        fprintf(stderr, "rgx: ignore scope memory limit exceeded\n");
+        rgx_had_error = true;
+        return;
+    }
+    LoadedScope* entry = (LoadedScope*)rgx_calloc(1, sizeof(LoadedScope));
+    entry->path = rgx_strdup(scope);
+    entry->next = walker->loaded;
+    walker->loaded = entry;
+    walker->scope_bytes += cost;
+    ignore_load_file(walker, scope, ".git/info/exclude");
+    ignore_load_file(walker, scope, ".gitignore");
+    ignore_load_file(walker, scope, ".ignore");
+    ignore_load_file(walker, scope, ".rgignore");
+}
+
+static void ignore_load_ancestors(RgxWalker* walker, const char* directory) {
+    if (walker->opts->no_ignore) return;
+    char** scopes = NULL; size_t count = 0; char* current = rgx_strdup(directory);
+    while (true) {
+        if (count == 512) { fprintf(stderr, "rgx: ancestor depth exceeds safety limit\n"); rgx_had_error = true; break; }
+        scopes = (char**)rgx_realloc_array(scopes, count + 1, sizeof(char*)); scopes[count++] = rgx_strdup(current);
+        char* slash = strrchr(current, '/');
+        if (!slash || slash <= current + 2) break;
+        *slash = 0;
+    }
+    while (count) { ignore_load_directory(walker, scopes[--count]); free(scopes[count]); }
+    free(scopes); free(current);
+}
+
+static bool walker_ignored(RgxWalker* walker, const char* absolute, bool directory, const char* root) {
+    bool ignored = false;
+    for (IgnoreRule* rule = walker->rules; rule; rule = rule->next) {
+        size_t scope_length = strlen(rule->scope);
+        if (strncmp(absolute, rule->scope, scope_length) != 0 || absolute[scope_length] != '/') continue;
+        if (rule->directory_only && !directory) continue;
+        const char* relative = absolute + scope_length + 1;
+        const char* base = strrchr(relative, '/'); if (base) ++base; else base = relative;
+        const char* target = rule->anchored || strchr(rule->pattern, '/') ? relative : base;
+        if (glob_match(rule->pattern, target)) ignored = !rule->negate;
+    }
+    bool positive = false, included = false, negative = false;
+    for (size_t index = 0; index < walker->opts->glob_count; ++index) {
+        const char* pattern = walker->opts->globs[index]; bool exclude = *pattern == '!'; if (exclude) ++pattern; else positive = true;
+        const char* target = strrchr(absolute, '/'); target = target ? target + 1 : absolute;
+        if (strchr(pattern, '/')) { size_t root_length = strlen(root); target = strncmp(absolute, root, root_length) == 0 && absolute[root_length] == '/' ? absolute + root_length + 1 : absolute; }
+        if (glob_match(pattern, target)) { included = !exclude; negative = exclude; ignored = exclude; }
+    }
+    if (negative) return true;
+    if (positive && !directory && !included) return true;
+    return directory && positive ? false : ignored;
+}
+
+RgxWalker* RgxWalker_New(const RgxOptions* opts, IMatcher* matcher, RgxPrinter* printer, bool multiple_targets) {
+    RgxWalker* walker = (RgxWalker*)rgx_calloc(1, sizeof(RgxWalker)); walker->opts = opts; walker->matcher = matcher; walker->printer = printer; walker->multiple_targets = multiple_targets; return walker;
+}
+
+static void walker_file(RgxWalker* walker, const char* path) {
+    if (walker->opts->files_only) { rgx_found = true; if (!walker->opts->quiet) RgxPrinter_PrintPath(walker->printer, path); }
+    else SearchSingleFile(path, walker->opts, walker->matcher, walker->printer, walker->multiple_targets);
+}
+
+typedef struct { char* path; size_t depth; } WalkTask;
+
+void RgxWalker_Execute(RgxWalker* walker, const char* target_path) {
+    if (strcmp(target_path, "-") == 0) { if (!walker->opts->files_only) SearchSingleFile("-", walker->opts, walker->matcher, walker->printer, walker->multiple_targets); return; }
+    wchar_t* wide = path_to_wide(target_path); if (!wide) return;
+    DWORD attributes = GetFileAttributesW(wide); free(wide);
+    if (attributes == INVALID_FILE_ATTRIBUTES) { fprintf(stderr, "rgx: cannot access '%s' (Windows error %lu)\n", target_path, (unsigned long)GetLastError()); rgx_had_error = true; return; }
+    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) { walker_file(walker, target_path); return; }
+    char* root = absolute_utf8(target_path); if (!root) return;
+    ignore_load_ancestors(walker, root);
+    WalkTask* tasks = (WalkTask*)rgx_malloc(sizeof(WalkTask)); size_t count = 1;
+    tasks[0] = (WalkTask){rgx_strdup(target_path), 0};
+    size_t queue_bytes = strlen(target_path) + 1;
+    while (count && !(walker->opts->quiet && rgx_found)) {
+        WalkTask task = tasks[--count];
+        queue_bytes -= strlen(task.path) + 1;
+        char* scope = absolute_utf8(task.path); if (scope) { ignore_load_directory(walker, scope); free(scope); }
+        if (walker->opts->max_depth_set && task.depth >= walker->opts->max_depth) { free(task.path); continue; }
+        char* wildcard = path_join(task.path, "*"); wide = wildcard ? path_to_wide(wildcard) : NULL; free(wildcard);
+        WIN32_FIND_DATAW data; HANDLE find = wide ? FindFirstFileW(wide, &data) : INVALID_HANDLE_VALUE; free(wide);
+        if (find == INVALID_HANDLE_VALUE) { DWORD error = GetLastError(); if (error != ERROR_FILE_NOT_FOUND) { fprintf(stderr, "rgx: cannot enumerate '%s' (Windows error %lu)\n", task.path, (unsigned long)error); rgx_had_error = true; } free(task.path); continue; }
+        do {
+            if (wcscmp(data.cFileName, L".") == 0 || wcscmp(data.cFileName, L"..") == 0) continue;
+            if (!walker->opts->search_hidden && ((data.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) || data.cFileName[0] == L'.')) continue;
+            if (!walker->opts->no_ignore && (wcscmp(data.cFileName, L".git") == 0 || wcscmp(data.cFileName, L".hg") == 0 || wcscmp(data.cFileName, L".svn") == 0)) continue;
+            if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+            char* name = wide_to_utf8(data.cFileName); if (!name) continue;
+            char* path = path_join(task.path, name); free(name); if (!path) continue;
+            char* absolute = absolute_utf8(path); bool directory = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            bool ignored = !absolute || walker_ignored(walker, absolute, directory, root); free(absolute);
+            if (ignored) { free(path); continue; }
+            if (directory) {
+                size_t cost = strlen(path) + 1;
+                if (count == 100000 || cost > 16U * 1024U * 1024U - queue_bytes) { fprintf(stderr, "rgx: directory queue exceeds safety limit\n"); rgx_had_error = true; free(path); break; }
+                queue_bytes += cost;
+                tasks = (WalkTask*)rgx_realloc_array(tasks, count + 1, sizeof(WalkTask)); tasks[count++] = (WalkTask){path, task.depth + 1};
+            } else { walker_file(walker, path); free(path); }
+            if (walker->opts->quiet && rgx_found) break;
+        } while (FindNextFileW(find, &data));
+        DWORD error = GetLastError(); if (error != ERROR_NO_MORE_FILES && !(walker->opts->quiet && rgx_found)) { fprintf(stderr, "rgx: directory enumeration failed: %s\n", task.path); rgx_had_error = true; }
+        FindClose(find); free(task.path);
+    }
+    while (count) free(tasks[--count].path);
+    free(tasks); free(root);
+}
+
+void RgxWalker_Free(RgxWalker* walker) {
+    if (!walker) return;
+    IgnoreRule* rule = walker->rules;
+    while (rule) { IgnoreRule* next = rule->next; free(rule->scope); free(rule->pattern); free(rule); rule = next; }
+    LoadedScope* scope = walker->loaded;
+    while (scope) { LoadedScope* next = scope->next; free(scope->path); free(scope); scope = next; }
+    free(walker);
+}
+
+/* ========================================================================= */
+/*                          6. HELP & CLI PARSER                             */
+/* ========================================================================= */
+
+void print_help(void) {
+    printf("rgx %s\n", RGX_VERSION);
+    printf("Fast, object-oriented Windows recursive regex pattern searcher.\n\n");
+    printf("USAGE:\n");
+    printf("    rgx [OPTIONS] <PATTERN> [PATH ...]\n");
+    printf("    rgx [OPTIONS] -e <PATTERN> ... [PATH ...]\n\n");
+    printf("ARGS:\n");
+    printf("    <PATTERN>                 A regular expression (or literal with -F) to search for.\n");
+    printf("    <PATH>...                 A file or directory to search. [default: .]\n\n");
+    printf("OPTIONS:\n");
+    printf("  MATCH QUALIFIERS:\n");
+    printf("    -e, --regexp <PAT>        A pattern to search for. Can be provided multiple times.\n");
+    printf("    -F, --fixed-strings       Treat PATTERN as a literal string instead of regex.\n");
+    printf("    -i, --ignore-case         Case insensitive search.\n");
+    printf("    -s, --case-sensitive      Search case-sensitively; last case option wins.\n");
+    printf("    -S, --smart-case          Search case-insensitively if pattern is all lowercase.\n");
+    printf("    -v, --invert-match        Invert match: select non-matching lines.\n");
+    printf("    -w, --word-regexp         Only show matches surrounded by word boundaries.\n");
+    printf("    -x, --line-regexp         Match the entire line.\n");
+    printf("    -f, --file <FILE>         Read patterns from FILE (or '-' for stdin).\n\n");
+    printf("  OUTPUT QUALIFIERS:\n");
+    printf("    -c, --count               Show only the count of matching lines per file.\n");
+    printf("        --color <WHEN>        When to use color: 'never', 'auto', 'always'. [default: auto]\n");
+    printf("    -l, --files-with-matches  Print only the paths with at least one match.\n");
+    printf("        --files-without-match Print only the paths that contain zero matches.\n");
+    printf("    -n, --line-number         Show line numbers (1-based); automatic on a console.\n");
+    printf("    -N, --no-line-number      Suppress line numbers.\n");
+    printf("    -o, --only-matching       Print only the matched parts of a matching line.\n");
+    printf("    -q, --quiet               Do not print matches; exit immediately when match is found.\n\n");
+    printf("    -H, --with-filename       Always print the path.\n");
+    printf("    -I, --no-filename         Never print the path.\n");
+    printf("        --count-matches       Count individual matches instead of lines.\n");
+    printf("    -a, --text                Search files containing NUL bytes as text.\n");
+    printf("        --crlf                Treat CRLF as a line terminator.\n\n");
+    printf("  CONTEXT QUALIFIERS:\n");
+    printf("    -A, --after-context <NUM> Show <NUM> lines after each match.\n");
+    printf("    -B, --before-context <NUM>Show <NUM> lines before each match.\n");
+    printf("    -C, --context <NUM>       Show <NUM> lines before and after each match.\n");
+    printf("    -m, --max-count <NUM>     Limit the number of matching lines per file.\n\n");
+    printf("  DIRECTORY TRAVERSAL:\n");
+    printf("        --hidden              Search hidden files and folders.\n");
+    printf("        --max-depth <NUM>     Descend at most <NUM> directories deep.\n");
+    printf("        --no-ignore           Ignore local .gitignore, .ignore and .rgignore rules.\n");
+    printf("    -g, --glob <GLOB>         Include matching paths; prefix '!' to exclude.\n");
+    printf("        --files               List searchable files without a pattern.\n\n");
+    printf("  INFO:\n");
+    printf("    -h, --help                Prints help information.\n");
+    printf("    -V, --version             Prints version information.\n");
+    printf("\nRegex: groups, alternatives, classes, greedy/lazy repetitions, anchors,\n");
+    printf("word boundaries, common character escapes and inline case flags.\n");
+    printf("Backreferences, look-around and Unicode property escapes are unsupported.\n");
+    printf("Single-file Windows C implementation; not full ripgrep compatibility.\n");
+    printf("Limits: 64 MiB per line/context text; 16 MiB option/ignore/queue budgets;\n");
+    printf("8192 states per regex, 32768 aggregate states; bounded search work.\n");
+    printf("Exit codes: 0 selected matches, 1 no selected matches, 2 errors.\n");
+}
+
+static bool contains_uppercase(const char* s) {
+    size_t remaining = strlen(s);
+    while (remaining) {
+        size_t width;
+        uint32_t rune = utf8_rune(s, remaining, &width);
+        if (rune < 128 ? isupper((unsigned char)rune) != 0 : (rune_type(rune, CT_CTYPE1) & C1_UPPER) != 0) return true;
+        s += width;
+        remaining -= width;
+    }
+    return false;
+}
+
+static bool parse_size_option(const char* option, const char* text, size_t maximum, size_t* value) {
+    if (!*text) {
+        fprintf(stderr, "rgx: %s requires a non-negative integer\n", option);
+        return false;
+    }
+    size_t parsed = 0;
+    for (const unsigned char* digit = (const unsigned char*)text; *digit; ++digit) {
+        if (*digit < '0' || *digit > '9' || parsed > maximum / 10 ||
+            (parsed == maximum / 10 && (size_t)(*digit - '0') > maximum % 10)) {
+            fprintf(stderr, "rgx: invalid or excessive value for %s: %s\n", option, text);
+            return false;
+        }
+        parsed = parsed * 10 + (size_t)(*digit - '0');
+    }
+    *value = parsed;
+    return true;
+}
+
+static void append_option_string(RgxOptions* opts, char*** strings, size_t* count, const char* value) {
+    size_t length = strlen(value);
+    size_t remaining = 16U * 1024U * 1024U - opts->option_string_bytes;
+    if (*count >= 65536 || remaining <= sizeof(char*) || length >= remaining - sizeof(char*)) {
+        fprintf(stderr, "rgx: option list exceeds safety limit\n");
+        exit(2);
+    }
+    *strings = (char**)rgx_realloc_array(*strings, *count + 1, sizeof(char*));
+    (*strings)[(*count)++] = rgx_strdup(value);
+    opts->option_string_bytes += length + 1 + sizeof(char*);
+}
+
+static bool load_pattern_file(RgxOptions* opts, const char* path) {
+    FILE* stream = stdin;
+    if (strcmp(path, "-") != 0) {
+        wchar_t* wide = path_to_wide(path);
+        if (!wide) return false;
+        int error = _wfopen_s(&stream, wide, L"rb");
+        free(wide);
+        if (error || !stream) {
+            fprintf(stderr, "rgx: cannot read pattern file: %s\n", path);
+            return false;
+        }
+    }
+    TextReader reader;
+    reader_init(&reader, stream);
+    char* line = NULL;
+    size_t capacity = 0, length;
+    bool valid = true;
+    while (reader_line(&reader, &line, &capacity, &length)) {
+        if (length && line[length - 1] == '\r') --length;
+        if (length > 65536 || (length && memchr(line, 0, length))) {
+            fprintf(stderr, "rgx: invalid or excessive pattern in %s\n", path);
+            valid = false;
+            break;
+        }
+        line = (char*)rgx_realloc_array(line, length + 1, 1);
+        capacity = length + 1;
+        line[length] = 0;
+        append_option_string(opts, &opts->patterns, &opts->pattern_count, line);
+    }
+    if (ferror(stream) || rgx_had_error) valid = false;
+    if (stream != stdin) fclose(stream);
+    free(line);
+    opts->pattern_source_set = true;
+    return valid;
+}
+
+static bool set_cli_option(RgxOptions* opts, const char* option, const char* value) {
+    if (strcmp(option, "--regexp") == 0) {
+        append_option_string(opts, &opts->patterns, &opts->pattern_count, value);
+        opts->pattern_source_set = true;
+    } else if (strcmp(option, "--file") == 0) {
+        return load_pattern_file(opts, value);
+    } else if (strcmp(option, "--glob") == 0) {
+        append_option_string(opts, &opts->globs, &opts->glob_count, value);
+    } else if (strcmp(option, "--color") == 0) {
+        if (strcmp(value, "always") == 0) opts->color_mode = COLOR_ALWAYS;
+        else if (strcmp(value, "never") == 0) opts->color_mode = COLOR_NEVER;
+        else if (strcmp(value, "auto") == 0) opts->color_mode = COLOR_AUTO;
+        else { fprintf(stderr, "rgx: invalid color mode: %s\n", value); return false; }
+    } else if (strcmp(option, "--max-count") == 0) {
+        if (!parse_size_option(option, value, SIZE_MAX, &opts->max_count)) return false;
+        opts->max_count_set = true;
+    } else if (strcmp(option, "--max-depth") == 0) {
+        if (!parse_size_option(option, value, 512, &opts->max_depth)) return false;
+        opts->max_depth_set = true;
+    } else if (strcmp(option, "--before-context") == 0) {
+        return parse_size_option(option, value, 1048576, &opts->before_context);
+    } else if (strcmp(option, "--after-context") == 0) {
+        return parse_size_option(option, value, 1048576, &opts->after_context);
+    } else if (strcmp(option, "--context") == 0) {
+        if (!parse_size_option(option, value, 1048576, &opts->before_context)) return false;
+        opts->after_context = opts->before_context;
+    } else if (strcmp(option, "--ignore-case") == 0) {
+        opts->ignore_case = true; opts->smart_case = opts->case_sensitive = false;
+    } else if (strcmp(option, "--smart-case") == 0) {
+        opts->smart_case = true; opts->ignore_case = opts->case_sensitive = false;
+    } else if (strcmp(option, "--case-sensitive") == 0) {
+        opts->case_sensitive = true; opts->ignore_case = opts->smart_case = false;
+    } else if (strcmp(option, "--fixed-strings") == 0) opts->fixed_strings = true;
+    else if (strcmp(option, "--invert-match") == 0) opts->invert_match = true;
+    else if (strcmp(option, "--word-regexp") == 0) opts->word_regexp = true;
+    else if (strcmp(option, "--line-regexp") == 0) opts->line_regexp = true;
+    else if (strcmp(option, "--line-number") == 0) opts->show_line_numbers = true;
+    else if (strcmp(option, "--no-line-number") == 0) opts->show_line_numbers = false;
+    else if (strcmp(option, "--with-filename") == 0) opts->filename_mode = 1;
+    else if (strcmp(option, "--no-filename") == 0) opts->filename_mode = 0;
+    else if (strcmp(option, "--count") == 0) { opts->count_only = true; opts->count_matches = false; }
+    else if (strcmp(option, "--count-matches") == 0) { opts->count_only = true; opts->count_matches = true; }
+    else if (strcmp(option, "--files-with-matches") == 0) { opts->files_with_matches = true; opts->files_without_match = false; }
+    else if (strcmp(option, "--files-without-match") == 0) { opts->files_without_match = true; opts->files_with_matches = false; }
+    else if (strcmp(option, "--quiet") == 0) opts->quiet = true;
+    else if (strcmp(option, "--only-matching") == 0) opts->only_matching = true;
+    else if (strcmp(option, "--hidden") == 0) opts->search_hidden = true;
+    else if (strcmp(option, "--no-ignore") == 0) opts->no_ignore = true;
+    else if (strcmp(option, "--text") == 0) opts->text = true;
+    else if (strcmp(option, "--crlf") == 0) opts->crlf = true;
+    else if (strcmp(option, "--files") == 0) opts->files_only = true;
+    else { fprintf(stderr, "rgx: unrecognized option: %s\n", option); return false; }
+    return true;
+}
+
+static bool option_requires_value(const char* option) {
+    return strcmp(option, "--regexp") == 0 || strcmp(option, "--file") == 0 ||
+        strcmp(option, "--glob") == 0 || strcmp(option, "--color") == 0 ||
+        strcmp(option, "--max-count") == 0 || strcmp(option, "--max-depth") == 0 ||
+        strcmp(option, "--before-context") == 0 || strcmp(option, "--after-context") == 0 || strcmp(option, "--context") == 0;
+}
+
+static int rgx_main(int argc, char** argv) {
+    if (argc < 2) {
+        print_help();
+        return 2;
+    }
+
+    RgxOptions* opts = RgxOptions_New();
+    bool positional_only = false;
+
+    for (int i = 1; i < argc; i++) {
+        char* arg = argv[i];
+        if (!positional_only && strcmp(arg, "--") == 0) { positional_only = true; continue; }
+        if (!positional_only && (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)) {
+            print_help();
+            RgxOptions_Free(opts);
+            return 0;
+        } else if (!positional_only && (strcmp(arg, "-V") == 0 || strcmp(arg, "--version") == 0)) {
+            printf("rgx %s\n", RGX_VERSION);
+            RgxOptions_Free(opts);
+            return 0;
+        } else if (!positional_only && arg[0] == '-' && arg[1]) {
+            if (arg[1] == '-') {
+                char* value = strchr(arg + 2, '=');
+                if (value) *value++ = 0;
+                bool required = option_requires_value(arg);
+                if (required && !value) {
+                    if (i + 1 == argc) { fprintf(stderr, "rgx: option requires a value: %s\n", arg); goto invalid_options; }
+                    value = argv[++i];
+                }
+                if ((!required && value) || !set_cli_option(opts, arg, value)) goto invalid_options;
+            } else {
+                for (size_t option_index = 1; arg[option_index]; ++option_index) {
+                    const char* option = NULL;
+                    switch (arg[option_index]) {
+                        case 'F': option = "--fixed-strings"; break;
+                        case 'i': option = "--ignore-case"; break;
+                        case 's': option = "--case-sensitive"; break;
+                        case 'S': option = "--smart-case"; break;
+                        case 'v': option = "--invert-match"; break;
+                        case 'w': option = "--word-regexp"; break;
+                        case 'x': option = "--line-regexp"; break;
+                        case 'n': option = "--line-number"; break;
+                        case 'N': option = "--no-line-number"; break;
+                        case 'H': option = "--with-filename"; break;
+                        case 'I': option = "--no-filename"; break;
+                        case 'c': option = "--count"; break;
+                        case 'l': option = "--files-with-matches"; break;
+                        case 'o': option = "--only-matching"; break;
+                        case 'q': option = "--quiet"; break;
+                        case 'a': option = "--text"; break;
+                        case 'e': option = "--regexp"; break;
+                        case 'f': option = "--file"; break;
+                        case 'g': option = "--glob"; break;
+                        case 'm': option = "--max-count"; break;
+                        case 'A': option = "--after-context"; break;
+                        case 'B': option = "--before-context"; break;
+                        case 'C': option = "--context"; break;
+                        default: fprintf(stderr, "rgx: unrecognized short option: -%c\n", arg[option_index]); goto invalid_options;
+                    }
+                    const char* value = NULL;
+                    bool required = option_requires_value(option);
+                    if (required) {
+                        value = arg + option_index + 1;
+                        if (!*value) {
+                            if (i + 1 == argc) { fprintf(stderr, "rgx: option requires a value: %s\n", option); goto invalid_options; }
+                            value = argv[++i];
+                        }
+                    }
+                    if (!set_cli_option(opts, option, value)) goto invalid_options;
+                    if (required) break;
+                }
+            }
+        } else {
+            if (!opts->pattern_count && !opts->pattern_source_set && !opts->files_only) {
+                append_option_string(opts, &opts->patterns, &opts->pattern_count, arg);
+            } else {
+                append_option_string(opts, &opts->paths, &opts->path_count, arg);
+            }
+        }
+    }
+
+    if (!opts->pattern_count && !opts->pattern_source_set && !opts->files_only) {
+        fprintf(stderr, "rgx: error: no pattern provided. Run with --help for details.\n");
+        RgxOptions_Free(opts);
+        return 2;
+    }
+
+    /* Fallback to current directory '.' if no paths were provided */
+    if (opts->path_count == 0) {
+        DWORD input_type = GetFileType(GetStdHandle(STD_INPUT_HANDLE));
+        append_option_string(opts, &opts->paths, &opts->path_count,
+            !opts->files_only && (input_type == FILE_TYPE_PIPE || input_type == FILE_TYPE_DISK) ? "-" : ".");
+    }
+
+    /* Resolve case-sensitivity mode */
+    bool effective_ignore_case = opts->ignore_case;
+    if (opts->smart_case) {
+        effective_ignore_case = true;
+        for (size_t index = 0; index < opts->pattern_count; ++index) {
+            if (contains_uppercase(opts->patterns[index])) effective_ignore_case = false;
+        }
+    }
+    if (opts->case_sensitive) {
+        effective_ignore_case = false;
+    }
+
+    /* Instantiate polymorphically based on engine qualifiers */
+    IMatcher* matcher = PatternSet_New(opts, effective_ignore_case);
+
+    if (!matcher) {
+        RgxOptions_Free(opts);
+        return 2;
+    }
+
+    RgxPrinter* printer = RgxPrinter_New(opts);
+    bool multiple_targets = opts->path_count > 1;
+    for (size_t index = 0; index < opts->path_count && !multiple_targets; ++index) {
+        if (strcmp(opts->paths[index], "-") == 0) continue;
+        wchar_t* wide = path_to_wide(opts->paths[index]);
+        if (!wide) continue;
+        DWORD attributes = GetFileAttributesW(wide);
+        free(wide);
+        multiple_targets = attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    }
+
+    RgxWalker* walker = RgxWalker_New(opts, matcher, printer, multiple_targets);
+
+    for (size_t i = 0; i < opts->path_count; i++) {
+        RgxWalker_Execute(walker, opts->paths[i]);
+        if (opts->quiet && rgx_found) break;
+    }
+
+    int status = opts->quiet && rgx_found ? 0 : rgx_had_error ? 2 : rgx_found ? 0 : 1;
+    /* Cleanup OOP objects */
+    RgxWalker_Free(walker);
+    RgxPrinter_Free(printer);
+    matcher->vptr->Destroy(matcher);
+    RgxOptions_Free(opts);
+
+    return status;
+invalid_options:
+    RgxOptions_Free(opts);
+    return 2;
+}
+
+int wmain(int argc, wchar_t** wide_argv) {
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    DWORD console_mode;
+    if (GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &console_mode)) SetConsoleOutputCP(CP_UTF8);
+    char** argv = (char**)rgx_calloc((size_t)argc + 1, sizeof(char*));
+    int status = 2;
+    for (int index = 0; index < argc; ++index) {
+        int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[index], -1, NULL, 0, NULL, NULL);
+        if (!required) {
+            fprintf(stderr, "rgx: invalid Unicode command-line argument\n");
+            goto cleanup_arguments;
+        }
+        argv[index] = (char*)rgx_malloc((size_t)required);
+        if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[index], -1, argv[index], required, NULL, NULL)) goto cleanup_arguments;
+    }
+    status = rgx_main(argc, argv);
+    if (fflush(stdout) == EOF || ferror(stdout)) {
+        fprintf(stderr, "rgx: output write failed\n");
+        status = 2;
+    }
+cleanup_arguments:
+    for (int index = 0; index < argc; ++index) free(argv[index]);
+    free(argv);
+    return status;
+}

@@ -7,6 +7,120 @@
 #include "spec_parser.hpp"
 #include "stage_runner.hpp"
 
+static bool wildcardMatch(const char* pat, const char* str) {
+    while (*pat) {
+        if (*pat == '*') {
+            while (*pat == '*') pat++;
+            if (!*pat) return true;
+            while (*str) {
+                if (wildcardMatch(pat, str)) return true;
+                str++;
+            }
+            return false;
+        } else if (*pat == '?') {
+            if (!*str) return false;
+            pat++;
+            str++;
+        } else {
+            if (tolower(static_cast<unsigned char>(*pat)) != tolower(static_cast<unsigned char>(*str))) {
+                return false;
+            }
+            pat++;
+            str++;
+        }
+    }
+    return *str == '\0';
+}
+
+static std::string normalizeMatchPath(const std::string& p) {
+    std::string s = p;
+    if (s.size() >= 2 && isalpha(static_cast<unsigned char>(s[0])) && s[1] == ':') {
+        s = s.substr(2);
+    }
+    for (char& c : s) {
+        if (c == '\\') c = '/';
+    }
+    while (!s.empty() && s.front() == '/') {
+        s.erase(0, 1);
+    }
+    return s;
+}
+
+static bool writeSourceRpm(const std::string& srcOut, const SpecParser& spec, const std::string& specFilePath) {
+    std::ofstream srcRpm(srcOut, std::ios::binary);
+    if (!srcRpm.is_open()) {
+        std::cerr << "error: Cannot open output source package for writing: " << srcOut << "\n";
+        return false;
+    }
+
+    RpmLeadRaw srcLead{};
+    srcLead.magic = swap32(RPM_MAGIC_LEAD);
+    srcLead.major = 3;
+    srcLead.minor = 0;
+    srcLead.type = swap16(1); // 1 = Source RPM
+    srcLead.archnum = swap16(1);
+    std::string leadPkgName = spec.name + "-" + spec.version + "-" + spec.release;
+    strncpy_s(srcLead.name, sizeof(srcLead.name), leadPkgName.c_str(), _TRUNCATE);
+    srcLead.osnum = swap16(1);
+    srcLead.signature_type = swap16(5);
+    srcRpm.write(reinterpret_cast<char*>(&srcLead), sizeof(srcLead));
+
+    HeaderSerializer srcMainHdr;
+    srcMainHdr.addString(RPMTAG_NAME, spec.name);
+    srcMainHdr.addString(RPMTAG_VERSION, spec.version);
+    srcMainHdr.addString(RPMTAG_RELEASE, spec.release);
+    srcMainHdr.addString(RPMTAG_SUMMARY, spec.summary);
+    srcMainHdr.addString(RPMTAG_DESCRIPTION, spec.description);
+    srcMainHdr.addString(RPMTAG_OS, "windows");
+    srcMainHdr.addString(RPMTAG_ARCH, "src");
+    srcMainHdr.addString(RPMTAG_PAYLOADFORMAT, "cpio");
+    srcMainHdr.addString(RPMTAG_PAYLOADCOMPRESSOR, "none");
+    srcMainHdr.addInt32(RPMTAG_BUILDTIME, (uint32_t)time(nullptr));
+
+    std::vector<char> serSrcMain = srcMainHdr.serialize();
+    std::string srcSha256 = CngCrypto::calculateMemorySha256(serSrcMain.data(), serSrcMain.size());
+
+    HeaderSerializer srcSigHdr;
+    srcSigHdr.addString(RPMTAG_SHA256HEADER, srcSha256);
+    srcSigHdr.addInt32(RPMTAG_SIZE, (uint32_t)serSrcMain.size());
+    std::vector<char> serSrcSig = srcSigHdr.serialize();
+
+    srcRpm.write(serSrcSig.data(), serSrcSig.size());
+    std::streampos srcPos = srcRpm.tellp();
+    if (srcPos % 8 != 0) {
+        size_t pad = 8 - (srcPos % 8);
+        for (size_t i = 0; i < pad; ++i) srcRpm.put('\0');
+    }
+    srcRpm.write(serSrcMain.data(), serSrcMain.size());
+
+    fs::path sPath(specFilePath);
+    CpioCompiler::appendFile(srcRpm, "./" + sPath.filename().generic_string(), sPath, 0100644);
+
+    fs::path specDir = fs::absolute(sPath).parent_path();
+    std::vector<std::string> allSources = spec.sources;
+    allSources.insert(allSources.end(), spec.patches.begin(), spec.patches.end());
+
+    for (const auto& item : allSources) {
+        fs::path itemPath(item);
+        std::string fname = itemPath.filename().generic_string();
+        fs::path candidate;
+        std::error_code ec;
+        if (fs::exists(itemPath, ec)) candidate = itemPath;
+        else if (fs::exists(specDir / fname, ec)) candidate = specDir / fname;
+        else if (fs::exists(fs::current_path() / "SOURCES" / fname, ec)) candidate = fs::current_path() / "SOURCES" / fname;
+        else if (fs::exists(fs::current_path() / fname, ec)) candidate = fs::current_path() / fname;
+
+        if (!candidate.empty()) {
+            CpioCompiler::appendFile(srcRpm, "./" + fname, candidate, 0100644);
+        }
+    }
+
+    CpioCompiler::appendTrailer(srcRpm);
+    srcRpm.close();
+    std::cout << "Wrote: " << fs::absolute(srcOut).string() << " (" << fs::file_size(srcOut) << " bytes)\n";
+    return true;
+}
+
 int runRpmbuild(int argc, char* argv[]) {
     if (argc <= 1) {
         std::cerr << "rpmbuild: no spec file or build mode specified.\nTry 'rpmbuild --help' for more information.\n";
@@ -20,6 +134,20 @@ int runRpmbuild(int argc, char* argv[]) {
     std::map<std::string, std::string> cliMacros;
     bool modeAll = false, modeBinary = false, modeSource = false, modePrep = false, modeCompile = false, modeInstall = false, modeCheckFiles = false;
     bool optClean = false, optVerbose = false;
+
+    auto parseDefine = [&](const std::string& def) {
+        std::string d = def;
+        while (!d.empty() && (d.front() == ' ' || d.front() == '\t')) d.erase(0, 1);
+        auto sp = d.find_first_of(" \t=");
+        if (sp != std::string::npos) {
+            std::string name = d.substr(0, sp);
+            std::string val = d.substr(sp + 1);
+            while (!val.empty() && (val.front() == ' ' || val.front() == '\t' || val.front() == '=')) val.erase(0, 1);
+            cliMacros[name] = SpecParser::stripQuotes(val);
+        } else if (!d.empty()) {
+            cliMacros[d] = "1";
+        }
+    };
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -39,18 +167,17 @@ int runRpmbuild(int argc, char* argv[]) {
         else if (arg == "--clean") { optClean = true; }
         else if (arg == "-v" || arg == "--verbose") { optVerbose = true; }
         else if (arg.rfind("--output=", 0) == 0) { explicitOutput = arg.substr(9); }
+        else if ((arg == "--output" || arg == "-o") && i + 1 < argc) { explicitOutput = argv[++i]; }
+        else if (arg.rfind("-o=", 0) == 0) { explicitOutput = arg.substr(3); }
         else if (arg.rfind("--buildroot=", 0) == 0) { overrideBuildRoot = arg.substr(12); }
+        else if (arg == "--buildroot" && i + 1 < argc) { overrideBuildRoot = argv[++i]; }
         else if (arg.rfind("--target=", 0) == 0) { overrideTarget = arg.substr(9); }
         else if (arg == "--target" && i + 1 < argc) { overrideTarget = argv[++i]; }
-        else if (arg.rfind("--define=", 0) == 0) {
-            std::string def = arg.substr(9);
-            auto sp = def.find_first_of(" =");
-            if (sp != std::string::npos) cliMacros[def.substr(0, sp)] = SpecParser::stripQuotes(def.substr(sp + 1));
-        } else if (arg == "-D" && i + 1 < argc) {
-            std::string def = argv[++i];
-            auto sp = def.find_first_of(" =");
-            if (sp != std::string::npos) cliMacros[def.substr(0, sp)] = SpecParser::stripQuotes(def.substr(sp + 1));
-        } else if (arg.rfind("-", 0) != 0) {
+        else if (arg.rfind("--define=", 0) == 0) { parseDefine(arg.substr(9)); }
+        else if (arg == "--define" && i + 1 < argc) { parseDefine(argv[++i]); }
+        else if (arg == "-D" && i + 1 < argc) { parseDefine(argv[++i]); }
+        else if (arg.rfind("-D", 0) == 0 && arg.size() > 2) { parseDefine(arg.substr(2)); }
+        else if (arg.rfind("-", 0) != 0) {
             specFilePath = arg;
         }
     }
@@ -67,6 +194,7 @@ int runRpmbuild(int argc, char* argv[]) {
     SpecParser spec;
     for (const auto& [k, v] : cliMacros) {
         spec.macros[k] = v;
+        spec.cliDefinedMacros.insert(k);
         if (k == "name") spec.name = v;
         else if (k == "version") spec.version = v;
         else if (k == "release") spec.release = v;
@@ -81,69 +209,22 @@ int runRpmbuild(int argc, char* argv[]) {
     // Handle Source RPM only build (-bs)
     if (modeSource) {
         std::string srcOut = spec.name + "-" + spec.version + "-" + spec.release + ".src.rpm";
-        std::ofstream srcRpm(srcOut, std::ios::binary);
-        if (!srcRpm.is_open()) {
-            std::cerr << "error: Cannot open output source package for writing: " << srcOut << "\n";
-            return 1;
-        }
-
-        RpmLeadRaw srcLead{};
-        srcLead.magic = swap32(RPM_MAGIC_LEAD);
-        srcLead.major = 3;
-        srcLead.type = swap16(1); // 1 = Source RPM
-        srcLead.archnum = swap16(1);
-        strncpy_s(srcLead.name, spec.name.c_str(), _TRUNCATE);
-        srcLead.osnum = swap16(1);
-        srcLead.signature_type = swap16(5);
-        srcRpm.write(reinterpret_cast<char*>(&srcLead), sizeof(srcLead));
-
-        HeaderSerializer srcMainHdr;
-        srcMainHdr.addString(RPMTAG_NAME, spec.name);
-        srcMainHdr.addString(RPMTAG_VERSION, spec.version);
-        srcMainHdr.addString(RPMTAG_RELEASE, spec.release);
-        srcMainHdr.addString(RPMTAG_SUMMARY, spec.summary);
-        srcMainHdr.addString(RPMTAG_DESCRIPTION, spec.description);
-        srcMainHdr.addString(RPMTAG_OS, "windows");
-        srcMainHdr.addString(RPMTAG_ARCH, "src");
-        srcMainHdr.addString(RPMTAG_PAYLOADFORMAT, "cpio");
-        srcMainHdr.addString(RPMTAG_PAYLOADCOMPRESSOR, "none");
-        srcMainHdr.addInt32(RPMTAG_BUILDTIME, (uint32_t)time(nullptr));
-
-        std::vector<char> serSrcMain = srcMainHdr.serialize();
-        std::string srcSha256 = CngCrypto::calculateMemorySha256(serSrcMain.data(), serSrcMain.size());
-
-        HeaderSerializer srcSigHdr;
-        srcSigHdr.addString(RPMTAG_SHA256HEADER, srcSha256);
-        srcSigHdr.addInt32(RPMTAG_SIZE, (uint32_t)serSrcMain.size());
-        std::vector<char> serSrcSig = srcSigHdr.serialize();
-
-        srcRpm.write(serSrcSig.data(), serSrcSig.size());
-        std::streampos srcPos = srcRpm.tellp();
-        if (srcPos % 8 != 0) {
-            size_t pad = 8 - (srcPos % 8);
-            for (size_t i = 0; i < pad; ++i) srcRpm.put('\0');
-        }
-        srcRpm.write(serSrcMain.data(), serSrcMain.size());
-
-        fs::path sPath(specFilePath);
-        CpioCompiler::appendFile(srcRpm, "./" + sPath.filename().generic_string(), sPath, 0100644);
-        CpioCompiler::appendTrailer(srcRpm);
-        srcRpm.close();
-        std::cout << "Wrote: " << fs::absolute(srcOut).string() << " (" << fs::file_size(srcOut) << " bytes)\n";
-        return 0;
+        return writeSourceRpm(srcOut, spec, specFilePath) ? 0 : 1;
     }
 
-    // 1. %prep Stage
-    if (!StageRunner::execute(spec.prepScript, "prep", spec.buildRoot)) return 1;
-    if (modePrep) return 0;
+    if (!modeCheckFiles) {
+        // 1. %prep Stage
+        if (!StageRunner::execute(spec.prepScript, "prep", spec.buildRoot)) return 1;
+        if (modePrep) return 0;
 
-    // 2. %build Stage
-    if (!StageRunner::execute(spec.buildScript, "build", spec.buildRoot)) return 1;
-    if (modeCompile) return 0;
+        // 2. %build Stage
+        if (!StageRunner::execute(spec.buildScript, "build", spec.buildRoot)) return 1;
+        if (modeCompile) return 0;
 
-    // 3. %install Stage
-    if (!StageRunner::execute(spec.installScript, "install", spec.buildRoot)) return 1;
-    if (modeInstall) return 0;
+        // 3. %install Stage
+        if (!StageRunner::execute(spec.installScript, "install", spec.buildRoot)) return 1;
+        if (modeInstall) return 0;
+    }
 
     // 4. File Discovery & SHA-256 Digest Matrix Generation
     std::cout << "Processing %files section and calculating cryptographic SHA-256 digests...\n";
@@ -164,6 +245,7 @@ int runRpmbuild(int argc, char* argv[]) {
         std::string sha256;
     };
     std::vector<DiscoveredFile> packageFiles;
+    std::vector<bool> specFileMatched(spec.files.size(), false);
 
     fs::path bRoot(spec.buildRoot);
     std::error_code ec;
@@ -175,9 +257,9 @@ int runRpmbuild(int argc, char* argv[]) {
     for (const auto& entry : fs::recursive_directory_iterator(bRoot, ec)) {
         if (entry.is_regular_file(ec)) {
             fs::path rel = fs::relative(entry.path(), bRoot, ec);
-            std::string relStr = rel.generic_string();
+            std::string relStr = normalizeMatchPath(rel.generic_string());
             std::string dir = rel.parent_path().generic_string();
-            if (!dir.empty()) dir = "/" + dir + "/";
+            if (!dir.empty()) dir = "/" + normalizeMatchPath(dir) + "/";
             else dir = "/";
 
             auto it = std::find(dirNames.begin(), dirNames.end(), dir);
@@ -196,27 +278,29 @@ int runRpmbuild(int argc, char* argv[]) {
             uint32_t flags = 0;
 
             std::string fname = rel.filename().generic_string();
-            bool matched = false;
-            // Match exact relative path first
-            for (const auto& f : spec.files) {
-                std::string fClean = f.path;
-                while (!fClean.empty() && (fClean[0] == '/' || fClean[0] == '\\')) fClean = fClean.substr(1);
-                if (fClean == relStr) {
+            std::string ext = rel.extension().string();
+            for (char& c : ext) c = (char)tolower(static_cast<unsigned char>(c));
+            if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || ext == ".ps1") {
+                mode = 0100755;
+            }
+
+            for (size_t fi = 0; fi < spec.files.size(); ++fi) {
+                const auto& f = spec.files[fi];
+                std::string cleanF = normalizeMatchPath(f.path);
+                bool m = false;
+                if (wildcardMatch(cleanF.c_str(), relStr.c_str())) {
+                    m = true;
+                } else if (cleanF.find('/') == std::string::npos && wildcardMatch(cleanF.c_str(), fname.c_str())) {
+                    m = true;
+                } else if (relStr.rfind(cleanF + "/", 0) == 0) {
+                    m = true;
+                }
+
+                if (m) {
                     mode = f.mode;
                     flags = f.flags;
-                    matched = true;
+                    specFileMatched[fi] = true;
                     break;
-                }
-            }
-            // Fallback to filename match
-            if (!matched) {
-                for (const auto& f : spec.files) {
-                    fs::path fPath(f.path);
-                    if (fPath.filename().generic_string() == fname) {
-                        mode = f.mode;
-                        flags = f.flags;
-                        break;
-                    }
                 }
             }
 
@@ -229,7 +313,7 @@ int runRpmbuild(int argc, char* argv[]) {
 
             packageFiles.push_back({relStr, entry.path(), sz, mode, flags, hash});
             if (optVerbose) {
-                std::cout << "  File: " << relStr << " [SHA256: " << hash.substr(0, 12) << "... Mode: " << std::oct << mode << std::dec << "]\n";
+                std::cout << "  File: " << relStr << " [SHA256: " << hash.substr(0, 12) << "... Mode: 0" << std::oct << mode << std::dec << "]\n";
             }
         }
     }
@@ -239,6 +323,14 @@ int runRpmbuild(int argc, char* argv[]) {
         return 1;
     }
     if (modeCheckFiles) {
+        bool missingFiles = false;
+        for (size_t fi = 0; fi < spec.files.size(); ++fi) {
+            if (!specFileMatched[fi]) {
+                std::cerr << "error: File not found: " << spec.files[fi].path << "\n";
+                missingFiles = true;
+            }
+        }
+        if (missingFiles) return 1;
         std::cout << "Check %files passed cleanly. Total files: " << packageFiles.size() << "\n";
         return 0;
     }
@@ -349,7 +441,8 @@ int runRpmbuild(int argc, char* argv[]) {
     lead.minor = 0;
     lead.type = 0;
     lead.archnum = swap16(1);
-    strncpy_s(lead.name, spec.name.c_str(), _TRUNCATE);
+    std::string leadPkgName = spec.name + "-" + spec.version + "-" + spec.release;
+    strncpy_s(lead.name, sizeof(lead.name), leadPkgName.c_str(), _TRUNCATE);
     lead.osnum = swap16(1);
     lead.signature_type = swap16(5);
     rpm.write(reinterpret_cast<char*>(&lead), sizeof(lead));
@@ -377,52 +470,7 @@ int runRpmbuild(int argc, char* argv[]) {
     // If -ba was specified, also generate source package (.src.rpm)
     if (modeAll) {
         std::string srcOut = spec.name + "-" + spec.version + "-" + spec.release + ".src.rpm";
-        std::ofstream srcRpm(srcOut, std::ios::binary);
-        if (srcRpm.is_open()) {
-            RpmLeadRaw srcLead{};
-            srcLead.magic = swap32(RPM_MAGIC_LEAD);
-            srcLead.major = 3;
-            srcLead.type = swap16(1); // 1 = Source RPM
-            srcLead.archnum = swap16(1);
-            strncpy_s(srcLead.name, spec.name.c_str(), _TRUNCATE);
-            srcLead.osnum = swap16(1);
-            srcLead.signature_type = swap16(5);
-            srcRpm.write(reinterpret_cast<char*>(&srcLead), sizeof(srcLead));
-
-            HeaderSerializer srcMainHdr;
-            srcMainHdr.addString(RPMTAG_NAME, spec.name);
-            srcMainHdr.addString(RPMTAG_VERSION, spec.version);
-            srcMainHdr.addString(RPMTAG_RELEASE, spec.release);
-            srcMainHdr.addString(RPMTAG_SUMMARY, spec.summary);
-            srcMainHdr.addString(RPMTAG_DESCRIPTION, spec.description);
-            srcMainHdr.addString(RPMTAG_OS, "windows");
-            srcMainHdr.addString(RPMTAG_ARCH, "src");
-            srcMainHdr.addString(RPMTAG_PAYLOADFORMAT, "cpio");
-            srcMainHdr.addString(RPMTAG_PAYLOADCOMPRESSOR, "none");
-            srcMainHdr.addInt32(RPMTAG_BUILDTIME, (uint32_t)time(nullptr));
-
-            std::vector<char> serSrcMain = srcMainHdr.serialize();
-            std::string srcSha256 = CngCrypto::calculateMemorySha256(serSrcMain.data(), serSrcMain.size());
-
-            HeaderSerializer srcSigHdr;
-            srcSigHdr.addString(RPMTAG_SHA256HEADER, srcSha256);
-            srcSigHdr.addInt32(RPMTAG_SIZE, (uint32_t)serSrcMain.size());
-            std::vector<char> serSrcSig = srcSigHdr.serialize();
-
-            srcRpm.write(serSrcSig.data(), serSrcSig.size());
-            std::streampos srcPos = srcRpm.tellp();
-            if (srcPos % 8 != 0) {
-                size_t pad = 8 - (srcPos % 8);
-                for (size_t i = 0; i < pad; ++i) srcRpm.put('\0');
-            }
-            srcRpm.write(serSrcMain.data(), serSrcMain.size());
-
-            fs::path sPath(specFilePath);
-            CpioCompiler::appendFile(srcRpm, "./" + sPath.filename().generic_string(), sPath, 0100644);
-            CpioCompiler::appendTrailer(srcRpm);
-            srcRpm.close();
-            std::cout << "Wrote: " << fs::absolute(srcOut).string() << " (" << fs::file_size(srcOut) << " bytes)\n";
-        }
+        if (!writeSourceRpm(srcOut, spec, specFilePath)) return 1;
     }
 
     if (!spec.cleanScript.empty()) {

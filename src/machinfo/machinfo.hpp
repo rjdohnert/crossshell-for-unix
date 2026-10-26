@@ -25,6 +25,7 @@ struct SMBIOSHeader {
 
 struct CpuTopology {
     std::wstring name = L"Unknown Processor";
+    std::wstring architecture = L"Unknown";
     DWORD clockMhz{0};
     DWORD socketCount{0};
     DWORD coreCount{0};
@@ -33,8 +34,7 @@ struct CpuTopology {
     ULONGLONG l1CacheBytes{0};
     ULONGLONG l2CacheBytes{0};
     ULONGLONG l3CacheBytes{0};
-    bool is64Bit{true};
-    bool supportsVirtualization{false};
+    bool virtualizationFirmwareEnabled{false};
     bool supportsAVX2{false};
 };
 
@@ -50,6 +50,7 @@ struct SystemFirmwareInfo {
 };
 
 struct MemoryStatusInfo {
+    bool valid{false};
     ULONGLONG totalPhysBytes{0};
     ULONGLONG availPhysBytes{0};
     ULONGLONG pageFileLimitBytes{0};

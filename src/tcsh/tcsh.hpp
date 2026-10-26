@@ -87,9 +87,46 @@ struct Job {
     DWORD id;
     HANDLE hJob;
     HANDLE hProcess;
+    std::vector<HANDLE> stageProcesses;
     std::string command;
     bool isRunning;
 };
+
+inline void close_job_handles(Job& job) {
+    for (HANDLE process_handle : job.stageProcesses) {
+        if (process_handle && process_handle != INVALID_HANDLE_VALUE) CloseHandle(process_handle);
+    }
+    job.stageProcesses.clear();
+    if (job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) CloseHandle(job.hProcess);
+    if (job.hJob && job.hJob != INVALID_HANDLE_VALUE) CloseHandle(job.hJob);
+    job.hProcess = NULL;
+    job.hJob = NULL;
+}
+
+inline void wait_job_processes(const Job& job) {
+    for (HANDLE process_handle : job.stageProcesses) {
+        if (process_handle && process_handle != INVALID_HANDLE_VALUE) WaitForSingleObject(process_handle, INFINITE);
+    }
+    if (job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) WaitForSingleObject(job.hProcess, INFINITE);
+}
+
+inline bool terminate_job_processes(Job& job, UINT exit_code) {
+    bool terminated = false;
+    if (job.hJob && job.hJob != INVALID_HANDLE_VALUE) {
+        terminated = TerminateJobObject(job.hJob, exit_code) != FALSE;
+    }
+    for (HANDLE process_handle : job.stageProcesses) {
+        if (process_handle && process_handle != INVALID_HANDLE_VALUE) {
+            terminated = (TerminateProcess(process_handle, exit_code) != FALSE) || terminated;
+        }
+    }
+    if (job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) {
+        terminated = (TerminateProcess(job.hProcess, exit_code) != FALSE) || terminated;
+    }
+    wait_job_processes(job);
+    close_job_handles(job);
+    return terminated;
+}
 
 struct ScheduledTask {
     std::string timeStr;

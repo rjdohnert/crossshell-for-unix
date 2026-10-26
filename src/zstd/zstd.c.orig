@@ -1,0 +1,1411 @@
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <ctype.h>
+#include <io.h>
+#include <fcntl.h>
+#include <share.h>
+#include <sys/stat.h>
+#include <windows.h>
+
+#if defined(_MSC_VER) || defined(__clang__)
+#include <intrin.h>
+#endif
+
+/* =========================================================================
+ * MODULE 1: Constants, Topology Discovery & Console State
+ * ========================================================================= */
+
+#define ZSTD_CLI_VERSION        "v1.5.6-rfc8878"
+#define ZSTD_MAGIC              0xFD2FB528U
+#define CHUNK_BLOCK_SIZE        (128 * 1024)   /* 128 KB standard block */
+#define WINDOW_SIZE             65536          /* 64 KB sliding window */
+#define HASH_BITS_FAST          14             /* 16K entries for fast mode */
+#define HASH_BITS_DEFAULT       16             /* 64K entries for standard */
+#define HASH_SIZE_DEFAULT       (1 << HASH_BITS_DEFAULT)
+#define MIN_MATCH               4
+#define IO_BUFFER_SIZE          (1024 * 1024)  /* 1 MB sequential stream buffer */
+#define MAX_PATH_EXTENDED       32768          /* Extended Win32 / UNC path limit */
+
+#if defined(_MSC_VER)
+#define CACHE_ALIGN __declspec(align(64))
+#elif defined(__GNUC__) || defined(__clang__)
+#define CACHE_ALIGN __attribute__((aligned(64)))
+#else
+#define CACHE_ALIGN
+#endif
+
+static CRITICAL_SECTION g_cleanup_lock;
+static char g_active_output_file[MAX_PATH_EXTENDED] = "";
+static volatile LONG g_is_cleaning = 0;
+
+static BOOL WINAPI console_ctrl_handler(DWORD signal) {
+    if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT || signal == CTRL_CLOSE_EVENT) {
+        if (InterlockedExchange(&g_is_cleaning, 1) == 0) {
+            EnterCriticalSection(&g_cleanup_lock);
+            if (g_active_output_file[0] != '\0') {
+                DeleteFileA(g_active_output_file);
+                g_active_output_file[0] = '\0';
+            }
+            LeaveCriticalSection(&g_cleanup_lock);
+        }
+        ExitProcess(1);
+    }
+    return FALSE;
+}
+
+static double get_time_sec(void) {
+    static int64_t freq = 0;
+    LARGE_INTEGER li;
+    if (freq == 0) {
+        QueryPerformanceFrequency(&li);
+        freq = li.QuadPart;
+    }
+    QueryPerformanceCounter(&li);
+    return (double)li.QuadPart / (double)freq;
+}
+
+static int detect_processor_count(void) {
+    typedef DWORD (WINAPI *pfnGetActiveProcessorCount)(WORD);
+    HMODULE hKernel = GetModuleHandleW(L"kernel32.dll");
+    if (hKernel) {
+        pfnGetActiveProcessorCount pfn = (pfnGetActiveProcessorCount)GetProcAddress(hKernel, "GetActiveProcessorCount");
+        if (pfn) {
+            DWORD count = pfn(ALL_PROCESSOR_GROUPS);
+            if (count > 0) return (int)count;
+        }
+    }
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (int)si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+}
+
+static WORD detect_processor_group_count(void) {
+    typedef WORD (WINAPI *pfnGetActiveProcessorGroupCount)(void);
+    HMODULE hKernel = GetModuleHandleW(L"kernel32.dll");
+    if (hKernel) {
+        pfnGetActiveProcessorGroupCount pfn = (pfnGetActiveProcessorGroupCount)GetProcAddress(hKernel, "GetActiveProcessorGroupCount");
+        if (pfn) {
+            WORD count = pfn();
+            if (count > 0) return count;
+        }
+    }
+    return 1;
+}
+
+static void assign_thread_to_group(HANDLE hThread, int worker_index, WORD group_count) {
+    if (group_count <= 1) return;
+    typedef BOOL (WINAPI *pfnSetThreadGroupAffinity)(HANDLE, const GROUP_AFFINITY*, PGROUP_AFFINITY);
+    HMODULE hKernel = GetModuleHandleW(L"kernel32.dll");
+    if (hKernel) {
+        pfnSetThreadGroupAffinity pfn = (pfnSetThreadGroupAffinity)GetProcAddress(hKernel, "SetThreadGroupAffinity");
+        if (pfn) {
+            GROUP_AFFINITY ga;
+            memset(&ga, 0, sizeof(ga));
+            ga.Group = (WORD)(worker_index % group_count);
+            ga.Mask = (KAFFINITY)(~0ULL);
+            pfn(hThread, &ga, NULL);
+        }
+    }
+}
+
+/* =========================================================================
+ * MODULE 2: Xxh64 Streaming Checksum Engine (RFC 8878 Compliant)
+ * ========================================================================= */
+
+#define XXH64_PRIME1 11400714785074694791ULL
+#define XXH64_PRIME2 14029467366897019727ULL
+#define XXH64_PRIME3 1609587929392839161ULL
+#define XXH64_PRIME4 9650029242287828579ULL
+#define XXH64_PRIME5 287017744541269605ULL
+
+static inline uint64_t xxh64_rotl(uint64_t x, int r) {
+    return (x << r) | (x >> (64 - r));
+}
+
+static inline uint64_t xxh64_round(uint64_t acc, uint64_t input) {
+    acc += input * XXH64_PRIME2;
+    acc = xxh64_rotl(acc, 31);
+    acc *= XXH64_PRIME1;
+    return acc;
+}
+
+static inline uint64_t xxh64_merge_round(uint64_t acc, uint64_t val) {
+    val = xxh64_round(0, val);
+    acc ^= val;
+    acc = acc * XXH64_PRIME1 + XXH64_PRIME4;
+    return acc;
+}
+
+typedef struct Xxh64 {
+    uint64_t v1, v2, v3, v4;
+    uint64_t total_len;
+    uint8_t  mem[32];
+    size_t   mem_size;
+
+    void (*reset)(struct Xxh64 *self);
+    void (*update)(struct Xxh64 *self, const void *data, size_t len);
+    uint64_t (*digest)(struct Xxh64 *self);
+    uint32_t (*digest32)(struct Xxh64 *self);
+} Xxh64;
+
+static void Xxh64_reset(Xxh64 *self) {
+    self->v1 = XXH64_PRIME1 + XXH64_PRIME2;
+    self->v2 = XXH64_PRIME2;
+    self->v3 = 0;
+    self->v4 = 0 - XXH64_PRIME1;
+    self->total_len = 0;
+    self->mem_size = 0;
+}
+
+static void Xxh64_update(Xxh64 *self, const void *data, size_t len) {
+    const uint8_t *p = (const uint8_t *)data;
+    const uint8_t *bEnd = p + len;
+    self->total_len += len;
+
+    if (self->mem_size + len < 32) {
+        memcpy(self->mem + self->mem_size, p, len);
+        self->mem_size += len;
+        return;
+    }
+
+    if (self->mem_size > 0) {
+        size_t fill = 32 - self->mem_size;
+        memcpy(self->mem + self->mem_size, p, fill);
+        uint64_t k1, k2, k3, k4;
+        memcpy(&k1, self->mem, 8);
+        memcpy(&k2, self->mem + 8, 8);
+        memcpy(&k3, self->mem + 16, 8);
+        memcpy(&k4, self->mem + 24, 8);
+        self->v1 = xxh64_round(self->v1, k1);
+        self->v2 = xxh64_round(self->v2, k2);
+        self->v3 = xxh64_round(self->v3, k3);
+        self->v4 = xxh64_round(self->v4, k4);
+        p += fill;
+        self->mem_size = 0;
+    }
+
+    while (p <= bEnd - 32) {
+        uint64_t k1, k2, k3, k4;
+        memcpy(&k1, p, 8);
+        memcpy(&k2, p + 8, 8);
+        memcpy(&k3, p + 16, 8);
+        memcpy(&k4, p + 24, 8);
+        self->v1 = xxh64_round(self->v1, k1);
+        self->v2 = xxh64_round(self->v2, k2);
+        self->v3 = xxh64_round(self->v3, k3);
+        self->v4 = xxh64_round(self->v4, k4);
+        p += 32;
+    }
+
+    if (p < bEnd) {
+        self->mem_size = (size_t)(bEnd - p);
+        memcpy(self->mem, p, self->mem_size);
+    }
+}
+
+static uint64_t Xxh64_digest(Xxh64 *self) {
+    uint64_t h64;
+    if (self->total_len >= 32) {
+        h64 = xxh64_rotl(self->v1, 1) + xxh64_rotl(self->v2, 7) +
+              xxh64_rotl(self->v3, 12) + xxh64_rotl(self->v4, 18);
+        h64 = xxh64_merge_round(h64, self->v1);
+        h64 = xxh64_merge_round(h64, self->v2);
+        h64 = xxh64_merge_round(h64, self->v3);
+        h64 = xxh64_merge_round(h64, self->v4);
+    } else {
+        h64 = self->v3 + XXH64_PRIME5;
+    }
+    h64 += self->total_len;
+
+    const uint8_t *p = self->mem;
+    const uint8_t *bEnd = self->mem + self->mem_size;
+    while (p + 8 <= bEnd) {
+        uint64_t k1;
+        memcpy(&k1, p, 8);
+        k1 = xxh64_round(0, k1);
+        h64 ^= k1;
+        h64 = xxh64_rotl(h64, 27) * XXH64_PRIME1 + XXH64_PRIME4;
+        p += 8;
+    }
+    if (p + 4 <= bEnd) {
+        uint32_t k1;
+        memcpy(&k1, p, 4);
+        h64 ^= (uint64_t)k1 * XXH64_PRIME1;
+        h64 = xxh64_rotl(h64, 23) * XXH64_PRIME2 + XXH64_PRIME3;
+        p += 4;
+    }
+    while (p < bEnd) {
+        h64 ^= ((uint64_t)(*p)) * XXH64_PRIME5;
+        h64 = xxh64_rotl(h64, 11) * XXH64_PRIME1;
+        p++;
+    }
+
+    h64 ^= h64 >> 33;
+    h64 *= XXH64_PRIME2;
+    h64 ^= h64 >> 29;
+    h64 *= XXH64_PRIME3;
+    h64 ^= h64 >> 32;
+    return h64;
+}
+
+static uint32_t Xxh64_digest32(Xxh64 *self) {
+    return (uint32_t)(Xxh64_digest(self) & 0xFFFFFFFFU);
+}
+
+static Xxh64 Xxh64_Create(void) {
+    Xxh64 x;
+    x.reset = Xxh64_reset;
+    x.update = Xxh64_update;
+    x.digest = Xxh64_digest;
+    x.digest32 = Xxh64_digest32;
+    x.reset(&x);
+    return x;
+}
+
+/* =========================================================================
+ * MODULE 3: ZstdCodec (High-Performance Match Finder & Block Codec)
+ * ========================================================================= */
+
+typedef struct CACHE_ALIGN ZstdWorkerContext {
+    int32_t head[HASH_SIZE_DEFAULT];
+    int32_t prev[WINDOW_SIZE];
+} ZstdWorkerContext;
+
+static inline size_t common_prefix_len(const uint8_t *s1, const uint8_t *s2, size_t max_len) {
+    size_t len = 0;
+    while (len + 8 <= max_len) {
+        uint64_t a, b;
+        memcpy(&a, s1 + len, 8);
+        memcpy(&b, s2 + len, 8);
+        if (a != b) {
+            uint64_t diff = a ^ b;
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+            unsigned long idx;
+            _BitScanForward64(&idx, diff);
+            return len + (idx >> 3);
+#elif defined(_MSC_VER) && defined(_M_IX86)
+            unsigned long idx;
+            if ((uint32_t)diff != 0) {
+                _BitScanForward(&idx, (uint32_t)diff);
+                return len + (idx >> 3);
+            } else {
+                _BitScanForward(&idx, (uint32_t)(diff >> 32));
+                return len + 4 + (idx >> 3);
+            }
+#elif defined(__GNUC__) || defined(__clang__)
+            return len + (__builtin_ctzll(diff) >> 3);
+#else
+            size_t sub = 0;
+            while (len + sub < max_len && s1[len + sub] == s2[len + sub]) sub++;
+            return len + sub;
+#endif
+        }
+        len += 8;
+    }
+    while (len < max_len && s1[len] == s2[len]) {
+        len++;
+    }
+    return len;
+}
+
+static inline bool is_all_same_byte(const uint8_t *src, size_t sz) {
+    if (sz <= 1) return true;
+    uint8_t b = src[0];
+    size_t i = 1;
+    uint64_t b8 = ((uint64_t)b) * 0x0101010101010101ULL;
+    while (i + 8 <= sz) {
+        uint64_t v;
+        memcpy(&v, src + i, 8);
+        if (v != b8) return false;
+        i += 8;
+    }
+    while (i < sz) {
+        if (src[i] != b) return false;
+        i++;
+    }
+    return true;
+}
+
+static inline uint32_t hash4(const uint8_t *p, int hash_bits) {
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return (v * 2654435761U) >> (32 - hash_bits);
+}
+
+static size_t ZstdCodec_compress_block_core(ZstdWorkerContext *ctx,
+                                           const uint8_t *src, size_t src_sz,
+                                           uint8_t *dst, size_t dst_cap,
+                                           int max_chain, bool fast_mode) {
+    if (src_sz == 0 || dst_cap < src_sz + 64) return 0;
+
+    int hash_bits = fast_mode ? HASH_BITS_FAST : HASH_BITS_DEFAULT;
+    int hash_size = 1 << hash_bits;
+
+    memset(ctx->head, 0xFF, (size_t)hash_size * sizeof(int32_t));
+
+    size_t ip = 0;
+    size_t op = 0;
+    size_t anchor = 0;
+    size_t step = 1;
+
+    while (ip + MIN_MATCH <= src_sz) {
+        if (op + (ip - anchor) + 64 >= dst_cap) {
+            return 0; /* Incompressible */
+        }
+
+        uint32_t h = hash4(&src[ip], hash_bits);
+        int32_t match_pos = ctx->head[h];
+        ctx->prev[ip % WINDOW_SIZE] = match_pos;
+        ctx->head[h] = (int32_t)ip;
+
+        size_t best_len = 0;
+        size_t best_offset = 0;
+        int chain = max_chain;
+
+        while (match_pos != -1 && chain-- > 0) {
+            if ((ip - match_pos) >= WINDOW_SIZE) break;
+
+            uint32_t m_val, cur_val;
+            memcpy(&m_val, &src[match_pos], 4);
+            memcpy(&cur_val, &src[ip], 4);
+
+            if (m_val == cur_val) {
+                size_t max_avail = src_sz - ip;
+                if (max_avail > 65535) max_avail = 65535;
+                size_t len = common_prefix_len(&src[match_pos], &src[ip], max_avail);
+                if (len > best_len) {
+                    best_len = len;
+                    best_offset = ip - match_pos;
+                    if (best_len >= 128 || fast_mode) break;
+                }
+            }
+            if (fast_mode) break;
+            match_pos = ctx->prev[match_pos % WINDOW_SIZE];
+        }
+
+        if (best_len >= MIN_MATCH) {
+            step = 1;
+            size_t lit_len = ip - anchor;
+            if (op + lit_len + 32 >= dst_cap) return 0;
+
+            uint8_t *token = &dst[op++];
+            size_t token_lit = (lit_len >= 15) ? 15 : lit_len;
+            size_t token_mat = ((best_len - MIN_MATCH) >= 15) ? 15 : (best_len - MIN_MATCH);
+            *token = (uint8_t)((token_lit << 4) | token_mat);
+
+            if (lit_len >= 15) {
+                size_t rem = lit_len - 15;
+                while (rem >= 255) { dst[op++] = 255; rem -= 255; }
+                dst[op++] = (uint8_t)rem;
+            }
+            if (lit_len > 0) {
+                memcpy(&dst[op], &src[anchor], lit_len);
+                op += lit_len;
+            }
+
+            dst[op++] = (uint8_t)(best_offset & 0xFF);
+            dst[op++] = (uint8_t)((best_offset >> 8) & 0xFF);
+
+            if ((best_len - MIN_MATCH) >= 15) {
+                size_t rem = (best_len - MIN_MATCH) - 15;
+                while (rem >= 255) { dst[op++] = 255; rem -= 255; }
+                dst[op++] = (uint8_t)rem;
+            }
+
+            ip += best_len;
+            anchor = ip;
+
+            if (ip + 4 <= src_sz) {
+                size_t start_k = (ip >= 2) ? (ip - 2) : 0;
+                for (size_t k = start_k; k < ip && k + 4 <= src_sz; k++) {
+                    uint32_t kh = hash4(&src[k], hash_bits);
+                    ctx->prev[k % WINDOW_SIZE] = ctx->head[kh];
+                    ctx->head[kh] = (int32_t)k;
+                }
+            }
+        } else {
+            if (fast_mode && (ip - anchor) > 32) {
+                ip += (step++);
+                if (step > 4) step = 4;
+            } else {
+                ip++;
+            }
+        }
+    }
+
+    size_t last_lit = src_sz - anchor;
+    if (op + last_lit + 32 >= dst_cap) return 0;
+
+    uint8_t *token = &dst[op++];
+    size_t token_lit = (last_lit >= 15) ? 15 : last_lit;
+    *token = (uint8_t)(token_lit << 4);
+
+    if (last_lit >= 15) {
+        size_t rem = last_lit - 15;
+        while (rem >= 255) { dst[op++] = 255; rem -= 255; }
+        dst[op++] = (uint8_t)rem;
+    }
+    if (last_lit > 0) {
+        memcpy(&dst[op], &src[anchor], last_lit);
+        op += last_lit;
+    }
+
+    if (op >= src_sz) return 0;
+    return op;
+}
+
+static size_t ZstdCodec_decompress_block_core(const uint8_t *src, size_t src_sz,
+                                             uint8_t *dst, size_t dst_cap) {
+    size_t ip = 0;
+    size_t op = 0;
+
+    while (ip < src_sz && op < dst_cap) {
+        uint8_t token = src[ip++];
+        size_t lit_len = token >> 4;
+        size_t mat_len = (token & 0x0F) + MIN_MATCH;
+
+        if (lit_len == 15) {
+            while (ip < src_sz && src[ip] == 255) { lit_len += 255; ip++; }
+            if (ip < src_sz) lit_len += src[ip++];
+        }
+
+        if (lit_len > 0) {
+            if (op + lit_len > dst_cap || ip + lit_len > src_sz) return 0;
+            memcpy(&dst[op], &src[ip], lit_len);
+            op += lit_len;
+            ip += lit_len;
+        }
+
+        if (ip >= src_sz) break;
+
+        if (ip + 2 > src_sz) return 0;
+        uint16_t offset = (uint16_t)src[ip] | ((uint16_t)src[ip + 1] << 8);
+        ip += 2;
+        if (offset == 0 || offset > op) return 0;
+
+        if ((token & 0x0F) == 15) {
+            while (ip < src_sz && src[ip] == 255) { mat_len += 255; ip++; }
+            if (ip < src_sz) mat_len += src[ip++];
+        }
+
+        if (op + mat_len > dst_cap) return 0;
+        size_t match_src = op - offset;
+
+        if (offset >= 8) {
+            while (mat_len >= 8 && op + 8 <= dst_cap) {
+                memcpy(&dst[op], &dst[match_src], 8);
+                op += 8;
+                match_src += 8;
+                mat_len -= 8;
+            }
+        }
+        while (mat_len > 0 && op < dst_cap) {
+            dst[op++] = dst[match_src++];
+            mat_len--;
+        }
+    }
+
+    return op;
+}
+
+/* =========================================================================
+ * MODULE 4: ZstdThreadPool (Atomic Latch & Multi-Core Scaling)
+ * ========================================================================= */
+
+struct ZstdThreadPool;
+
+typedef struct CACHE_ALIGN WorkerThreadData {
+    HANDLE  hThread;
+    HANDLE  hStartEvent;
+    bool    terminate;
+
+    const uint8_t *src;
+    size_t         src_sz;
+    uint8_t       *dst;
+    size_t         dst_cap;
+    size_t         comp_sz;
+    bool           is_rle;
+
+    int            max_chain;
+    bool           fast_mode;
+    struct ZstdThreadPool *pool;
+    ZstdWorkerContext *ctx;
+} WorkerThreadData;
+
+typedef struct CACHE_ALIGN ZstdThreadPool {
+    int               num_workers;
+    WorkerThreadData *workers;
+    HANDLE           *thread_handles;
+    HANDLE            hAllDoneEvent;
+    volatile LONG     remaining_workers;
+} ZstdThreadPool;
+
+static DWORD WINAPI worker_thread_proc(LPVOID param) {
+    WorkerThreadData *w = (WorkerThreadData *)param;
+    while (1) {
+        WaitForSingleObject(w->hStartEvent, INFINITE);
+        if (w->terminate) break;
+
+        if (w->src_sz > 0 && is_all_same_byte(w->src, w->src_sz)) {
+            w->is_rle = true;
+            w->comp_sz = 1;
+        } else {
+            w->is_rle = false;
+            w->comp_sz = ZstdCodec_compress_block_core(w->ctx, w->src, w->src_sz,
+                                                       w->dst, w->dst_cap,
+                                                       w->max_chain, w->fast_mode);
+        }
+
+        if (InterlockedDecrement(&w->pool->remaining_workers) == 0) {
+            SetEvent(w->pool->hAllDoneEvent);
+        }
+    }
+    return 0;
+}
+
+static ZstdThreadPool *ZstdThreadPool_Create(int threads, int max_chain, bool fast_mode) {
+    if (threads < 1) threads = 1;
+    WORD group_count = detect_processor_group_count();
+
+    ZstdThreadPool *pool = (ZstdThreadPool *)calloc(1, sizeof(ZstdThreadPool));
+    pool->num_workers = threads;
+    pool->workers = (WorkerThreadData *)calloc(threads, sizeof(WorkerThreadData));
+    pool->thread_handles = (HANDLE *)malloc(threads * sizeof(HANDLE));
+    pool->hAllDoneEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+    for (int i = 0; i < threads; i++) {
+        pool->workers[i].max_chain = max_chain;
+        pool->workers[i].fast_mode = fast_mode;
+        pool->workers[i].pool = pool;
+        pool->workers[i].ctx = (ZstdWorkerContext *)calloc(1, sizeof(ZstdWorkerContext));
+        pool->workers[i].hStartEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+        pool->workers[i].hThread = CreateThread(NULL, 0, worker_thread_proc, &pool->workers[i], 0, NULL);
+        pool->thread_handles[i] = pool->workers[i].hThread;
+
+        assign_thread_to_group(pool->workers[i].hThread, i, group_count);
+    }
+    return pool;
+}
+
+static void ZstdThreadPool_Destroy(ZstdThreadPool *pool) {
+    if (!pool) return;
+    for (int i = 0; i < pool->num_workers; i++) {
+        pool->workers[i].terminate = true;
+        SetEvent(pool->workers[i].hStartEvent);
+    }
+    for (int i = 0; i < pool->num_workers; i++) {
+        WaitForSingleObject(pool->thread_handles[i], INFINITE);
+        CloseHandle(pool->workers[i].hThread);
+        CloseHandle(pool->workers[i].hStartEvent);
+        free(pool->workers[i].ctx);
+    }
+    CloseHandle(pool->hAllDoneEvent);
+    free(pool->workers);
+    free(pool->thread_handles);
+    free(pool);
+}
+
+/* =========================================================================
+ * MODULE 5: ZstdConfig (Command Line Qualifiers & Parser)
+ * ========================================================================= */
+
+typedef enum {
+    MODE_COMPRESS,
+    MODE_DECOMPRESS,
+    MODE_TEST,
+    MODE_LIST,
+    MODE_BENCHMARK
+} OperationMode;
+
+typedef struct ZstdConfig {
+    OperationMode mode;
+    int  level;
+    bool ultra;
+    int  fast_level;
+    int  threads;
+    bool checksum;
+    bool content_size;
+    bool force;
+    bool keep;
+    bool rm_source;
+    bool to_stdout;
+    bool quiet;
+    int  verbose;
+    bool no_progress;
+    char output_file[MAX_PATH_EXTENDED];
+    char **input_files;
+    int  input_file_count;
+
+    void (*print_help)(void);
+    void (*print_version)(void);
+    bool (*parse)(struct ZstdConfig *self, int argc, char *argv[]);
+} ZstdConfig;
+
+static void ZstdConfig_print_version(void) {
+    printf("*** zstd command line interface 64-bits %s, by PC/OpenSystems LLC ***\n", ZSTD_CLI_VERSION);
+}
+
+static void ZstdConfig_print_help(void) {
+    printf("Usage: zstd [OPTIONS] [-|INPUT-FILE] [-o OUTPUT-FILE]\n\n");
+    printf("Operation modes:\n");
+    printf("  -z, --compress            Force compression (default)\n");
+    printf("  -d, --decompress          Decompress\n");
+    printf("  -t, --test                Test compressed file integrity\n");
+    printf("  -l, --list                Display information about compressed file(s)\n");
+    printf("  -b#                       Benchmark file(s) at compression level #\n\n");
+    printf("Compression parameters:\n");
+    printf("  -#                        Compression level (1-19, default: 3)\n");
+    printf("      --ultra               Unlock levels 20-22 (requires more memory)\n");
+    printf("      --fast[=#]            Ultra-fast compression mode\n");
+    printf("  -T#, --threads=#          Number of worker threads (0: autodetect all CPUs across all processor groups)\n\n");
+    printf("File and I/O options:\n");
+    printf("  -o FILE                   Save output into FILE (supports extended paths > 260 chars)\n");
+    printf("  -c, --stdout              Write to standard output\n");
+    printf("  -f, --force               Overwrite output without prompting\n");
+    printf("  -k, --keep                Preserve source file(s) (default)\n");
+    printf("      --rm                  Delete source file(s) on success\n\n");
+    printf("Display & Format options:\n");
+    printf("  -v, --verbose             Verbose mode, display additional status\n");
+    printf("  -q, --quiet               Suppress warnings and normal output\n");
+    printf("      --no-progress         Do not display continuous terminal progress\n");
+    printf("  -C, --check               Add 32-bit xxHash checksum (RFC 8878 XXH64 lower 32-bits, default)\n");
+    printf("      --no-check            Disable frame checksum\n");
+    printf("      --content-size        Record original uncompressed size (default)\n");
+    printf("      --no-content-size     Do not record original size\n\n");
+    printf("General qualifiers:\n");
+    printf("  -h, -H, --help            Show this comprehensive help and exit\n");
+    printf("  -V, --version             Show version and exit\n");
+}
+
+static bool ZstdConfig_parse(ZstdConfig *self, int argc, char *argv[]) {
+    self->input_files = (char **)calloc(argc + 1, sizeof(char *));
+    self->input_file_count = 0;
+
+    int i = 1;
+    while (i < argc) {
+        char *arg = argv[i];
+        if (strcmp(arg, "--") == 0) {
+            i++;
+            while (i < argc) {
+                self->input_files[self->input_file_count++] = argv[i++];
+            }
+            break;
+        }
+        if (arg[0] == '-' && arg[1] != '\0') {
+            if (arg[1] == '-') {
+                if (strcmp(arg, "--help") == 0) { self->print_help(); exit(0); }
+                if (strcmp(arg, "--version") == 0) { self->print_version(); exit(0); }
+                if (strcmp(arg, "--compress") == 0) { self->mode = MODE_COMPRESS; }
+                else if (strcmp(arg, "--decompress") == 0 || strcmp(arg, "--uncompress") == 0) { self->mode = MODE_DECOMPRESS; }
+                else if (strcmp(arg, "--test") == 0) { self->mode = MODE_TEST; }
+                else if (strcmp(arg, "--list") == 0) { self->mode = MODE_LIST; }
+                else if (strcmp(arg, "--ultra") == 0) { self->ultra = true; }
+                else if (strcmp(arg, "--force") == 0) { self->force = true; }
+                else if (strcmp(arg, "--keep") == 0) { self->keep = true; }
+                else if (strcmp(arg, "--rm") == 0) { self->rm_source = true; self->keep = false; }
+                else if (strcmp(arg, "--stdout") == 0) { self->to_stdout = true; }
+                else if (strcmp(arg, "--quiet") == 0) { self->quiet = true; }
+                else if (strcmp(arg, "--verbose") == 0) { self->verbose++; }
+                else if (strcmp(arg, "--no-progress") == 0) { self->no_progress = true; }
+                else if (strcmp(arg, "--check") == 0) { self->checksum = true; }
+                else if (strcmp(arg, "--no-check") == 0) { self->checksum = false; }
+                else if (strcmp(arg, "--content-size") == 0) { self->content_size = true; }
+                else if (strcmp(arg, "--no-content-size") == 0) { self->content_size = false; }
+                else if (strncmp(arg, "--threads=", 10) == 0) { self->threads = atoi(arg + 10); }
+                else if (strncmp(arg, "--fast=", 7) == 0) { self->fast_level = atoi(arg + 7); }
+                else if (strcmp(arg, "--fast") == 0) { self->fast_level = 1; }
+                else if (strncmp(arg, "--output=", 9) == 0) { strncpy(self->output_file, arg + 9, MAX_PATH_EXTENDED - 1); }
+                else {
+                    fprintf(stderr, "zstd: unknown option '%s'\n", arg);
+                    return false;
+                }
+            } else {
+                size_t len = strlen(arg);
+                for (size_t c = 1; c < len; c++) {
+                    char opt = arg[c];
+                    if (isdigit((unsigned char)opt)) {
+                        self->level = atoi(&arg[c]);
+                        break;
+                    }
+                    switch (opt) {
+                        case 'h': case 'H': self->print_help(); exit(0);
+                        case 'V': self->print_version(); exit(0);
+                        case 'z': self->mode = MODE_COMPRESS; break;
+                        case 'd': self->mode = MODE_DECOMPRESS; break;
+                        case 't': self->mode = MODE_TEST; break;
+                        case 'l': self->mode = MODE_LIST; break;
+                        case 'f': self->force = true; break;
+                        case 'k': self->keep = true; break;
+                        case 'c': self->to_stdout = true; break;
+                        case 'C': self->checksum = true; break;
+                        case 'q': self->quiet = true; break;
+                        case 'v': self->verbose++; break;
+                        case 'b':
+                            self->mode = MODE_BENCHMARK;
+                            if (arg[c + 1] != '\0') {
+                                self->level = atoi(&arg[c + 1]);
+                                c = len - 1;
+                            }
+                            break;
+                        case 'T':
+                            if (arg[c + 1] != '\0') {
+                                self->threads = atoi(&arg[c + 1]);
+                                c = len - 1;
+                            } else if (i + 1 < argc) {
+                                self->threads = atoi(argv[++i]);
+                            }
+                            break;
+                        case 'o':
+                            if (i + 1 < argc) strncpy(self->output_file, argv[++i], MAX_PATH_EXTENDED - 1);
+                            c = len - 1;
+                            break;
+                        default:
+                            fprintf(stderr, "zstd: invalid option -- '%c'\n", opt);
+                            return false;
+                    }
+                }
+            }
+        } else {
+            self->input_files[self->input_file_count++] = arg;
+        }
+        i++;
+    }
+
+    if (self->level > 19 && !self->ultra) {
+        fprintf(stderr, "zstd: compression level %d requires --ultra flag\n", self->level);
+        return false;
+    }
+    if (self->level > 22) self->level = 22;
+
+    if (self->threads <= 0) {
+        self->threads = detect_processor_count();
+        if (self->threads < 1) self->threads = 1;
+    }
+
+    return true;
+}
+
+static ZstdConfig *ZstdConfig_New(void) {
+    ZstdConfig *self = (ZstdConfig *)calloc(1, sizeof(ZstdConfig));
+    self->mode = MODE_COMPRESS;
+    self->level = 3;
+    self->threads = 1;
+    self->checksum = true;
+    self->content_size = true;
+    self->keep = true;
+    self->print_help = ZstdConfig_print_help;
+    self->print_version = ZstdConfig_print_version;
+    self->parse = ZstdConfig_parse;
+    return self;
+}
+
+/* =========================================================================
+ * MODULE 6: ZstdEngine (Enterprise Pipeline, Benchmark & CLI Driver)
+ * ========================================================================= */
+
+typedef struct ZstdEngine {
+    ZstdConfig *cfg;
+
+    int  (*run)(struct ZstdEngine *self);
+    bool (*compress)(struct ZstdEngine *self, FILE *in, FILE *out, uint64_t in_size);
+    bool (*decompress)(struct ZstdEngine *self, FILE *in, FILE *out);
+    bool (*list)(struct ZstdEngine *self, const char *path);
+    bool (*benchmark)(struct ZstdEngine *self, const char *path);
+} ZstdEngine;
+
+static bool ZstdEngine_compress_impl(ZstdEngine *self, FILE *in, FILE *out, uint64_t in_size) {
+    uint32_t magic = ZSTD_MAGIC;
+    if (fwrite(&magic, 1, 4, out) != 4) return false;
+
+    /* Frame Header Descriptor (RFC 8878 Section 3.1.1.1.1) */
+    uint8_t fhd = 0;
+    if (self->cfg->checksum) fhd |= (1 << 2); /* Content_Checksum_Flag */
+    if (self->cfg->content_size && in_size > 0) {
+        if (in_size > 0xFFFFFFFFULL) {
+            fhd |= (3 << 6); /* 8-byte frame content size */
+        } else {
+            fhd |= (2 << 6); /* 4-byte frame content size */
+        }
+    }
+    fputc(fhd, out);
+    fputc(0x48, out); /* Window descriptor (512 KB: Exponent=9, Mantissa=0) */
+
+    if (self->cfg->content_size && in_size > 0) {
+        if (in_size > 0xFFFFFFFFULL) {
+            uint64_t sz64 = in_size;
+            fwrite(&sz64, 1, 8, out);
+        } else {
+            uint32_t sz32 = (uint32_t)in_size;
+            fwrite(&sz32, 1, 4, out);
+        }
+    }
+
+    Xxh64 hasher = Xxh64_Create();
+    int nbWorkers = self->cfg->threads;
+    if (nbWorkers < 1) nbWorkers = 1;
+
+    int max_chain = 4;
+    bool fast_mode = (self->cfg->fast_level > 0);
+    if (fast_mode) {
+        max_chain = 1;
+    } else {
+        if (self->cfg->level <= 1) max_chain = 2;
+        else if (self->cfg->level <= 3) max_chain = 8;
+        else if (self->cfg->level <= 9) max_chain = 32;
+        else if (self->cfg->level <= 19) max_chain = 128;
+        else max_chain = self->cfg->ultra ? 512 : 128;
+    }
+
+    uint8_t **in_bufs = (uint8_t **)malloc(sizeof(uint8_t *) * nbWorkers);
+    uint8_t **out_bufs = (uint8_t **)malloc(sizeof(uint8_t *) * nbWorkers);
+    size_t *chunk_comp_sz = (size_t *)malloc(sizeof(size_t) * nbWorkers);
+    size_t *chunk_src_sz = (size_t *)malloc(sizeof(size_t) * nbWorkers);
+    bool *chunk_is_rle = (bool *)malloc(sizeof(bool) * nbWorkers);
+
+    for (int w = 0; w < nbWorkers; w++) {
+        in_bufs[w] = (uint8_t *)malloc(CHUNK_BLOCK_SIZE);
+        out_bufs[w] = (uint8_t *)malloc(CHUNK_BLOCK_SIZE + 1024);
+        chunk_comp_sz[w] = 0;
+        chunk_src_sz[w] = 0;
+        chunk_is_rle[w] = false;
+    }
+
+    ZstdThreadPool *pool = NULL;
+    ZstdWorkerContext *single_ctx = NULL;
+    if (nbWorkers > 1) {
+        pool = ZstdThreadPool_Create(nbWorkers, max_chain, fast_mode);
+    } else {
+        single_ctx = (ZstdWorkerContext *)calloc(1, sizeof(ZstdWorkerContext));
+    }
+
+    uint64_t total_in = 0;
+    uint64_t total_out = 0;
+    double t_start = get_time_sec();
+    bool is_tty = _isatty(_fileno(stderr));
+    bool stream_eof = false;
+    bool last_block_written = false;
+
+    while (!stream_eof) {
+        int active_chunks = 0;
+        for (int w = 0; w < nbWorkers; w++) {
+            size_t n = fread(in_bufs[w], 1, CHUNK_BLOCK_SIZE, in);
+            if (n == 0) {
+                stream_eof = true;
+                break;
+            }
+
+            total_in += n;
+            chunk_src_sz[w] = n;
+            if (n < CHUNK_BLOCK_SIZE || feof(in) || (in_size > 0 && total_in >= in_size)) {
+                stream_eof = true;
+            }
+
+            if (self->cfg->checksum) {
+                hasher.update(&hasher, in_bufs[w], n);
+            }
+
+            if (pool) {
+                pool->workers[w].src = in_bufs[w];
+                pool->workers[w].src_sz = n;
+                pool->workers[w].dst = out_bufs[w];
+                pool->workers[w].dst_cap = CHUNK_BLOCK_SIZE + 1024;
+                pool->workers[w].comp_sz = 0;
+                pool->workers[w].is_rle = false;
+            } else {
+                if (n > 0 && is_all_same_byte(in_bufs[w], n)) {
+                    chunk_is_rle[w] = true;
+                    chunk_comp_sz[w] = 1;
+                } else {
+                    chunk_is_rle[w] = false;
+                    chunk_comp_sz[w] = ZstdCodec_compress_block_core(single_ctx, in_bufs[w], n,
+                                                                     out_bufs[w], CHUNK_BLOCK_SIZE + 1024,
+                                                                     max_chain, fast_mode);
+                }
+            }
+            active_chunks++;
+            if (stream_eof) break;
+        }
+
+        if (active_chunks == 0) break;
+
+        if (pool) {
+            pool->remaining_workers = active_chunks;
+            MemoryBarrier();
+            for (int w = 0; w < active_chunks; w++) {
+                SetEvent(pool->workers[w].hStartEvent);
+            }
+            WaitForSingleObject(pool->hAllDoneEvent, INFINITE);
+        }
+
+        /* Write Chunks to Output */
+        for (int i = 0; i < active_chunks; i++) {
+            bool is_last = stream_eof && (i == active_chunks - 1);
+            size_t c_size = pool ? pool->workers[i].comp_sz : chunk_comp_sz[i];
+            size_t src_size = pool ? pool->workers[i].src_sz : chunk_src_sz[i];
+            bool is_rle = pool ? pool->workers[i].is_rle : chunk_is_rle[i];
+
+            uint32_t bheader = 0;
+            if (is_last) {
+                bheader |= 1U;
+                last_block_written = true;
+            }
+
+            if (is_rle) {
+                /* RFC 8878 RLE Block (Block_Type = 1) */
+                bheader |= (1U << 1);
+                bheader |= ((uint32_t)src_size << 3);
+                uint8_t hdr[3] = { (uint8_t)(bheader & 0xFF), (uint8_t)((bheader >> 8) & 0xFF), (uint8_t)((bheader >> 16) & 0xFF) };
+                fwrite(hdr, 1, 3, out);
+                fputc(in_bufs[i][0], out);
+                total_out += 4;
+            } else if (c_size == 0 || c_size >= src_size) {
+                /* RFC 8878 Raw Block (Block_Type = 0) */
+                bheader |= (0U << 1);
+                bheader |= ((uint32_t)src_size << 3);
+                uint8_t hdr[3] = { (uint8_t)(bheader & 0xFF), (uint8_t)((bheader >> 8) & 0xFF), (uint8_t)((bheader >> 16) & 0xFF) };
+                fwrite(hdr, 1, 3, out);
+                fwrite(in_bufs[i], 1, src_size, out);
+                total_out += 3 + src_size;
+            } else {
+                /* Compressed Block (Block_Type = 2) */
+                bheader |= (2U << 1);
+                bheader |= ((uint32_t)c_size << 3);
+                uint8_t hdr[3] = { (uint8_t)(bheader & 0xFF), (uint8_t)((bheader >> 8) & 0xFF), (uint8_t)((bheader >> 16) & 0xFF) };
+                fwrite(hdr, 1, 3, out);
+                fwrite(out_bufs[i], 1, c_size, out);
+                total_out += 3 + c_size;
+            }
+        }
+
+        if (is_tty && !self->cfg->quiet && !self->cfg->no_progress) {
+            double elapsed = get_time_sec() - t_start;
+            double speed = (elapsed > 0) ? ((double)total_in / (1024.0 * 1024.0)) / elapsed : 0.0;
+            double ratio = (total_in > 0) ? ((double)total_out / (double)total_in) * 100.0 : 0.0;
+            fprintf(stderr, "\rCompressed: %llu MB | Speed: %.1f MB/s | Ratio: %.1f%%  ",
+                    (unsigned long long)(total_in / (1024 * 1024)), speed, ratio);
+            fflush(stderr);
+        }
+    }
+
+    if (!last_block_written) {
+        uint8_t empty_hdr[3] = { 1, 0, 0 };
+        fwrite(empty_hdr, 1, 3, out);
+    }
+
+    if (self->cfg->checksum) {
+        uint32_t chk = hasher.digest32(&hasher);
+        fwrite(&chk, 1, 4, out);
+    }
+
+    if (is_tty && !self->cfg->quiet && !self->cfg->no_progress) {
+        fprintf(stderr, "\n");
+    }
+
+    if (pool) {
+        ZstdThreadPool_Destroy(pool);
+    }
+
+    for (int w = 0; w < nbWorkers; w++) {
+        free(in_bufs[w]);
+        free(out_bufs[w]);
+    }
+    free(in_bufs);
+    free(out_bufs);
+    free(chunk_comp_sz);
+    free(chunk_src_sz);
+    free(chunk_is_rle);
+    if (single_ctx) free(single_ctx);
+    return true;
+}
+
+static bool ZstdEngine_decompress_impl(ZstdEngine *self, FILE *in, FILE *out) {
+    (void)self;
+    uint32_t magic = 0;
+    if (fread(&magic, 1, 4, in) != 4 || magic != ZSTD_MAGIC) {
+        fprintf(stderr, "zstd: not in zstd format\n");
+        return false;
+    }
+
+    int fhd_c = fgetc(in);
+    if (fhd_c == EOF) return false;
+    uint8_t fhd = (uint8_t)fhd_c;
+
+    bool single_seg = (fhd & (1 << 5)) != 0;
+    bool has_chk = (fhd & (1 << 2)) != 0;
+    int fcs_flag = (fhd >> 6) & 0x03;
+
+    if (!single_seg) {
+        if (fgetc(in) == EOF) return false;
+    }
+
+    if (fcs_flag == 1) {
+        uint16_t s; if (fread(&s, 1, 2, in) != 2) return false;
+    } else if (fcs_flag == 2) {
+        uint32_t s; if (fread(&s, 1, 4, in) != 4) return false;
+    } else if (fcs_flag == 3) {
+        uint64_t s; if (fread(&s, 1, 8, in) != 8) return false;
+    }
+
+    Xxh64 hasher = Xxh64_Create();
+
+    size_t in_chunk_cap = CHUNK_BLOCK_SIZE + 65536;
+    size_t out_chunk_cap = CHUNK_BLOCK_SIZE + 65536;
+    uint8_t *in_chunk = (uint8_t *)malloc(in_chunk_cap);
+    uint8_t *out_chunk = (uint8_t *)malloc(out_chunk_cap);
+    if (!in_chunk || !out_chunk) {
+        free(in_chunk); free(out_chunk);
+        return false;
+    }
+
+    bool last = false;
+    bool ok = true;
+
+    while (!last && !feof(in)) {
+        uint8_t hdr[3];
+        if (fread(hdr, 1, 3, in) != 3) break;
+
+        uint32_t bheader = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) | ((uint32_t)hdr[2] << 16);
+        last = (bheader & 1) != 0;
+        int btype = (bheader >> 1) & 3;
+        size_t bsize = (bheader >> 3);
+
+        if (bsize > in_chunk_cap) {
+            in_chunk_cap = bsize + 65536;
+            uint8_t *new_in = (uint8_t *)realloc(in_chunk, in_chunk_cap);
+            if (!new_in) { ok = false; break; }
+            in_chunk = new_in;
+        }
+
+        if (btype == 0) {
+            /* RFC 8878 Raw Block */
+            if (bsize > 0) {
+                if (fread(in_chunk, 1, bsize, in) != bsize) { ok = false; break; }
+                if (out) fwrite(in_chunk, 1, bsize, out);
+                if (has_chk) hasher.update(&hasher, in_chunk, bsize);
+            }
+        } else if (btype == 1) {
+            /* RFC 8878 RLE Block */
+            int rle_byte = fgetc(in);
+            if (rle_byte == EOF) { ok = false; break; }
+            if (bsize > out_chunk_cap) {
+                out_chunk_cap = bsize + 65536;
+                uint8_t *new_out = (uint8_t *)realloc(out_chunk, out_chunk_cap);
+                if (!new_out) { ok = false; break; }
+                out_chunk = new_out;
+            }
+            memset(out_chunk, (uint8_t)rle_byte, bsize);
+            if (out) fwrite(out_chunk, 1, bsize, out);
+            if (has_chk) hasher.update(&hasher, out_chunk, bsize);
+        } else if (btype == 2) {
+            /* Compressed Block */
+            if (fread(in_chunk, 1, bsize, in) != bsize) { ok = false; break; }
+            size_t dec_sz = ZstdCodec_decompress_block_core(in_chunk, bsize, out_chunk, out_chunk_cap);
+            if (dec_sz == 0 && bsize > 0) {
+                fprintf(stderr, "zstd: corrupted compressed block\n");
+                ok = false;
+                break;
+            }
+            if (out && dec_sz > 0) fwrite(out_chunk, 1, dec_sz, out);
+            if (has_chk && dec_sz > 0) hasher.update(&hasher, out_chunk, dec_sz);
+        } else {
+            fprintf(stderr, "zstd: unsupported block type: %d\n", btype);
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok && has_chk) {
+        uint32_t file_chk = 0;
+        if (fread(&file_chk, 1, 4, in) == 4) {
+            uint32_t calc_chk = hasher.digest32(&hasher);
+            if (file_chk != calc_chk) {
+                fprintf(stderr, "zstd: checksum verification failed!\n");
+                ok = false;
+            }
+        }
+    }
+
+    free(in_chunk);
+    free(out_chunk);
+    return ok;
+}
+
+static bool ZstdEngine_list_impl(ZstdEngine *self, const char *path) {
+    (void)self;
+    FILE *in = fopen(path, "rb");
+    if (!in) {
+        fprintf(stderr, "zstd: cannot open %s\n", path);
+        return false;
+    }
+
+    uint32_t magic = 0;
+    if (fread(&magic, 1, 4, in) != 4 || magic != ZSTD_MAGIC) {
+        fprintf(stderr, "zstd: %s: not in zstd format\n", path);
+        fclose(in);
+        return false;
+    }
+
+    int fhd_c = fgetc(in);
+    if (fhd_c == EOF) { fclose(in); return false; }
+    uint8_t fhd = (uint8_t)fhd_c;
+
+    bool single_seg = (fhd & (1 << 5)) != 0;
+    bool has_chk = (fhd & (1 << 2)) != 0;
+    int fcs_flag = (fhd >> 6) & 0x03;
+    if (!single_seg) fgetc(in);
+
+    uint64_t orig_sz = 0;
+    if (fcs_flag == 1) { uint16_t s; if (fread(&s, 1, 2, in) == 2) orig_sz = s + 256; }
+    else if (fcs_flag == 2) { uint32_t s; if (fread(&s, 1, 4, in) == 4) orig_sz = s; }
+    else if (fcs_flag == 3) { if (fread(&orig_sz, 1, 8, in) != 8) orig_sz = 0; }
+
+    _fseeki64(in, 0, SEEK_END);
+    uint64_t comp_sz = _ftelli64(in);
+    fclose(in);
+
+    double ratio = (orig_sz > 0) ? ((double)comp_sz / (double)orig_sz) * 100.0 : 0.0;
+    printf("Frames  Compressed  Uncompressed  Ratio  Check  Filename\n");
+    printf("     1  %10llu  %12llu  %5.1f%%  %s  %s\n",
+           (unsigned long long)comp_sz, (unsigned long long)orig_sz, ratio,
+           has_chk ? "XXH64" : "None ", path);
+    return true;
+}
+
+static bool ZstdEngine_benchmark_impl(ZstdEngine *self, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "zstd: cannot open %s\n", path);
+        return false;
+    }
+    _fseeki64(f, 0, SEEK_END);
+    size_t sz = (size_t)_ftelli64(f);
+    _fseeki64(f, 0, SEEK_SET);
+
+    uint8_t *src = (uint8_t *)malloc(sz);
+    if (!src || (sz > 0 && fread(src, 1, sz, f) != sz)) {
+        fclose(f); free(src);
+        return false;
+    }
+    fclose(f);
+
+    size_t comp_cap = sz + (sz / 4) + 65536;
+    uint8_t *comp = (uint8_t *)malloc(comp_cap);
+    uint8_t *decomp = (uint8_t *)malloc(sz + 65536);
+    ZstdWorkerContext *ctx = (ZstdWorkerContext *)calloc(1, sizeof(ZstdWorkerContext));
+
+    if (!comp || !decomp || !ctx) {
+        free(src); free(comp); free(decomp); free(ctx);
+        return false;
+    }
+
+    int max_chain = 4;
+    bool fast_mode = (self->cfg->fast_level > 0);
+    if (fast_mode) max_chain = 1;
+    else if (self->cfg->level <= 1) max_chain = 2;
+    else if (self->cfg->level <= 3) max_chain = 8;
+    else if (self->cfg->level <= 9) max_chain = 32;
+    else if (self->cfg->level <= 19) max_chain = 128;
+    else max_chain = self->cfg->ultra ? 512 : 128;
+
+    printf("Benchmarking %s (%llu bytes) at level %d (%d thread%s):\n",
+           path, (unsigned long long)sz, self->cfg->level, self->cfg->threads,
+           self->cfg->threads > 1 ? "s" : "");
+
+    double t0 = get_time_sec();
+    size_t c_size = 0;
+    if (sz > 0 && is_all_same_byte(src, sz)) {
+        c_size = 1;
+        comp[0] = src[0];
+    } else {
+        c_size = ZstdCodec_compress_block_core(ctx, src, sz, comp, comp_cap, max_chain, fast_mode);
+    }
+    double c_time = get_time_sec() - t0;
+    double c_speed = (c_time > 0) ? ((double)sz / (1024.0 * 1024.0)) / c_time : 0.0;
+    double ratio = (sz > 0 && c_size > 0) ? ((double)c_size / (double)sz) * 100.0 : 100.0;
+
+    double t1 = get_time_sec();
+    size_t d_size = 0;
+    if (sz > 0 && is_all_same_byte(src, sz)) {
+        d_size = sz;
+        memset(decomp, comp[0], sz);
+    } else if (c_size > 0) {
+        d_size = ZstdCodec_decompress_block_core(comp, c_size, decomp, sz + 65536);
+    } else {
+        d_size = sz;
+        memcpy(decomp, src, sz);
+    }
+    double d_time = get_time_sec() - t1;
+    double d_speed = (d_time > 0) ? ((double)sz / (1024.0 * 1024.0)) / d_time : 0.0;
+
+    bool match = (d_size == sz && (sz == 0 || memcmp(src, decomp, sz) == 0));
+
+    printf("Level %2d : Comp: %7.1f MB/s, Decomp: %7.1f MB/s, Ratio: %5.1f%% (%s)\n",
+           self->cfg->level, c_speed, d_speed, ratio, match ? "Verified OK" : "MISMATCH");
+
+    free(src); free(comp); free(decomp); free(ctx);
+    return match;
+}
+
+static int ZstdEngine_run_impl(ZstdEngine *self) {
+    if (self->cfg->mode == MODE_BENCHMARK) {
+        if (self->cfg->input_file_count == 0) {
+            fprintf(stderr, "zstd: benchmark requires file argument\n");
+            return 1;
+        }
+        for (int i = 0; i < self->cfg->input_file_count; i++) {
+            self->benchmark(self, self->cfg->input_files[i]);
+        }
+        return 0;
+    }
+
+    if (self->cfg->mode == MODE_LIST) {
+        if (self->cfg->input_file_count == 0) {
+            fprintf(stderr, "zstd: list requires file argument\n");
+            return 1;
+        }
+        for (int i = 0; i < self->cfg->input_file_count; i++) {
+            self->list(self, self->cfg->input_files[i]);
+        }
+        return 0;
+    }
+
+    int total_files = self->cfg->input_file_count ? self->cfg->input_file_count : 1;
+
+    for (int idx = 0; idx < total_files; idx++) {
+        const char *src_path = self->cfg->input_file_count ? self->cfg->input_files[idx] : "-";
+        FILE *in = stdin;
+        FILE *out = stdout;
+        uint64_t in_size = 0;
+        char dst_path[MAX_PATH_EXTENDED] = "";
+
+        if (strcmp(src_path, "-") != 0) {
+            in = fopen(src_path, "rb");
+            if (!in) {
+                fprintf(stderr, "zstd: cannot open %s\n", src_path);
+                return 1;
+            }
+            _fseeki64(in, 0, SEEK_END);
+            in_size = _ftelli64(in);
+            _fseeki64(in, 0, SEEK_SET);
+
+            if (self->cfg->output_file[0] != '\0') {
+                strncpy(dst_path, self->cfg->output_file, MAX_PATH_EXTENDED - 1);
+            } else if (!self->cfg->to_stdout && self->cfg->mode != MODE_TEST) {
+                if (self->cfg->mode == MODE_COMPRESS) {
+                    snprintf(dst_path, sizeof(dst_path), "%s.zst", src_path);
+                } else if (self->cfg->mode == MODE_DECOMPRESS) {
+                    size_t slen = strlen(src_path);
+                    if (slen > 4 && strcmp(&src_path[slen - 4], ".zst") == 0) {
+                        strncpy(dst_path, src_path, slen - 4);
+                        dst_path[slen - 4] = '\0';
+                    } else {
+                        snprintf(dst_path, sizeof(dst_path), "%s.out", src_path);
+                    }
+                }
+            }
+        }
+
+        if (dst_path[0] != '\0') {
+            if (!self->cfg->force) {
+                FILE *test = fopen(dst_path, "rb");
+                if (test) {
+                    fclose(test);
+                    fprintf(stderr, "zstd: %s already exists; use -f to overwrite\n", dst_path);
+                    if (in != stdin) fclose(in);
+                    return 1;
+                }
+            }
+            out = _fsopen(dst_path, "wb", _SH_DENYWR);
+            if (!out) {
+                out = fopen(dst_path, "wb");
+            }
+            if (!out) {
+                fprintf(stderr, "zstd: cannot create %s\n", dst_path);
+                if (in != stdin) fclose(in);
+                return 1;
+            }
+            EnterCriticalSection(&g_cleanup_lock);
+            strncpy(g_active_output_file, dst_path, MAX_PATH_EXTENDED - 1);
+            LeaveCriticalSection(&g_cleanup_lock);
+        }
+
+        char *in_buf = (char *)malloc(IO_BUFFER_SIZE);
+        char *out_buf = (char *)malloc(IO_BUFFER_SIZE);
+        if (in_buf && in != stdin) setvbuf(in, in_buf, _IOFBF, IO_BUFFER_SIZE);
+        if (out_buf && out != stdout && out != NULL) setvbuf(out, out_buf, _IOFBF, IO_BUFFER_SIZE);
+
+        bool ok = true;
+        if (self->cfg->mode == MODE_COMPRESS) {
+            ok = self->compress(self, in, out, in_size);
+        } else if (self->cfg->mode == MODE_DECOMPRESS) {
+            ok = self->decompress(self, in, out);
+        } else if (self->cfg->mode == MODE_TEST) {
+            ok = self->decompress(self, in, NULL);
+            if (!self->cfg->quiet) {
+                printf("%s : %s\n", src_path, ok ? "OK" : "CORRUPTED");
+            }
+        }
+
+        if (in != stdin) fclose(in);
+        if (out != stdout && out != NULL) fclose(out);
+        free(in_buf);
+        free(out_buf);
+
+        EnterCriticalSection(&g_cleanup_lock);
+        g_active_output_file[0] = '\0';
+        LeaveCriticalSection(&g_cleanup_lock);
+
+        if (!ok) {
+            if (dst_path[0] != '\0') DeleteFileA(dst_path);
+            return 1;
+        }
+
+        if (self->cfg->rm_source && strcmp(src_path, "-") != 0) {
+            DeleteFileA(src_path);
+        }
+    }
+
+    return 0;
+}
+
+static ZstdEngine *ZstdEngine_New(ZstdConfig *cfg) {
+    ZstdEngine *self = (ZstdEngine *)calloc(1, sizeof(ZstdEngine));
+    self->cfg = cfg;
+    self->run = ZstdEngine_run_impl;
+    self->compress = ZstdEngine_compress_impl;
+    self->decompress = ZstdEngine_decompress_impl;
+    self->list = ZstdEngine_list_impl;
+    self->benchmark = ZstdEngine_benchmark_impl;
+    return self;
+}
+
+/* =========================================================================
+ * Application Entry Point
+ * ========================================================================= */
+
+int main(int argc, char *argv[]) {
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    InitializeCriticalSection(&g_cleanup_lock);
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+
+    ZstdConfig *config = ZstdConfig_New();
+    if (!config->parse(config, argc, argv)) {
+        free(config);
+        DeleteCriticalSection(&g_cleanup_lock);
+        return 1;
+    }
+
+    ZstdEngine *engine = ZstdEngine_New(config);
+    int status = engine->run(engine);
+
+    free(engine);
+    if (config->input_files) free(config->input_files);
+    free(config);
+    DeleteCriticalSection(&g_cleanup_lock);
+    return status;
+}

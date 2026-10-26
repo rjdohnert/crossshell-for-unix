@@ -53,7 +53,8 @@ HANDLE get_persistent_custom_fd(int fd) {
 }
 
 bool open_redirection_file(const std::wstring& path, DWORD access, DWORD creation, HANDLE& handle) {
-    std::wstring normalized_path = translate_device_path(path);
+    std::wstring cleaned_path = remove_quotes_and_escapes_from_token(path);
+    std::wstring normalized_path = translate_device_path(cleaned_path);
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = nullptr;
@@ -144,7 +145,8 @@ bool duplicate_persistent_custom_fd(int source_fd, int target_fd, std::wstring& 
 }
 
 bool has_any_redirection(const RedirectionSpec& redir) {
-    return redir.has_stdin || redir.has_stdout || redir.stdout_to_stderr || redir.has_stderr || redir.stderr_to_stdout || !redir.custom_fd_actions.empty();
+    return redir.has_stdin || redir.has_stdout || redir.stdout_to_stderr || redir.has_stderr || redir.stderr_to_stdout ||
+        !redir.standard_fd_actions.empty() || !redir.custom_fd_actions.empty();
 }
 
 bool try_parse_custom_fd_redirection_token(
@@ -253,6 +255,14 @@ bool try_parse_custom_fd_redirection_token(
 bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redir, std::wstring& error_message) {
     std::vector<std::wstring> filtered;
     filtered.reserve(tokens.size());
+    auto append_standard_fd_action = [&](int fd, RedirectionSpec::StandardFdAction::Kind kind, const std::wstring& path, int source_fd) {
+        RedirectionSpec::StandardFdAction action;
+        action.fd = fd;
+        action.kind = kind;
+        action.path = path;
+        action.duplicate_source_fd = source_fd;
+        redir.standard_fd_actions.push_back(std::move(action));
+    };
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         const std::wstring& token = tokens[i];
@@ -413,6 +423,7 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
         }
 
         if (kind == RedirKind::ErrToOut) {
+            append_standard_fd_action(2, RedirectionSpec::StandardFdAction::Kind::Duplicate, L"", 1);
             redir.stderr_to_stdout = true;
             redir.has_stderr = false;
             redir.append_stderr = false;
@@ -421,6 +432,7 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
         }
 
         if (kind == RedirKind::OutToErr) {
+            append_standard_fd_action(1, RedirectionSpec::StandardFdAction::Kind::Duplicate, L"", 2);
             redir.stdout_to_stderr = true;
             redir.has_stdout = false;
             redir.append_stdout = false;
@@ -433,6 +445,7 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
                 error_message = L"ksh: missing file for input redirection";
                 return false;
             }
+            append_standard_fd_action(0, RedirectionSpec::StandardFdAction::Kind::OpenRead, target, -1);
             redir.has_stdin = true;
             redir.stdin_path = target;
             continue;
@@ -443,6 +456,7 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
                 error_message = L"ksh: missing file for output redirection";
                 return false;
             }
+            append_standard_fd_action(1, RedirectionSpec::StandardFdAction::Kind::OpenWriteAppend, target, -1);
             redir.has_stdout = true;
             redir.stdout_to_stderr = false;
             redir.append_stdout = true;
@@ -455,6 +469,7 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
                 error_message = L"ksh: missing file for output redirection";
                 return false;
             }
+            append_standard_fd_action(1, RedirectionSpec::StandardFdAction::Kind::OpenWriteTruncate, target, -1);
             redir.has_stdout = true;
             redir.stdout_to_stderr = false;
             redir.append_stdout = false;
@@ -467,6 +482,7 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
                 error_message = L"ksh: missing file for stderr redirection";
                 return false;
             }
+            append_standard_fd_action(2, RedirectionSpec::StandardFdAction::Kind::OpenWriteAppend, target, -1);
             redir.has_stderr = true;
             redir.stderr_to_stdout = false;
             redir.append_stderr = true;
@@ -479,21 +495,13 @@ bool parse_redirections(std::vector<std::wstring>& tokens, RedirectionSpec& redi
                 error_message = L"ksh: missing file for stderr redirection";
                 return false;
             }
+            append_standard_fd_action(2, RedirectionSpec::StandardFdAction::Kind::OpenWriteTruncate, target, -1);
             redir.has_stderr = true;
             redir.stderr_to_stdout = false;
             redir.append_stderr = false;
             redir.stderr_path = target;
             continue;
         }
-    }
-
-    if (redir.stdout_to_stderr && (redir.has_stdout || redir.stderr_to_stdout)) {
-        error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
-        return false;
-    }
-    if (redir.stderr_to_stdout && (redir.has_stderr || redir.stdout_to_stderr)) {
-        error_message = L"ksh: unsupported mixed fd redirection requiring ordered duplication semantics";
-        return false;
     }
 
     tokens = filtered;
@@ -753,6 +761,76 @@ bool setup_redirection_handles(
     close_err = false;
 
     if (redir == nullptr || !has_any_redirection(*redir)) {
+        return true;
+    }
+
+    if (!redir->standard_fd_actions.empty()) {
+        auto handle_for_fd = [&](int fd) -> HANDLE* {
+            if (fd == 0) return &std_in;
+            if (fd == 1) return &std_out;
+            if (fd == 2) return &std_err;
+            return nullptr;
+        };
+        auto close_flag_for_fd = [&](int fd) -> bool* {
+            if (fd == 0) return &close_in;
+            if (fd == 1) return &close_out;
+            if (fd == 2) return &close_err;
+            return nullptr;
+        };
+        auto cleanup_owned_handles = [&]() {
+            close_redirection_handles(std_in, std_out, std_err, close_in, close_out, close_err);
+            close_in = false;
+            close_out = false;
+            close_err = false;
+        };
+
+        for (const RedirectionSpec::StandardFdAction& action : redir->standard_fd_actions) {
+            HANDLE* destination = handle_for_fd(action.fd);
+            bool* destination_is_owned = close_flag_for_fd(action.fd);
+            if (destination == nullptr || destination_is_owned == nullptr) {
+                cleanup_owned_handles();
+                return false;
+            }
+
+            HANDLE new_handle = INVALID_HANDLE_VALUE;
+            switch (action.kind) {
+            case RedirectionSpec::StandardFdAction::Kind::OpenRead:
+                if (!open_redirection_file(action.path, GENERIC_READ, OPEN_EXISTING, new_handle)) {
+                    cleanup_owned_handles();
+                    return false;
+                }
+                break;
+            case RedirectionSpec::StandardFdAction::Kind::OpenWriteTruncate:
+                if (!open_redirection_file(action.path, GENERIC_WRITE, CREATE_ALWAYS, new_handle)) {
+                    cleanup_owned_handles();
+                    return false;
+                }
+                break;
+            case RedirectionSpec::StandardFdAction::Kind::OpenWriteAppend:
+                if (!open_redirection_file(action.path, GENERIC_WRITE, OPEN_ALWAYS, new_handle)) {
+                    cleanup_owned_handles();
+                    return false;
+                }
+                SetFilePointer(new_handle, 0, nullptr, FILE_END);
+                break;
+            case RedirectionSpec::StandardFdAction::Kind::Duplicate: {
+                HANDLE* source = handle_for_fd(action.duplicate_source_fd);
+                if (source == nullptr || !is_valid_handle_value(*source) ||
+                    !DuplicateHandle(GetCurrentProcess(), *source, GetCurrentProcess(), &new_handle, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+                    cleanup_owned_handles();
+                    return false;
+                }
+                break;
+            }
+            }
+
+            if (*destination_is_owned && is_valid_handle_value(*destination)) {
+                CloseHandle(*destination);
+            }
+            *destination = new_handle;
+            *destination_is_owned = true;
+        }
+
         return true;
     }
 

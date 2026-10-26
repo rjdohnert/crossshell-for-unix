@@ -11,6 +11,48 @@
 #include "scriptlet_runner.hpp"
 #include "security_engine.hpp"
 
+namespace {
+bool matchFilePath(const std::string& recordedPath, const std::string& queryPath) {
+    if (recordedPath.empty() || queryPath.empty()) return false;
+
+    std::string rec = recordedPath;
+    std::string qry = queryPath;
+    std::replace(rec.begin(), rec.end(), '/', '\\');
+    std::replace(qry.begin(), qry.end(), '/', '\\');
+
+    if (_stricmp(rec.c_str(), qry.c_str()) == 0) return true;
+
+    std::error_code ec;
+    if (fs::exists(rec, ec) && fs::exists(qry, ec)) {
+        if (fs::equivalent(rec, qry, ec)) return true;
+    }
+
+    std::string recNoDrive = (rec.size() >= 2 && rec[1] == ':') ? rec.substr(2) : rec;
+    std::string qryNoDrive = (qry.size() >= 2 && qry[1] == ':') ? qry.substr(2) : qry;
+
+    while (!recNoDrive.empty() && recNoDrive.front() == '\\') recNoDrive.erase(recNoDrive.begin());
+    while (!qryNoDrive.empty() && qryNoDrive.front() == '\\') qryNoDrive.erase(qryNoDrive.begin());
+
+    if (_stricmp(recNoDrive.c_str(), qryNoDrive.c_str()) == 0) return true;
+
+    if (!qryNoDrive.empty() && recNoDrive.size() >= qryNoDrive.size()) {
+        size_t offset = recNoDrive.size() - qryNoDrive.size();
+        if (_stricmp(recNoDrive.c_str() + offset, qryNoDrive.c_str()) == 0) {
+            if (offset == 0 || recNoDrive[offset - 1] == '\\') return true;
+        }
+    }
+
+    if (!recNoDrive.empty() && qryNoDrive.size() >= recNoDrive.size()) {
+        size_t offset = qryNoDrive.size() - recNoDrive.size();
+        if (_stricmp(qryNoDrive.c_str() + offset, recNoDrive.c_str()) == 0) {
+            if (offset == 0 || qryNoDrive[offset - 1] == '\\') return true;
+        }
+    }
+
+    return false;
+}
+}
+
 int runRpm(int argc, char* argv[]) {
     PersistentWalJournal::recoverInterruptedTransactions();
 
@@ -22,16 +64,14 @@ int runRpm(int argc, char* argv[]) {
     bool opQuery = false, opInstall = false, opUpgrade = false, opErase = false, opVerify = false;
     bool optInfo = false, optList = false, optAll = false, optPackage = false, optHash = false;
     bool optVerbose = false, optNoDeps = false, optNoScripts = false, optTest = false;
-    bool optWhatProvides = false, optWhatRequires = false;
+    bool optWhatProvides = false, optWhatRequires = false, optFile = false;
     fs::path targetRoot = "C:\\";
     std::vector<std::string> arguments;
 
     // First pass: detect main mode from arguments
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "-q" || arg == "--query" || arg.rfind("-q", 0) == 0 ||
-            arg == "-a" || arg == "--all" || arg == "-l" || arg == "--list" ||
-            arg == "--info" || arg == "--whatprovides" || arg == "--whatrequires") {
+        if (arg == "-q" || arg == "--query" || arg.rfind("-q", 0) == 0) {
             opQuery = true;
         } else if (arg == "-V" || arg == "--verify" || arg.rfind("-V", 0) == 0) {
             opVerify = true;
@@ -39,6 +79,8 @@ int runRpm(int argc, char* argv[]) {
             opErase = true;
         } else if (arg == "-U" || arg == "--upgrade" || arg.rfind("-U", 0) == 0) {
             opUpgrade = true;
+        } else if (arg == "--install") {
+            opInstall = true;
         }
     }
 
@@ -65,11 +107,13 @@ int runRpm(int argc, char* argv[]) {
         } else if (arg == "--test") {
             optTest = true;
         } else if (arg == "--whatprovides") {
-            opQuery = true;
+            if (!opVerify) opQuery = true;
             optWhatProvides = true;
         } else if (arg == "--whatrequires") {
-            opQuery = true;
+            if (!opVerify) opQuery = true;
             optWhatRequires = true;
+        } else if (arg == "--file") {
+            optFile = true;
         } else if (arg.rfind("-", 0) == 0 && arg.rfind("--", 0) != 0) {
             for (size_t c = 1; c < arg.size(); ++c) {
                 switch (arg[c]) {
@@ -81,8 +125,9 @@ int runRpm(int argc, char* argv[]) {
                     case 'U': opUpgrade = true; break;
                     case 'e': opErase = true; break;
                     case 'V': opVerify = true; break;
-                    case 'a': opQuery = true; optAll = true; break;
-                    case 'l': opQuery = true; optList = true; break;
+                    case 'a': optAll = true; break;
+                    case 'f': optFile = true; break;
+                    case 'l': optList = true; break;
                     case 'p': optPackage = true; break;
                     case 'h': optHash = true; break;
                     case 'v': optVerbose = true; break;
@@ -96,13 +141,17 @@ int runRpm(int argc, char* argv[]) {
         else if (arg == "--upgrade") opUpgrade = true;
         else if (arg == "--erase") opErase = true;
         else if (arg == "--verify") opVerify = true;
-        else if (arg == "--info") { opQuery = true; optInfo = true; }
-        else if (arg == "--list") { opQuery = true; optList = true; }
-        else if (arg == "--all") { opQuery = true; optAll = true; }
+        else if (arg == "--info") optInfo = true;
+        else if (arg == "--list") optList = true;
+        else if (arg == "--all") optAll = true;
         else if (arg == "--package") optPackage = true;
         else if (arg == "--hash") optHash = true;
         else if (arg == "--verbose") optVerbose = true;
         else arguments.push_back(arg);
+    }
+
+    if (!opInstall && !opUpgrade && !opErase && !opVerify) {
+        opQuery = true;
     }
 
     RpmDatabase db(targetRoot);
@@ -129,6 +178,14 @@ int runRpm(int argc, char* argv[]) {
                     }
                     for (const auto& prov : pkg.provides) {
                         if (prov.name == cap) {
+                            std::cout << pkg.name << "-" << pkg.version << "-" << pkg.release << "." << pkg.arch << "\n";
+                            foundAny = true;
+                            break;
+                        }
+                    }
+                    if (foundAny) continue;
+                    for (const auto& f : pkg.files) {
+                        if (matchFilePath(f.path, cap)) {
                             std::cout << pkg.name << "-" << pkg.version << "-" << pkg.release << "." << pkg.arch << "\n";
                             foundAny = true;
                             break;
@@ -168,35 +225,62 @@ int runRpm(int argc, char* argv[]) {
             return queryExitCode;
         }
 
+        std::vector<RpmMetadata> targetsToQuery;
+        int queryExitCode = 0;
+
         if (optAll) {
             for (const auto& [name, pkg] : db.all()) {
-                std::cout << pkg.name << "-" << pkg.version << "-" << pkg.release << "." << pkg.arch << "\n";
+                targetsToQuery.push_back(pkg);
             }
-            return 0;
-        }
-
-        if (arguments.empty()) {
-            std::cerr << "error: no packages given for query\n";
-            return 1;
-        }
-
-        int queryExitCode = 0;
-        for (const auto& target : arguments) {
-            RpmMetadata meta;
-            if (optPackage) {
-                RpmPackage pkg;
-                if (!pkg.parse(target)) return 1;
-                meta = pkg.meta;
-            } else {
-                RpmMetadata* found = db.find(target);
-                if (!found) {
-                    std::cerr << "package " << target << " is not installed\n";
-                    queryExitCode = 1;
-                    continue;
+        } else if (optFile) {
+            if (arguments.empty()) {
+                std::cerr << "error: no files given for query\n";
+                return 1;
+            }
+            for (const auto& filePath : arguments) {
+                bool foundFile = false;
+                for (const auto& [name, pkg] : db.all()) {
+                    for (const auto& f : pkg.files) {
+                        if (matchFilePath(f.path, filePath)) {
+                            targetsToQuery.push_back(pkg);
+                            foundFile = true;
+                            break;
+                        }
+                    }
+                    if (foundFile) break;
                 }
-                meta = *found;
+                if (!foundFile) {
+                    std::cerr << "file " << filePath << " is not owned by any package\n";
+                    queryExitCode = 1;
+                }
+            }
+        } else {
+            if (arguments.empty()) {
+                std::cerr << "error: no packages given for query\n";
+                return 1;
             }
 
+            for (const auto& target : arguments) {
+                if (optPackage) {
+                    RpmPackage pkg;
+                    if (!pkg.parse(target)) {
+                        queryExitCode = 1;
+                        continue;
+                    }
+                    targetsToQuery.push_back(pkg.meta);
+                } else {
+                    RpmMetadata* found = db.find(target);
+                    if (!found) {
+                        std::cerr << "package " << target << " is not installed\n";
+                        queryExitCode = 1;
+                        continue;
+                    }
+                    targetsToQuery.push_back(*found);
+                }
+            }
+        }
+
+        for (const auto& meta : targetsToQuery) {
             if (optInfo) {
                 std::cout << std::left << std::setw(15) << "Name" << ": " << meta.name << "\n";
                 std::cout << std::left << std::setw(15) << "Version" << ": " << meta.version << "\n";
@@ -207,9 +291,11 @@ int runRpm(int argc, char* argv[]) {
                 std::cout << std::left << std::setw(15) << "License" << ": " << meta.license << "\n";
                 std::cout << std::left << std::setw(15) << "Summary" << ": " << meta.summary << "\n";
                 std::cout << std::left << std::setw(15) << "Description" << ":\n" << meta.description << "\n";
-            } else if (optList) {
+            }
+            if (optList) {
                 for (const auto& f : meta.files) std::cout << f.path << "\n";
-            } else {
+            }
+            if (!optInfo && !optList) {
                 std::cout << meta.name << "-" << meta.version << "-" << meta.release << "." << meta.arch << "\n";
             }
         }
@@ -336,8 +422,9 @@ int runRpm(int argc, char* argv[]) {
                     db.unlock();
                     return 1;
                 }
+                std::string canonicalName = found->name;
 
-                if (!optNoDeps && !DependencyEngine::checkEraseDependencies(pkgName, db)) {
+                if (!optNoDeps && !DependencyEngine::checkEraseDependencies(canonicalName, db)) {
                     db.unlock();
                     return 1;
                 }
@@ -355,8 +442,8 @@ int runRpm(int argc, char* argv[]) {
                     ScriptletRunner::execute(found->postUnScript, "postun");
                 }
 
-                db.erase(pkgName);
-                if (optVerbose) std::cout << "Erased: " << pkgName << "\n";
+                db.erase(canonicalName);
+                if (optVerbose) std::cout << "Erased: " << canonicalName << "\n";
             }
         }
         db.unlock();
@@ -369,18 +456,44 @@ int runRpm(int argc, char* argv[]) {
     if (opVerify) {
         db.load();
         int verifyExitCode = 0;
-        std::vector<std::string> targets = arguments;
+        std::vector<std::string> targets;
 
         if (optAll) {
-            targets.clear();
             for (const auto& [name, pkg] : db.all()) {
                 targets.push_back(name);
             }
+        } else if (optFile) {
+            if (arguments.empty()) {
+                std::cerr << "error: no files given for verify\n";
+                return 1;
+            }
+            for (const auto& filePath : arguments) {
+                bool foundFile = false;
+                for (const auto& [name, pkg] : db.all()) {
+                    for (const auto& f : pkg.files) {
+                        if (matchFilePath(f.path, filePath)) {
+                            targets.push_back(pkg.name);
+                            foundFile = true;
+                            break;
+                        }
+                    }
+                    if (foundFile) break;
+                }
+                if (!foundFile) {
+                    std::cerr << "file " << filePath << " is not owned by any package\n";
+                    verifyExitCode = 1;
+                }
+            }
+        } else {
+            targets = arguments;
         }
 
         if (targets.empty()) {
-            std::cerr << "error: no packages given for verify\n";
-            return 1;
+            if (verifyExitCode == 0) {
+                std::cerr << "error: no packages given for verify\n";
+                return 1;
+            }
+            return verifyExitCode;
         }
 
         for (const auto& pkgName : targets) {

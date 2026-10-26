@@ -5,15 +5,16 @@
 #include "jobs.hpp"
 #include "scripting.hpp"
 #include "terminal.hpp"
+#include <conio.h>
 
 const vector<string>& zsh_builtin_command_names() {
     static const vector<string> names = {
         "alias","autoload","bg","bindkey","break","builtin","cd","chdir","clear","cls","command","continue","coproc",
-        "compadd","compdef","compinit","declare","dir","dirs","disown","echo","emulate","eval","exec","exit","export",
-        "false","fc","fg","getopts","help","history","integer","jobs","kill","let","local","logout","nocorrect",
-        "popd","print","printf","pushd","pwd","read","readonly","rehash","repeat","return","select","set","setopt","shift",
-        "source","strftime","sysread","syswrite","test","time","times","trap","true","type","typeset","unalias","unset","unsetopt",
-        "until","wait","whence","which","zle","zmodload","zstyle",".","[","[["
+        "compadd","compdef","compinit","declare","dir","dirs","disable","disown","echo","echotc","echoti","emulate","enable","eval","exec","exit","export",
+        "false","fc","fg","getopts","hash","help","history","integer","jobs","kill","let","limit","local","logout","nocorrect",
+        "popd","print","printf","pushd","pwd","read","readonly","rehash","repeat","return","sched","select","set","setopt","shift",
+        "source","stat","strftime","suspend","sysread","syswrite","test","time","times","trap","true","type","typeset","ulimit","unalias","unlimit","unset","unsetopt",
+        "until","vared","wait","whence","where","which","zle","zmodload","zstyle",".","[","[["
     };
     return names;
 }
@@ -92,11 +93,27 @@ static const char* kZshHelpBuiltinsBody = R"(
   LOOKUP
   which <cmd>                Show path, alias expansion, or function type.
   type <cmd>                 Same as which.
-    whence <cmd>               Compatibility alias for type-style lookup.
-    command <cmd> [args..]     Execute while bypassing alias/function wrappers.
-    builtin <name> [args..]    Invoke a shell builtin directly.
+  whence <cmd>               Compatibility alias for type-style lookup.
+  where <cmd>                List all occurrences of cmd in aliases, builtins, and PATH.
+  command <cmd> [args..]     Execute while bypassing alias/function wrappers.
+  builtin <name> [args..]    Invoke a shell builtin directly.
+  hash [-r] [-d] [name=path] Display, flush, or modify command or directory hash table.
 
-    COMPLETION & EDITOR STATE
+  BUILTIN & OPTION MANAGEMENT
+  disable [-a|-f] [name...]  Disable builtins, aliases (-a), or functions (-f).
+  enable [-a|-f] [name...]   Re-enable builtins, aliases (-a), or functions (-f).
+  limit [-h] [res [val]]     Display or set named resource limits.
+  unlimit [-h] [res...]      Remove resource limits (set to unlimited).
+  ulimit [-a] [-opt [val]]   POSIX/KornShell resource limit query and configuration.
+
+  INTERACTIVE & SCHEDULING
+  vared [-p prompt] <var>    Interactively edit variable or array in-place.
+  suspend [-f]               Suspend shell execution until a key is pressed.
+  sched [+]time <cmd>        Schedule command for deferred execution.
+  stat [flags] <file...>     Display low-level file status attributes.
+  echotc / echoti <cap>      Emit terminal capability control codes.
+
+  COMPLETION & EDITOR STATE
     autoload <function>        Register functions for deferred loading.
     compinit                   Scan fpath/FPATH completion definitions.
     compadd [candidate...]     Return candidates from a completion function.
@@ -278,6 +295,142 @@ EXAMPLES:
   zsh script.zsh
 )";
 
+static const char* kZshHelpWhereBody = R"(
+  where <name>...
+    Search for all occurrences of each <name> in resolution order:
+      1. Shell aliases
+      2. Shell functions
+      3. Shell built-in commands
+      4. Executables found across all directories in PATH
+
+  Examples:
+    where ls
+    where cd git
+)";
+
+static const char* kZshHelpHashBody = R"(
+  hash [-r] [-v] [-d] [name[=path]...]
+    Inspect, populate, or clear the shell command or directory hash table.
+
+  Options:
+    -r           Flush the hash table (rehash).
+    -v           Verbose progress output.
+    -d           Operate on the named-directory hash table (~name).
+    name=path    Explicitly associate name with target path.
+    name         Find and hash name from PATH.
+
+  Examples:
+    hash -r                  # Flush command hash table
+    hash git=C:/bin/git.exe  # Map command git
+    hash -d proj=C:/Work     # Map named directory ~proj
+)";
+
+static const char* kZshHelpDisableEnableBody = R"(
+  disable [-a|-f] [name...]
+  enable  [-a|-f] [name...]
+    Disable or re-enable shell built-in commands, aliases, or functions.
+
+  Options:
+    -a           Operate on aliases.
+    -f           Operate on functions.
+    (default)    Operate on built-in commands.
+
+  Examples:
+    disable echo             # Disable built-in echo (falls through to external echo.exe)
+    enable echo              # Re-enable built-in echo
+    disable -a ll            # Disable alias ll
+    disable                  # List all disabled built-ins
+)";
+
+static const char* kZshHelpLimitsBody = R"(
+  limit [-h] [resource [value]]
+  unlimit [-h] [resource...]
+  ulimit [-a] [-HS] [-c|-d|-f|-l|-m|-n|-s|-t|-u|-v] [value]
+    Display or configure process and job resource limits.
+
+  Resources (limit/unlimit):
+    cputime, filesize, datasize, stacksize, coredumpsize,
+    memoryuse, maxproc, descriptors, memorylocked, addressspace.
+
+  Options (ulimit):
+    -a           Display all resource limits.
+    -n [N]       File descriptors limit.
+    -u [N]       Maximum processes limit.
+    -t [N]       CPU time limit (seconds).
+    -f [N]       File size limit (blocks).
+
+  Examples:
+    limit                    # Display all named resource limits
+    limit descriptors 4096   # Set open file descriptors limit
+    unlimit cputime          # Remove CPU time restriction
+    ulimit -a                # Display POSIX resource limits
+)";
+
+static const char* kZshHelpVaredBody = R"(
+  vared [-p prompt] [-c] <var>
+    Interactively edit a variable or array value in-place using the terminal editor.
+
+  Options:
+    -p prompt    Display a custom prompt before editing.
+    -c           Create variable if it does not already exist.
+
+  Examples:
+    vared PATH
+    vared -p "Edit compiler: " CC
+)";
+
+static const char* kZshHelpSchedBody = R"(
+  sched [+]time command...
+  sched -<item>
+  sched
+    Schedule shell commands for deferred execution.
+
+  Usage:
+    sched                List all scheduled events.
+    sched +seconds cmd   Run cmd after a delay of seconds.
+    sched +hh:mm cmd     Run cmd after hh hours and mm minutes.
+    sched hh:mm cmd      Run cmd at specified clock time.
+    sched -N             Cancel scheduled event number N.
+
+  Examples:
+    sched +60 print "1 minute has elapsed"
+    sched +01:30 echo "Meeting time"
+    sched -1
+)";
+
+static const char* kZshHelpStatBody = R"(
+  stat [-s] [-L] [-l] [-A array] [+field] files...
+    Display low-level file status and metadata without external utilities.
+
+  Options:
+    -s           Silent test mode (exit status 0 if file exists, 1 otherwise).
+    -L           Follow symbolic links and reparse points.
+    -l           Display long multi-line labeled attribute list.
+    -A assoc     Save file attributes into named associative array.
+    +field       Print single field: size, mtime, atime, ctime, mode, type, blocks.
+
+  Examples:
+    stat README.md
+    stat +size config.json
+    stat -A info build.log && echo "Size: $info[size]"
+)";
+
+static const char* kZshHelpEchotcBody = R"(
+  echotc <cap> [args...]
+  echoti <cap> [args...]
+    Emit terminal capabilities and control sequences.
+
+  Capabilities:
+    clear (cl), home (ho), up (cuu1), down (cud1), right (cuf1), left (cub1),
+    bold (md), dim (mh), smul (us), rmul (ue), rev (mr), sgr0 (me),
+    ed (cd), el (ce), bell (bl), lines (li), cols (co), cup <row> <col>.
+
+  Examples:
+    echotc bold; print "Bold text"; echotc sgr0
+    echotc clear
+    echotc cols
+)";
+
 static const char* kZshHelpManualSeparator = "========================================================================\n";
 static const char* kZshHelpManualTitle = "CrossShellZSH v3.7.16\n";
 static const char* kZshHelpManualSubtitle = "General Help\n";
@@ -288,7 +441,19 @@ static bool print_zsh_help_topic(const string& topic) {
         {"test", &COLOR_BR_CYAN, "\n=== TEST / [ EXPRESSIONS ===", kZshHelpTestBody},
         {"arrays", &COLOR_BR_YELLOW, "\n=== ZSH ARRAYS & VARIABLES ===", kZshHelpArraysBody},
         {"globbing", &COLOR_BR_CYAN, "\n=== EXTENDED GLOBBING & QUALIFIERS ===", kZshHelpGlobbingBody},
-        {"piping", &COLOR_BR_BLUE, "\n=== PIPELINES, REDIRECTION & JOBS ===", kZshHelpPipingBody}
+        {"piping", &COLOR_BR_BLUE, "\n=== PIPELINES, REDIRECTION & JOBS ===", kZshHelpPipingBody},
+        {"where", &COLOR_BR_GREEN, "\n=== WHERE COMMAND ===", kZshHelpWhereBody},
+        {"hash", &COLOR_BR_GREEN, "\n=== HASH COMMAND ===", kZshHelpHashBody},
+        {"disable", &COLOR_BR_GREEN, "\n=== DISABLE / ENABLE COMMANDS ===", kZshHelpDisableEnableBody},
+        {"enable", &COLOR_BR_GREEN, "\n=== DISABLE / ENABLE COMMANDS ===", kZshHelpDisableEnableBody},
+        {"limit", &COLOR_BR_GREEN, "\n=== LIMIT / ULIMIT COMMANDS ===", kZshHelpLimitsBody},
+        {"ulimit", &COLOR_BR_GREEN, "\n=== LIMIT / ULIMIT COMMANDS ===", kZshHelpLimitsBody},
+        {"unlimit", &COLOR_BR_GREEN, "\n=== LIMIT / ULIMIT COMMANDS ===", kZshHelpLimitsBody},
+        {"vared", &COLOR_BR_GREEN, "\n=== VARED COMMAND ===", kZshHelpVaredBody},
+        {"sched", &COLOR_BR_GREEN, "\n=== SCHED COMMAND ===", kZshHelpSchedBody},
+        {"stat", &COLOR_BR_GREEN, "\n=== STAT COMMAND ===", kZshHelpStatBody},
+        {"echotc", &COLOR_BR_GREEN, "\n=== ECHOTC / ECHOTI COMMANDS ===", kZshHelpEchotcBody},
+        {"echoti", &COLOR_BR_GREEN, "\n=== ECHOTC / ECHOTI COMMANDS ===", kZshHelpEchotcBody}
     };
 
     for (const auto& entry : topics) {
@@ -725,8 +890,8 @@ static int builtin_coproc(const vector<string>& args) {
     startup.hStdOutput = child_output;
     startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION process{};
-    BOOL created = CreateProcessW(nullptr, wide_command.data(), nullptr, nullptr, TRUE, 0,
-                                  nullptr, nullptr, &startup, &process);
+    BOOL created = create_process_with_handle_list(string_to_wstring(executable), std::move(wide_command),
+                                                   startup, 0, process) ? TRUE : FALSE;
     close_handle_if_valid(child_input);
     close_handle_if_valid(child_output);
     if (!created) {
@@ -1215,6 +1380,24 @@ static int builtin_emulate(const vector<string>& args) {
     return 0;
 }
 
+void process_scheduled_events() {
+    if (g_env.scheduled_events.empty()) return;
+    time_t now = time(nullptr);
+    vector<pair<time_t, string>> remaining;
+    vector<string> to_run;
+    for (const auto& ev : g_env.scheduled_events) {
+        if (ev.first <= now) {
+            to_run.push_back(ev.second);
+        } else {
+            remaining.push_back(ev);
+        }
+    }
+    g_env.scheduled_events = std::move(remaining);
+    for (const auto& c : to_run) {
+        execute_command_line(c);
+    }
+}
+
 int dispatch_command(vector<string> args) {
     if (args.empty()) return 0;
 
@@ -1368,7 +1551,7 @@ int dispatch_command(vector<string> args) {
         return 0;
     }
 
-    if (g_env.aliases.count(args[0])) {
+    if (g_env.aliases.count(args[0]) && !g_env.disabled_aliases.count(args[0])) {
         const string& alias_val = g_env.aliases[args[0]];
         if (contains_dangerous_alias_tokens(alias_val)) {
             cerr << "zsh: unsafe alias definition blocked: " << args[0] << "\n";
@@ -1404,15 +1587,15 @@ int dispatch_command(vector<string> args) {
             cout << text << "\n";
             ++matches;
         };
-        if (!path_only && g_env.aliases.count(name)) {
+        if (!path_only && g_env.aliases.count(name) && !g_env.disabled_aliases.count(name)) {
             emit(kind_only ? name + ": alias" : name + ": aliased to " + g_env.aliases[name]);
             if (!all) return 0;
         }
-        if (!path_only && g_env.functions.count(name)) {
+        if (!path_only && g_env.functions.count(name) && !g_env.disabled_functions.count(name)) {
             emit(kind_only ? name + ": function" : name + " is a shell function");
             if (!all) return 0;
         }
-        if (!path_only && is_zsh_builtin_command(name)) {
+        if (!path_only && is_zsh_builtin_command(name) && !g_env.disabled_builtins.count(name)) {
             emit(kind_only ? name + ": builtin" : name + " is a shell builtin");
             if (!all) return 0;
         }
@@ -1439,9 +1622,9 @@ int dispatch_command(vector<string> args) {
                 int rc = 0;
                 for (size_t i = 1; i < pass.size(); ++i) {
                     const string& name = pass[i];
-                    if (g_env.aliases.count(name)) cout << name << " is an alias for " << g_env.aliases[name] << "\n";
-                    else if (g_env.functions.count(name)) cout << name << " is a shell function\n";
-                    else if (is_zsh_builtin_command(name)) cout << name << " is a shell builtin\n";
+                    if (g_env.aliases.count(name) && !g_env.disabled_aliases.count(name)) cout << name << " is an alias for " << g_env.aliases[name] << "\n";
+                    else if (g_env.functions.count(name) && !g_env.disabled_functions.count(name)) cout << name << " is a shell function\n";
+                    else if (is_zsh_builtin_command(name) && !g_env.disabled_builtins.count(name)) cout << name << " is a shell builtin\n";
                     else {
                         string path = path_for_command(name);
                         if (!path.empty()) cout << name << " is " << path << "\n";
@@ -1520,7 +1703,7 @@ int dispatch_command(vector<string> args) {
         return rc;
     }
 
-    if (g_env.functions.count(cmd)) {
+    if (g_env.functions.count(cmd) && !g_env.disabled_functions.count(cmd)) {
         if (g_function_local_scopes.size() >= static_cast<size_t>(kMaxExecRecursionDepth)) {
             cerr << "zsh: maximum function recursion depth (" << kMaxExecRecursionDepth << ") exceeded\n";
             g_env.last_exit_code = 1;
@@ -1556,6 +1739,8 @@ int dispatch_command(vector<string> args) {
         return rc;
     }
 
+    bool builtin_disabled = (is_zsh_builtin_command(cmd) && g_env.disabled_builtins.count(cmd) != 0);
+    if (!builtin_disabled) {
     if (cmd == "cd" || cmd == "chdir")        return builtin_cd(args);
     if (cmd == "echo")                         return builtin_echo(args);
     if (cmd == "coproc")                       return builtin_coproc(args);
@@ -1867,8 +2052,14 @@ int dispatch_command(vector<string> args) {
             cmdline += " " + a;
         }
         wstring wcmd = string_to_wstring(cmdline);
+        wstring application_name = system_cmd_exe_path();
+        if (application_name.empty()) return 1;
         PROCESS_INFORMATION pi{}; STARTUPINFOW si{}; si.cb = sizeof(si);
-        if (!CreateProcessW(NULL, &wcmd[0], NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) return 1;
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        if (!create_process_with_handle_list(application_name, std::move(wcmd), si, 0, pi)) return 1;
         WaitForSingleObject(pi.hProcess, INFINITE);
         DWORD ec = 0;
         if (!GetExitCodeProcess(pi.hProcess, &ec)) ec = 1;
@@ -2435,6 +2626,594 @@ int dispatch_command(vector<string> args) {
         g_env.vars["__command_path_epoch"] = to_string(epoch + 1);
         return 0;
     }
+
+    if (cmd == "where") {
+        if (args.size() == 1) return 0;
+        int rc = 0;
+        for (size_t i = 1; i < args.size(); ++i) {
+            const string& target = args[i];
+            int matches = 0;
+            if (g_env.aliases.count(target) && !g_env.disabled_aliases.count(target)) {
+                cout << target << ": aliased to " << g_env.aliases[target] << "\n";
+                matches++;
+            }
+            if (g_env.functions.count(target) && !g_env.disabled_functions.count(target)) {
+                cout << target << " is a shell function\n";
+                matches++;
+            }
+            if (is_zsh_builtin_command(target) && !g_env.disabled_builtins.count(target)) {
+                cout << target << " is a shell builtin\n";
+                matches++;
+            }
+            vector<string> paths = find_all_executables_in_path(target);
+            for (const auto& p : paths) {
+                cout << normalize_path_to_unix(p) << "\n";
+                matches++;
+            }
+            if (matches == 0) {
+                cout << target << " not found\n";
+                rc = 1;
+            }
+        }
+        return rc;
+    }
+
+    if (cmd == "hash") {
+        bool flush = false;
+        bool verbose = false;
+        bool dir_mode = false;
+        size_t start = 1;
+        while (start < args.size() && !args[start].empty() && args[start][0] == '-') {
+            if (args[start] == "--") { ++start; break; }
+            for (size_t c = 1; c < args[start].size(); ++c) {
+                if (args[start][c] == 'r') flush = true;
+                else if (args[start][c] == 'v') verbose = true;
+                else if (args[start][c] == 'd') dir_mode = true;
+            }
+            ++start;
+        }
+        if (flush) {
+            if (dir_mode) {
+                g_env.named_directories.clear();
+            } else {
+                g_env.command_hash_table.clear();
+                unsigned long long epoch = 0;
+                if (g_env.vars.count("__command_path_epoch")) {
+                    try { epoch = stoull(g_env.vars["__command_path_epoch"]); } catch (...) {}
+                }
+                g_env.vars["__command_path_epoch"] = to_string(epoch + 1);
+            }
+            if (verbose) cout << (dir_mode ? "named directories hash table cleared\n" : "command hash table cleared\n");
+            return 0;
+        }
+        if (start >= args.size()) {
+            if (dir_mode) {
+                for (const auto& [name, path] : g_env.named_directories) {
+                    cout << name << "=" << normalize_path_to_unix(path) << "\n";
+                }
+            } else {
+                for (const auto& [name, path] : g_env.command_hash_table) {
+                    cout << name << "=" << normalize_path_to_unix(path) << "\n";
+                }
+            }
+            return 0;
+        }
+        int rc = 0;
+        for (size_t i = start; i < args.size(); ++i) {
+            const string& item = args[i];
+            size_t eq = item.find('=');
+            if (eq != string::npos) {
+                string name = item.substr(0, eq);
+                string path = item.substr(eq + 1);
+                if (dir_mode) {
+                    g_env.named_directories[name] = normalize_path_to_win(path);
+                } else {
+                    g_env.command_hash_table[name] = normalize_path_to_win(path);
+                }
+            } else {
+                if (dir_mode) {
+                    if (g_env.named_directories.count(item)) {
+                        cout << item << "=" << normalize_path_to_unix(g_env.named_directories[item]) << "\n";
+                    } else {
+                        cout << "hash: named directory not found: " << item << "\n";
+                        rc = 1;
+                    }
+                } else {
+                    string found = find_executable_in_path(item);
+                    if (!found.empty()) {
+                        g_env.command_hash_table[item] = found;
+                    } else {
+                        cout << "hash: not found: " << item << "\n";
+                        rc = 1;
+                    }
+                }
+            }
+        }
+        return rc;
+    }
+
+    if (cmd == "disable") {
+        bool mode_alias = false;
+        bool mode_func = false;
+        size_t start = 1;
+        while (start < args.size() && !args[start].empty() && args[start][0] == '-') {
+            if (args[start] == "--") { ++start; break; }
+            for (size_t c = 1; c < args[start].size(); ++c) {
+                if (args[start][c] == 'a') mode_alias = true;
+                else if (args[start][c] == 'f') mode_func = true;
+            }
+            ++start;
+        }
+        if (start >= args.size()) {
+            if (mode_alias) {
+                for (const auto& a : g_env.disabled_aliases) cout << a << "\n";
+            } else if (mode_func) {
+                for (const auto& f : g_env.disabled_functions) cout << f << "\n";
+            } else {
+                for (const auto& b : g_env.disabled_builtins) cout << b << "\n";
+            }
+            return 0;
+        }
+        for (size_t i = start; i < args.size(); ++i) {
+            if (mode_alias) g_env.disabled_aliases.insert(args[i]);
+            else if (mode_func) g_env.disabled_functions.insert(args[i]);
+            else g_env.disabled_builtins.insert(args[i]);
+        }
+        return 0;
+    }
+
+    if (cmd == "enable") {
+        bool mode_alias = false;
+        bool mode_func = false;
+        size_t start = 1;
+        while (start < args.size() && !args[start].empty() && args[start][0] == '-') {
+            if (args[start] == "--") { ++start; break; }
+            for (size_t c = 1; c < args[start].size(); ++c) {
+                if (args[start][c] == 'a') mode_alias = true;
+                else if (args[start][c] == 'f') mode_func = true;
+            }
+            ++start;
+        }
+        if (start >= args.size()) {
+            if (mode_alias) {
+                for (const auto& [name, _] : g_env.aliases) {
+                    if (!g_env.disabled_aliases.count(name)) cout << name << "\n";
+                }
+            } else if (mode_func) {
+                for (const auto& [name, _] : g_env.functions) {
+                    if (!g_env.disabled_functions.count(name)) cout << name << "\n";
+                }
+            } else {
+                for (const auto& b : zsh_builtin_command_names()) {
+                    if (!g_env.disabled_builtins.count(b)) cout << b << "\n";
+                }
+            }
+            return 0;
+        }
+        for (size_t i = start; i < args.size(); ++i) {
+            if (mode_alias) g_env.disabled_aliases.erase(args[i]);
+            else if (mode_func) g_env.disabled_functions.erase(args[i]);
+            else g_env.disabled_builtins.erase(args[i]);
+        }
+        return 0;
+    }
+
+    if (cmd == "ulimit") {
+        static const map<char, string> opt_to_res = {
+            {'t', "cputime"},
+            {'f', "filesize"},
+            {'d', "datasize"},
+            {'s', "stacksize"},
+            {'c', "coredumpsize"},
+            {'m', "memoryuse"},
+            {'l', "memorylocked"},
+            {'u', "maxproc"},
+            {'n', "descriptors"},
+            {'v', "addressspace"}
+        };
+        bool show_all = false;
+        char opt = 'f';
+        string new_val;
+        size_t start = 1;
+        while (start < args.size() && !args[start].empty() && args[start][0] == '-') {
+            if (args[start] == "--") { ++start; break; }
+            for (size_t c = 1; c < args[start].size(); ++c) {
+                char flag = args[start][c];
+                if (flag == 'a') show_all = true;
+                else if (flag == 'H' || flag == 'S') { /* soft/hard limit indicator */ }
+                else if (opt_to_res.count(flag)) opt = flag;
+                else {
+                    cerr << "ulimit: bad option: -" << flag << "\n";
+                    return 1;
+                }
+            }
+            ++start;
+        }
+        if (show_all) {
+            cout << "-t: cpu time (seconds)         " << g_env.resource_limits["cputime"] << "\n";
+            cout << "-f: file size (blocks)         " << g_env.resource_limits["filesize"] << "\n";
+            cout << "-d: data seg size (kbytes)     " << g_env.resource_limits["datasize"] << "\n";
+            cout << "-s: stack size (kbytes)        " << g_env.resource_limits["stacksize"] << "\n";
+            cout << "-c: core file size (blocks)    " << g_env.resource_limits["coredumpsize"] << "\n";
+            cout << "-m: resident set size (kbytes) " << g_env.resource_limits["memoryuse"] << "\n";
+            cout << "-l: locked-in-memory size (kb) " << g_env.resource_limits["memorylocked"] << "\n";
+            cout << "-u: processes                  " << g_env.resource_limits["maxproc"] << "\n";
+            cout << "-n: file descriptors           " << g_env.resource_limits["descriptors"] << "\n";
+            cout << "-v: address space (kbytes)     " << g_env.resource_limits["addressspace"] << "\n";
+            return 0;
+        }
+        if (start < args.size()) {
+            new_val = args[start];
+            g_env.resource_limits[opt_to_res.at(opt)] = new_val;
+            return 0;
+        }
+        cout << g_env.resource_limits[opt_to_res.at(opt)] << "\n";
+        return 0;
+    }
+
+    if (cmd == "limit") {
+        if (args.size() == 1) {
+            for (const auto& [res, val] : g_env.resource_limits) {
+                cout << left << setw(16) << res << " " << val << "\n";
+            }
+            return 0;
+        }
+        string res = args[1];
+        if (args.size() == 2) {
+            if (g_env.resource_limits.count(res)) {
+                cout << g_env.resource_limits[res] << "\n";
+                return 0;
+            }
+            cerr << "limit: no such resource: " << res << "\n";
+            return 1;
+        }
+        if (!g_env.resource_limits.count(res)) {
+            cerr << "limit: no such resource: " << res << "\n";
+            return 1;
+        }
+        g_env.resource_limits[res] = args[2];
+        return 0;
+    }
+
+    if (cmd == "unlimit") {
+        if (args.size() == 1) {
+            for (auto& [res, val] : g_env.resource_limits) {
+                val = "unlimited";
+            }
+            return 0;
+        }
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (g_env.resource_limits.count(args[i])) {
+                g_env.resource_limits[args[i]] = "unlimited";
+            } else {
+                cerr << "unlimit: no such resource: " << args[i] << "\n";
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    if (cmd == "vared") {
+        string prompt = "";
+        bool create = false;
+        string target_var;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-p" && i + 1 < args.size()) {
+                prompt = args[++i];
+            } else if (args[i] == "-c") {
+                create = true;
+            } else if (args[i] == "-h" || args[i] == "-r") {
+                // compatibility flags
+            } else if (!args[i].empty() && args[i][0] != '-') {
+                target_var = args[i];
+            }
+        }
+        if (target_var.empty()) {
+            cerr << "vared: variable name required\n";
+            return 1;
+        }
+        if (g_env.readonly_vars.count(target_var)) {
+            cerr << "zsh: read-only variable: " << target_var << "\n";
+            return 1;
+        }
+        string init_val = "";
+        if (g_env.vars.count(target_var)) {
+            init_val = g_env.vars[target_var];
+        } else if (g_env.indexed_arrays.count(target_var)) {
+            init_val = "(";
+            for (size_t j = 0; j < g_env.indexed_arrays[target_var].size(); ++j) {
+                if (j > 0) init_val += " ";
+                init_val += g_env.indexed_arrays[target_var][j];
+            }
+            init_val += ")";
+        } else if (!create) {
+            cerr << "vared: no such variable: " << target_var << "\n";
+            return 1;
+        }
+        if (!prompt.empty()) {
+            cout << prompt;
+            cout.flush();
+        }
+        string edited = read_line_interactive(init_val);
+        g_env.vars[target_var] = edited;
+        if (getenv(target_var.c_str())) {
+            SetEnvironmentVariableA(target_var.c_str(), edited.c_str());
+        }
+        return 0;
+    }
+
+    if (cmd == "suspend") {
+        bool force = false;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-f") force = true;
+        }
+        if (g_login_shell && !force) {
+            cerr << "zsh: can't suspend login shell\n";
+            return 1;
+        }
+        cout << "zsh: suspended. Press any key to resume...";
+        cout.flush();
+        (void)_getch();
+        cout << "\n";
+        return 0;
+    }
+
+    if (cmd == "sched") {
+        if (args.size() == 1) {
+            for (size_t i = 0; i < g_env.scheduled_events.size(); ++i) {
+                time_t t = g_env.scheduled_events[i].first;
+                tm tm_buf{};
+                localtime_s(&tm_buf, &t);
+                char t_str[32] = {};
+                strftime(t_str, sizeof(t_str), "%H:%M:%S", &tm_buf);
+                cout << setw(3) << (i + 1) << "  " << t_str << "  " << g_env.scheduled_events[i].second << "\n";
+            }
+            return 0;
+        }
+        if (args[1][0] == '-' && args[1].size() > 1 && isdigit((unsigned char)args[1][1])) {
+            try {
+                int idx = stoi(args[1].substr(1));
+                if (idx >= 1 && idx <= static_cast<int>(g_env.scheduled_events.size())) {
+                    g_env.scheduled_events.erase(g_env.scheduled_events.begin() + (idx - 1));
+                    return 0;
+                }
+            } catch (...) {}
+            cerr << "sched: not that many entries\n";
+            return 1;
+        }
+        if (args.size() < 3) {
+            cerr << "sched: usage: sched [+]hh:mm command or sched +seconds command\n";
+            return 1;
+        }
+        string time_spec = args[1];
+        time_t now = time(nullptr);
+        time_t target_time = now;
+        if (time_spec[0] == '+') {
+            string delta = time_spec.substr(1);
+            size_t colon = delta.find(':');
+            if (colon != string::npos) {
+                int hours = 0, mins = 0, secs = 0;
+                try {
+                    hours = stoi(delta.substr(0, colon));
+                    string rem = delta.substr(colon + 1);
+                    size_t colon2 = rem.find(':');
+                    if (colon2 != string::npos) {
+                        mins = stoi(rem.substr(0, colon2));
+                        secs = stoi(rem.substr(colon2 + 1));
+                    } else {
+                        mins = stoi(rem);
+                    }
+                } catch (...) {}
+                target_time = now + hours * 3600 + mins * 60 + secs;
+            } else {
+                try { target_time = now + stoi(delta); } catch (...) {}
+            }
+        } else {
+            int hours = 0, mins = 0, secs = 0;
+            size_t colon = time_spec.find(':');
+            if (colon != string::npos) {
+                try {
+                    hours = stoi(time_spec.substr(0, colon));
+                    string rem = time_spec.substr(colon + 1);
+                    size_t colon2 = rem.find(':');
+                    if (colon2 != string::npos) {
+                        mins = stoi(rem.substr(0, colon2));
+                        secs = stoi(rem.substr(colon2 + 1));
+                    } else {
+                        mins = stoi(rem);
+                    }
+                } catch (...) {}
+                tm tm_now{};
+                localtime_s(&tm_now, &now);
+                tm_now.tm_hour = hours;
+                tm_now.tm_min = mins;
+                tm_now.tm_sec = secs;
+                target_time = mktime(&tm_now);
+                if (target_time <= now) target_time += 86400;
+            }
+        }
+        string sched_cmd;
+        for (size_t i = 2; i < args.size(); ++i) {
+            if (!sched_cmd.empty()) sched_cmd += " ";
+            sched_cmd += args[i];
+        }
+        g_env.scheduled_events.push_back({target_time, sched_cmd});
+        sort(g_env.scheduled_events.begin(), g_env.scheduled_events.end(),
+             [](const auto& a, const auto& b) { return a.first < b.first; });
+        return 0;
+    }
+
+    if (cmd == "stat") {
+        string array_name;
+        string single_field;
+        bool silent = false;
+        bool long_format = false;
+        size_t start = 1;
+        while (start < args.size() && !args[start].empty()) {
+            if (args[start] == "-s") silent = true;
+            else if (args[start] == "-l") long_format = true;
+            else if (args[start] == "-A" && start + 1 < args.size()) { array_name = args[++start]; }
+            else if (args[start][0] == '+') { single_field = args[start].substr(1); }
+            else if (args[start] == "--") { ++start; break; }
+            else if (args[start][0] == '-') { /* ignore flags */ }
+            else break;
+            ++start;
+        }
+        if (start >= args.size()) {
+            if (silent) return 1;
+            cerr << "stat: no files given\n";
+            return 1;
+        }
+        int rc = 0;
+        for (size_t i = start; i < args.size(); ++i) {
+            string p_win = normalize_path_to_win(args[i]);
+            wstring wp = string_to_wstring(p_win);
+            WIN32_FILE_ATTRIBUTE_DATA fad{};
+            if (!GetFileAttributesExW(wp.c_str(), GetFileExInfoStandard, &fad)) {
+                if (!silent) cerr << "stat: " << args[i] << ": no such file or directory\n";
+                rc = 1;
+                continue;
+            }
+            if (silent) continue;
+
+            ULARGE_INTEGER sz; sz.LowPart = fad.nFileSizeLow; sz.HighPart = fad.nFileSizeHigh;
+            auto to_time_t = [](const FILETIME& ft) -> time_t {
+                ULARGE_INTEGER val; val.LowPart = ft.dwLowDateTime; val.HighPart = ft.dwHighDateTime;
+                return (time_t)((val.QuadPart - 116444736000000000ULL) / 10000000ULL);
+            };
+            time_t mtime = to_time_t(fad.ftLastWriteTime);
+            time_t atime = to_time_t(fad.ftLastAccessTime);
+            time_t ctime = to_time_t(fad.ftCreationTime);
+            bool is_dir = (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            bool is_link = (fad.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+            string type_str = is_link ? "link" : (is_dir ? "dir" : "file");
+            string mode_str = is_dir ? "0755" : ((fad.dwFileAttributes & FILE_ATTRIBUTE_READONLY) ? "0444" : "0644");
+
+            map<string, string> fields;
+            fields["device"] = "0";
+            fields["inode"] = "0";
+            fields["mode"] = mode_str;
+            fields["nlink"] = "1";
+            fields["uid"] = "1000";
+            fields["gid"] = "1000";
+            fields["rdev"] = "0";
+            fields["size"] = to_string(sz.QuadPart);
+            fields["atime"] = to_string(atime);
+            fields["mtime"] = to_string(mtime);
+            fields["ctime"] = to_string(ctime);
+            fields["blksize"] = "4096";
+            fields["blocks"] = to_string((sz.QuadPart + 511) / 512);
+            fields["type"] = type_str;
+
+            if (!array_name.empty()) {
+                g_env.assoc_arrays[array_name] = fields;
+                continue;
+            }
+            if (!single_field.empty()) {
+                if (fields.count(single_field)) {
+                    cout << fields[single_field] << "\n";
+                } else {
+                    cerr << "stat: no such element: " << single_field << "\n";
+                    rc = 1;
+                }
+                continue;
+            }
+            if (long_format) {
+                cout << left << setw(10) << "device" << fields["device"] << "\n";
+                cout << left << setw(10) << "inode" << fields["inode"] << "\n";
+                cout << left << setw(10) << "mode" << fields["mode"] << "\n";
+                cout << left << setw(10) << "nlink" << fields["nlink"] << "\n";
+                cout << left << setw(10) << "uid" << fields["uid"] << "\n";
+                cout << left << setw(10) << "gid" << fields["gid"] << "\n";
+                cout << left << setw(10) << "rdev" << fields["rdev"] << "\n";
+                cout << left << setw(10) << "size" << fields["size"] << "\n";
+                cout << left << setw(10) << "atime" << fields["atime"] << "\n";
+                cout << left << setw(10) << "mtime" << fields["mtime"] << "\n";
+                cout << left << setw(10) << "ctime" << fields["ctime"] << "\n";
+                cout << left << setw(10) << "blksize" << fields["blksize"] << "\n";
+                cout << left << setw(10) << "blocks" << fields["blocks"] << "\n";
+                cout << left << setw(10) << "type" << fields["type"] << "\n";
+            } else {
+                cout << args[i] << " " << sz.QuadPart << " " << mode_str << " " << mtime << "\n";
+            }
+        }
+        return rc;
+    }
+
+    if (cmd == "echotc" || cmd == "echoti") {
+        if (args.size() < 2) {
+            cerr << cmd << ": capability name required\n";
+            return 1;
+        }
+        string cap = args[1];
+        static const map<string, string> cap_to_seq = {
+            {"clear", "\033[2J\033[H"},
+            {"cl",    "\033[2J\033[H"},
+            {"home",  "\033[H"},
+            {"ho",    "\033[H"},
+            {"up",    "\033[A"},
+            {"cuu1",  "\033[A"},
+            {"down",  "\033[B"},
+            {"cud1",  "\033[B"},
+            {"right", "\033[C"},
+            {"cuf1",  "\033[C"},
+            {"left",  "\033[D"},
+            {"cub1",  "\033[D"},
+            {"bold",  "\033[1m"},
+            {"md",    "\033[1m"},
+            {"dim",   "\033[2m"},
+            {"mh",    "\033[2m"},
+            {"smul",  "\033[4m"},
+            {"us",    "\033[4m"},
+            {"rmul",  "\033[24m"},
+            {"ue",    "\033[24m"},
+            {"rev",   "\033[7m"},
+            {"mr",    "\033[7m"},
+            {"smso",  "\033[7m"},
+            {"so",    "\033[7m"},
+            {"rmso",  "\033[27m"},
+            {"se",    "\033[27m"},
+            {"sgr0",  "\033[0m"},
+            {"me",    "\033[0m"},
+            {"ed",    "\033[J"},
+            {"cd",    "\033[J"},
+            {"el",    "\033[K"},
+            {"ce",    "\033[K"},
+            {"bell",  "\a"},
+            {"bl",    "\a"}
+        };
+        if (cap == "lines" || cap == "li") {
+            CONSOLE_SCREEN_BUFFER_INFO csbi{};
+            int lines = 24;
+            if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+                lines = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+            }
+            cout << lines << "\n";
+            return 0;
+        }
+        if (cap == "cols" || cap == "co") {
+            CONSOLE_SCREEN_BUFFER_INFO csbi{};
+            int cols = 80;
+            if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+                cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+            }
+            cout << cols << "\n";
+            return 0;
+        }
+        if (cap == "cup" && args.size() >= 4) {
+            cout << "\033[" << args[2] << ";" << args[3] << "H";
+            cout.flush();
+            return 0;
+        }
+        if (cap_to_seq.count(cap)) {
+            cout << cap_to_seq.at(cap);
+            cout.flush();
+            return 0;
+        }
+        cerr << cmd << ": no such capability: " << cap << "\n";
+        return 1;
+    }
+    } // end if (!builtin_disabled)
 
     error_code _autocd_ec;
     string _win_cmd = normalize_path_to_win(cmd);

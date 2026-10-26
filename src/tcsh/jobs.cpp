@@ -22,14 +22,22 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
 void TcshEngine::updateJobs() {
     for (auto& job : jobList) {
         if (job.isRunning && job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) {
-            DWORD code = 0;
-            if (GetExitCodeProcess(job.hProcess, &code) && code != STILL_ACTIVE) {
+            bool all_processes_finished = true;
+            std::vector<HANDLE> process_handles = job.stageProcesses;
+            process_handles.push_back(job.hProcess);
+            for (HANDLE process_handle : process_handles) {
+                DWORD code = 0;
+                if (!GetExitCodeProcess(process_handle, &code) || code == STILL_ACTIVE) {
+                    all_processes_finished = false;
+                    break;
+                }
+            }
+            if (all_processes_finished) {
                 job.isRunning = false;
                 if (notifyJobs) {
                     std::cout << "\n[" << job.id << "] Done\t" << job.command << "\n";
                 }
-                if (job.hProcess) { CloseHandle(job.hProcess); job.hProcess = NULL; }
-                if (job.hJob) { CloseHandle(job.hJob); job.hJob = NULL; }
+                close_job_handles(job);
             }
         }
     }
@@ -44,6 +52,35 @@ void TcshEngine::updateJobs() {
 void TcshEngine::executePipeline(const ParsedPipeline& pipeline) {
     ScopedHandle hInput;
     SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+    std::vector<ScopedHandle> pipelineProcesses;
+    ScopedHandle pipelineJob;
+
+    if (pipeline.background) {
+        updateJobs();
+        if (jobList.size() >= kMaxJobCount) {
+            print_error_message("tcsh: too many jobs; cannot start background pipeline\n");
+            setVariableList("status", { "1" });
+            return;
+        }
+        pipelineJob.reset(CreateJobObjectW(NULL, NULL));
+        if (!pipelineJob.isValid()) {
+            print_error_message("tcsh: failed to create background job\n");
+            setVariableList("status", { "1" });
+            return;
+        }
+    }
+
+    auto abort_pipeline = [&](const std::string& message) {
+        if (!message.empty()) print_error_message(message);
+        if (pipelineJob.isValid()) TerminateJobObject(pipelineJob.get(), 1);
+        for (const ScopedHandle& process : pipelineProcesses) {
+            if (process.isValid()) TerminateProcess(process.get(), 1);
+        }
+        for (const ScopedHandle& process : pipelineProcesses) {
+            if (process.isValid()) WaitForSingleObject(process.get(), INFINITE);
+        }
+        setVariableList("status", { "1" });
+    };
 
     for (size_t i = 0; i < pipeline.commands.size(); ++i) {
         bool isLast = (i == pipeline.commands.size() - 1);
@@ -54,7 +91,13 @@ void TcshEngine::executePipeline(const ParsedPipeline& pipeline) {
             if (CreatePipe(&rPipe, &wPipe, &sa, 0)) {
                 hReadPipe.reset(rPipe);
                 hWritePipe.reset(wPipe);
-                SetHandleInformation(hReadPipe.get(), HANDLE_FLAG_INHERIT, 0);
+                if (!SetHandleInformation(hReadPipe.get(), HANDLE_FLAG_INHERIT, 0)) {
+                    abort_pipeline("tcsh: failed to configure pipeline handles\n");
+                    return;
+                }
+            } else {
+                abort_pipeline("tcsh: failed to create pipeline\n");
+                return;
             }
         }
 
@@ -73,6 +116,9 @@ void TcshEngine::executePipeline(const ParsedPipeline& pipeline) {
                 HANDLE fileHandle = CreateFileW(wTarget.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
                 if (fileHandle != INVALID_HANDLE_VALUE) {
                     redirectedInput.reset(fileHandle);
+                } else {
+                    abort_pipeline("tcsh: cannot open input redirection: " + redirection.target + "\n");
+                    return;
                 }
                 continue;
             }
@@ -84,6 +130,9 @@ void TcshEngine::executePipeline(const ParsedPipeline& pipeline) {
             if (fileHandle != INVALID_HANDLE_VALUE) {
                 redirectedOutput.reset(fileHandle);
                 if (isErrRedirect) redirectStderr = true;
+            } else {
+                abort_pipeline("tcsh: cannot open output redirection: " + redirection.target + "\n");
+                return;
             }
         }
 
@@ -115,7 +164,10 @@ void TcshEngine::executePipeline(const ParsedPipeline& pipeline) {
 
         // Enable inheritance on hInput so CreateProcessW can pass standard input to Child process
         if (hInput.isValid()) {
-            SetHandleInformation(hInput.get(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+            if (!SetHandleInformation(hInput.get(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+                abort_pipeline("tcsh: failed to configure pipeline input\n");
+                return;
+            }
         }
 
         STARTUPINFOW si = { sizeof(STARTUPINFOW) };
@@ -129,15 +181,25 @@ void TcshEngine::executePipeline(const ParsedPipeline& pipeline) {
         std::string finalCmdLine = "";
 
         if (foundOnDisk) {
+            resolvedExe = stripOuterQuotes(resolvedExe);
             finalCmdLine = "\"" + resolvedExe + "\"";
             for (size_t a = 1; a < args.size(); ++a) finalCmdLine += " " + escapeArg(stripOuterQuotes(args[a]));
         } else {
             if (!shouldFallbackToCmd(stripOuterQuotes(args[0]))) {
-                print_error_message("tcsh: Command not found: " + args[0] + "\n");
-                setVariableList("status", { "1" });
+                abort_pipeline("tcsh: Command not found: " + args[0] + "\n");
                 return;
             }
-            finalCmdLine = "cmd.exe /c " + command.sourceText;
+            wchar_t systemDirectory[MAX_PATH] = {};
+            UINT systemLength = GetSystemDirectoryW(systemDirectory, MAX_PATH);
+            if (systemLength == 0 || systemLength >= MAX_PATH) {
+                abort_pipeline("tcsh: unable to locate system cmd.exe\n");
+                return;
+            }
+            std::wstring systemCmdPath(systemDirectory, systemLength);
+            if (!systemCmdPath.empty() && systemCmdPath.back() != L'\\') systemCmdPath += L'\\';
+            systemCmdPath += L"cmd.exe";
+            resolvedExe = wstring_to_string(systemCmdPath);
+            finalCmdLine = "\"" + resolvedExe + "\" /d /c " + command.sourceText;
         }
 
         std::wstring wFinalCmdLine = string_to_wstring(finalCmdLine);
@@ -146,37 +208,51 @@ void TcshEngine::executePipeline(const ParsedPipeline& pipeline) {
 
         PROCESS_INFORMATION pi = { 0 };
         DWORD creationFlags = CREATE_NEW_PROCESS_GROUP;
-        if (CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, TRUE, creationFlags, NULL, NULL, &si, &pi)) {
-            ScopedHandle hProcess(pi.hProcess);
-            ScopedHandle hThread(pi.hThread);
-            hInput = std::move(hReadPipe);
-
-            if (pipeline.background && isLast) {
-                updateJobs();
-                if (jobList.size() >= kMaxJobCount) {
-                    print_error_message("tcsh: too many jobs; dropping background job\n");
-                    setVariableList("status", { "1" });
-                    return;
-                }
-                HANDLE hJob = CreateJobObjectW(NULL, NULL);
-                if (hJob != NULL) {
-                    AssignProcessToJobObject(hJob, hProcess.get());
-                }
-                jobList.push_back({ nextJobId++, hJob, hProcess.detach(), command.sourceText, true });
-                setVariableList("status", { "0" });
-            } else if (isLast) {
-                g_foregroundProcessGroupId.store(pi.dwProcessId, std::memory_order_relaxed);
-                WaitForSingleObject(hProcess.get(), INFINITE);
-                g_foregroundProcessGroupId.store(0, std::memory_order_relaxed);
-                DWORD exitCode = 0;
-                if (GetExitCodeProcess(hProcess.get(), &exitCode)) {
-                    setVariableList("status", { std::to_string(exitCode) });
-                }
-            }
-        } else {
-            print_error_message("tcsh: failed to create process\n");
-            setVariableList("status", { "1" });
+        std::wstring applicationName = string_to_wstring(resolvedExe);
+        if (!CreateProcessW(applicationName.empty() ? NULL : applicationName.c_str(), cmdBuf.data(), NULL, NULL,
+                            TRUE, creationFlags, NULL, NULL, &si, &pi)) {
+            abort_pipeline("tcsh: failed to create process\n");
             return;
+        }
+
+        pipelineProcesses.emplace_back(pi.hProcess);
+        ScopedHandle hThread(pi.hThread);
+        if (pipeline.background && !AssignProcessToJobObject(pipelineJob.get(), pi.hProcess)) {
+            abort_pipeline("tcsh: failed to add process to background job\n");
+            return;
+        }
+        hInput = std::move(hReadPipe);
+    }
+
+    if (pipeline.background) {
+        if (!pipelineProcesses.empty()) {
+            Job job{};
+            job.id = nextJobId++;
+            job.hJob = pipelineJob.detach();
+            job.hProcess = pipelineProcesses.back().detach();
+            for (size_t process_index = 0; process_index + 1 < pipelineProcesses.size(); ++process_index) {
+                job.stageProcesses.push_back(pipelineProcesses[process_index].detach());
+            }
+            job.command = pipeline.commands.back().sourceText;
+            job.isRunning = true;
+            jobList.push_back(std::move(job));
+            setVariableList("status", { "0" });
+        }
+        return;
+    }
+
+    if (!pipelineProcesses.empty()) {
+        HANDLE lastProcess = pipelineProcesses.back().get();
+        g_foregroundProcessGroupId.store(GetProcessId(lastProcess), std::memory_order_relaxed);
+        for (const ScopedHandle& process : pipelineProcesses) {
+            WaitForSingleObject(process.get(), INFINITE);
+        }
+        g_foregroundProcessGroupId.store(0, std::memory_order_relaxed);
+        DWORD exitCode = 0;
+        const bool last_stage_is_builtin = !pipeline.commands.empty() &&
+            !pipeline.commands.back().args.empty() && isBuiltinCommand(pipeline.commands.back().args[0]);
+        if (!last_stage_is_builtin && GetExitCodeProcess(lastProcess, &exitCode)) {
+            setVariableList("status", { std::to_string(exitCode) });
         }
     }
 }
@@ -242,7 +318,7 @@ void TcshEngine::bringJobToForeground(DWORD jobId) {
                 return;
             }
 
-            WaitForSingleObject(job.hProcess, INFINITE);
+            wait_job_processes(job);
             DWORD exitCode = 0;
             if (GetExitCodeProcess(job.hProcess, &exitCode)) {
                 setVariableList("status", { std::to_string(exitCode) });
@@ -250,8 +326,7 @@ void TcshEngine::bringJobToForeground(DWORD jobId) {
                 setVariableList("status", { "1" });
             }
             job.isRunning = false;
-            if (job.hProcess && job.hProcess != INVALID_HANDLE_VALUE) { CloseHandle(job.hProcess); job.hProcess = NULL; }
-            if (job.hJob && job.hJob != INVALID_HANDLE_VALUE) { CloseHandle(job.hJob); job.hJob = NULL; }
+            close_job_handles(job);
             return;
         }
     }

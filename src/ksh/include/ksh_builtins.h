@@ -39,10 +39,15 @@ std::wstring command_kind_description(const std::wstring& name, bool verbose = f
 bool resolve_external_command_path(const std::wstring& command_name, std::wstring& resolved_path);
 const std::vector<std::wstring>& builtin_commands();
 std::wstring get_command_name(const std::wstring& full_command);
+bool is_special_builtin_command(const std::wstring& name);
 bool is_ksh_builtin_command(const std::wstring& cmd);
 bool is_valid_builtin_name(const std::wstring& name);
 bool is_alias_defined(const std::wstring& name);
 bool initialize_default_shell_aliases();
+
+bool is_shell_option_enabled(const std::wstring& opt_name);
+bool is_terminal_file_descriptor(int fd);
+bool is_variable_or_array_set(const std::wstring& var_name);
 
 void print_help_text();
 void write_full_help_text(const std::function<bool(const std::wstring&)>& write_output);
@@ -61,5 +66,6 @@ std::wstring decode_raw_bytes(const std::string& bytes);
 bool execute_builtin_read(const std::vector<std::wstring>& tokens);
 bool execute_builtin_getconf(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output);
 bool execute_builtin_pathchk(const std::vector<std::wstring>& tokens);
+bool execute_builtin_ulimit(const std::vector<std::wstring>& tokens, const std::function<bool(const std::wstring&)>& write_output);
 
 #endif // CROSSSHELL_KSH_BUILTINS_H

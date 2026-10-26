@@ -1,0 +1,707 @@
+//licensed under the BSD 3-Clause License
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+#include <io.h>
+#include <fcntl.h>
+#include <windows.h>
+
+#define PV_VERSION "1.8.0"
+#define DEFAULT_BUFFER_SIZE 65536
+#define DEFAULT_INTERVAL 0.25
+
+/* =========================================================================
+ * Utilities: Parsing, Units, and Time
+ * ========================================================================= */
+
+static int64_t get_qpc_frequency(void) {
+    static int64_t freq = 0;
+    if (freq == 0) {
+        LARGE_INTEGER li;
+        QueryPerformanceFrequency(&li);
+        freq = li.QuadPart;
+    }
+    return freq;
+}
+
+static double get_time_sec(void) {
+    LARGE_INTEGER li;
+    QueryPerformanceCounter(&li);
+    return (double)li.QuadPart / (double)get_qpc_frequency();
+}
+
+static uint64_t parse_size_suffix(const char *str) {
+    char *endptr;
+    double val = strtod(str, &endptr);
+    if (endptr == str) return 0;
+    while (*endptr == ' ') endptr++;
+    switch (*endptr) {
+        case 'k': case 'K': val *= 1024ULL; break;
+        case 'm': case 'M': val *= 1024ULL * 1024ULL; break;
+        case 'g': case 'G': val *= 1024ULL * 1024ULL * 1024ULL; break;
+        case 't': case 'T': val *= 1024ULL * 1024ULL * 1024ULL * 1024ULL; break;
+        case 'p': case 'P': val *= 1024ULL * 1024ULL * 1024ULL * 1024ULL * 1024ULL; break;
+    }
+    return (uint64_t)val;
+}
+
+static void format_units(char *buf, size_t sz, uint64_t count, bool bits, bool lines) {
+    if (lines) {
+        snprintf(buf, sz, "%llu lines", (unsigned long long)count);
+        return;
+    }
+    double val = (double)count;
+    const char *unit = bits ? "b" : "B";
+    const char *prefixes[] = {"", "Ki", "Mi", "Gi", "Ti", "Pi"};
+    int idx = 0;
+    if (bits) val *= 8.0;
+
+    while (val >= 1024.0 && idx < 5) {
+        val /= 1024.0;
+        idx++;
+    }
+
+    if (idx == 0)
+        snprintf(buf, sz, "%4.0f %s%s", val, prefixes[idx], unit);
+    else if (val < 10.0)
+        snprintf(buf, sz, "%4.2f %s%s", val, prefixes[idx], unit);
+    else if (val < 100.0)
+        snprintf(buf, sz, "%4.1f %s%s", val, prefixes[idx], unit);
+    else
+        snprintf(buf, sz, "%4.0f %s%s", val, prefixes[idx], unit);
+}
+
+static void format_time(char *buf, size_t sz, double sec) {
+    if (sec < 0 || sec > 8640000.0) {
+        snprintf(buf, sz, "--:--:--");
+        return;
+    }
+    int s = (int)sec;
+    int h = s / 3600;
+    int m = (s % 3600) / 60;
+    s = s % 60;
+    snprintf(buf, sz, "%02d:%02d:%02d", h, m, s);
+}
+
+/* =========================================================================
+ * OOP: PvConfig
+ * Encapsulates all flags matching UNIX pv qualifiers.
+ * ========================================================================= */
+
+typedef struct PvConfig {
+    /* Modifiers */
+    bool flag_progress;       /* -p, --progress */
+    bool flag_timer;          /* -t, --timer */
+    bool flag_eta;            /* -e, --eta */
+    bool flag_fineta;         /* -I, --fineta */
+    bool flag_rate;           /* -r, --rate */
+    bool flag_average_rate;   /* -a, --average-rate */
+    bool flag_bytes;          /* -b, --bytes */
+    bool flag_bits;           /* -8, --bits */
+    bool flag_bufpercent;     /* -T, --buffer-percent */
+    int  flag_lastwritten;    /* -A, --last-written NUM */
+    char format_string[256];  /* -F, --format FORMAT */
+    bool flag_numeric;        /* -n, --numeric */
+    bool flag_quiet;          /* -q, --quiet */
+
+    /* Output modifiers */
+    bool flag_wait;           /* -W, --wait */
+    double delay_start;       /* -D, --delay-start SEC */
+    uint64_t target_size;     /* -s, --size SIZE */
+    bool flag_line_mode;      /* -l, --line-mode */
+    bool flag_null;           /* -0, --null */
+    double interval;          /* -i, --interval SEC */
+    int term_width;           /* -w, --width WIDTH */
+    int term_height;          /* -H, --height HEIGHT */
+    char name[128];           /* -N, --name NAME */
+    bool flag_force;          /* -f, --force */
+    bool flag_cursor;         /* -c, --cursor */
+
+    /* Data Transfer modifiers */
+    uint64_t rate_limit;      /* -L, --rate-limit RATE */
+    size_t buffer_size;       /* -B, --buffer-size SIZE */
+    bool flag_skip_errors;    /* -E, --skip-errors */
+    bool flag_stop_at_size;   /* -S, --stop-at-size */
+    char pidfile[MAX_PATH];   /* -P, --pidfile FILE */
+
+    /* Positional arguments: input files */
+    char **input_files;
+    int input_file_count;
+
+    /* Class methods */
+    void (*print_help)(void);
+    void (*print_version)(void);
+    bool (*parse_args)(struct PvConfig *self, int argc, char *argv[]);
+} PvConfig;
+
+static void PvConfig_print_version(void) {
+    printf("pv %s - Pipe Viewer \n", PV_VERSION);
+    printf("Copyright (C) 2026, PC/OpenSystems LLC\n");
+}
+
+static void PvConfig_print_help(void) {
+    printf("Usage: pv [OPTIONS] [FILE]...\n");
+    printf("Concatenate FILE(s) to standard output with monitoring.\n\n");
+    printf("Display modifiers:\n");
+    printf("  -p, --progress           turn progress bar on\n");
+    printf("  -t, --timer              turn timer on\n");
+    printf("  -e, --eta                turn ETA timer on\n");
+    printf("  -I, --fineta             turn absolute ETA timer on\n");
+    printf("  -r, --rate               turn rate counter on\n");
+    printf("  -a, --average-rate       turn average rate counter on\n");
+    printf("  -b, --bytes              turn byte counter on\n");
+    printf("  -8, --bits               tell rate and bytes in bits\n");
+    printf("  -T, --buffer-percent     turn buffer percent on\n");
+    printf("  -A, --last-written NUM   show NUM bytes last written\n");
+    printf("  -F, --format FORMAT      set output format\n");
+    printf("  -n, --numeric            output numeric percentage only (0-100)\n");
+    printf("  -q, --quiet              do not output any transfer information\n\n");
+    printf("Output modifiers:\n");
+    printf("  -W, --wait               wait until first byte transferred\n");
+    printf("  -D, --delay-start SEC    delay start of display by SEC seconds\n");
+    printf("  -s, --size SIZE          set total data size to SIZE bytes\n");
+    printf("  -l, --line-mode          count lines instead of bytes\n");
+    printf("  -0, --null               lines are null-terminated\n");
+    printf("  -i, --interval SEC       update display every SEC seconds (default: 0.25)\n");
+    printf("  -w, --width WIDTH        assume terminal width of WIDTH characters\n");
+    printf("  -H, --height HEIGHT      assume terminal height of HEIGHT rows\n");
+    printf("  -N, --name NAME          prefix visual display with NAME\n");
+    printf("  -f, --force              force output even if stderr is not a terminal\n");
+    printf("  -c, --cursor             use cursor positioning instead of carriage returns\n\n");
+    printf("Data transfer modifiers:\n");
+    printf("  -L, --rate-limit RATE    limit transfer to RATE bytes per second\n");
+    printf("  -B, --buffer-size SIZE   set read buffer size to SIZE bytes (default: 64K)\n");
+    printf("  -E, --skip-errors        skip read errors and continue\n");
+    printf("  -S, --stop-at-size       stop transfer once SIZE bytes are read\n");
+    printf("  -P, --pidfile FILE       save process PID to FILE\n\n");
+    printf("General qualifiers:\n");
+    printf("  -h, --help               display this help and exit\n");
+    printf("  -V, --version            display version information and exit\n");
+}
+
+static bool PvConfig_parse_args(PvConfig *self, int argc, char *argv[]) {
+    bool explicit_display = false;
+
+    for (int i = 1; i < argc; i++) {
+        char *arg = argv[i];
+        if (arg[0] == '-' && arg[1] != '\0') {
+            /* Long arguments */
+            if (arg[1] == '-') {
+                if (strcmp(arg, "--help") == 0) { self->print_help(); exit(0); }
+                if (strcmp(arg, "--version") == 0) { self->print_version(); exit(0); }
+                if (strcmp(arg, "--progress") == 0) { self->flag_progress = true; explicit_display = true; continue; }
+                if (strcmp(arg, "--timer") == 0) { self->flag_timer = true; explicit_display = true; continue; }
+                if (strcmp(arg, "--eta") == 0) { self->flag_eta = true; explicit_display = true; continue; }
+                if (strcmp(arg, "--fineta") == 0) { self->flag_fineta = true; explicit_display = true; continue; }
+                if (strcmp(arg, "--rate") == 0) { self->flag_rate = true; explicit_display = true; continue; }
+                if (strcmp(arg, "--average-rate") == 0) { self->flag_average_rate = true; explicit_display = true; continue; }
+                if (strcmp(arg, "--bytes") == 0) { self->flag_bytes = true; explicit_display = true; continue; }
+                if (strcmp(arg, "--bits") == 0) { self->flag_bits = true; continue; }
+                if (strcmp(arg, "--buffer-percent") == 0) { self->flag_bufpercent = true; continue; }
+                if (strcmp(arg, "--numeric") == 0) { self->flag_numeric = true; continue; }
+                if (strcmp(arg, "--quiet") == 0) { self->flag_quiet = true; continue; }
+                if (strcmp(arg, "--wait") == 0) { self->flag_wait = true; continue; }
+                if (strcmp(arg, "--line-mode") == 0) { self->flag_line_mode = true; continue; }
+                if (strcmp(arg, "--null") == 0) { self->flag_null = true; continue; }
+                if (strcmp(arg, "--force") == 0) { self->flag_force = true; continue; }
+                if (strcmp(arg, "--cursor") == 0) { self->flag_cursor = true; continue; }
+                if (strcmp(arg, "--skip-errors") == 0) { self->flag_skip_errors = true; continue; }
+                if (strcmp(arg, "--stop-at-size") == 0) { self->flag_stop_at_size = true; continue; }
+                if (strncmp(arg, "--size=", 7) == 0) { self->target_size = parse_size_suffix(arg + 7); continue; }
+                if (strncmp(arg, "--rate-limit=", 13) == 0) { self->rate_limit = parse_size_suffix(arg + 13); continue; }
+                if (strncmp(arg, "--buffer-size=", 14) == 0) { self->buffer_size = (size_t)parse_size_suffix(arg + 14); continue; }
+                if (strncmp(arg, "--interval=", 11) == 0) { self->interval = atof(arg + 11); continue; }
+                if (strncmp(arg, "--width=", 8) == 0) { self->term_width = atoi(arg + 8); continue; }
+                if (strncmp(arg, "--name=", 7) == 0) { strncpy(self->name, arg + 7, sizeof(self->name) - 1); continue; }
+
+                /* Long flags expecting value as next token */
+                if (i + 1 < argc) {
+                    if (strcmp(arg, "--size") == 0) { self->target_size = parse_size_suffix(argv[++i]); continue; }
+                    if (strcmp(arg, "--rate-limit") == 0) { self->rate_limit = parse_size_suffix(argv[++i]); continue; }
+                    if (strcmp(arg, "--buffer-size") == 0) { self->buffer_size = (size_t)parse_size_suffix(argv[++i]); continue; }
+                    if (strcmp(arg, "--interval") == 0) { self->interval = atof(argv[++i]); continue; }
+                    if (strcmp(arg, "--width") == 0) { self->term_width = atoi(argv[++i]); continue; }
+                    if (strcmp(arg, "--name") == 0) { strncpy(self->name, argv[++i], sizeof(self->name) - 1); continue; }
+                    if (strcmp(arg, "--pidfile") == 0) { strncpy(self->pidfile, argv[++i], sizeof(self->pidfile) - 1); continue; }
+                }
+                fprintf(stderr, "pv: unrecognized option '%s'\nTry 'pv --help' for more information.\n", arg);
+                return false;
+            }
+
+            /* Short flags (grouped, e.g. -peta) */
+            for (size_t c = 1; c < strlen(arg); c++) {
+                switch (arg[c]) {
+                    case 'h': self->print_help(); exit(0);
+                    case 'V': self->print_version(); exit(0);
+                    case 'p': self->flag_progress = true; explicit_display = true; break;
+                    case 't': self->flag_timer = true; explicit_display = true; break;
+                    case 'e': self->flag_eta = true; explicit_display = true; break;
+                    case 'I': self->flag_fineta = true; explicit_display = true; break;
+                    case 'r': self->flag_rate = true; explicit_display = true; break;
+                    case 'a': self->flag_average_rate = true; explicit_display = true; break;
+                    case 'b': self->flag_bytes = true; explicit_display = true; break;
+                    case '8': self->flag_bits = true; break;
+                    case 'T': self->flag_bufpercent = true; break;
+                    case 'n': self->flag_numeric = true; break;
+                    case 'q': self->flag_quiet = true; break;
+                    case 'W': self->flag_wait = true; break;
+                    case 'l': self->flag_line_mode = true; break;
+                    case '0': self->flag_null = true; break;
+                    case 'f': self->flag_force = true; break;
+                    case 'c': self->flag_cursor = true; break;
+                    case 'E': self->flag_skip_errors = true; break;
+                    case 'S': self->flag_stop_at_size = true; break;
+                    /* Short flags requiring an argument */
+                    case 's':
+                    case 'L':
+                    case 'B':
+                    case 'i':
+                    case 'w':
+                    case 'H':
+                    case 'N':
+                    case 'D':
+                    case 'P': {
+                        char opt = arg[c];
+                        const char *optval = NULL;
+                        if (arg[c + 1] != '\0') {
+                            optval = &arg[c + 1];
+                            c = strlen(arg) - 1;
+                        } else if (i + 1 < argc) {
+                            optval = argv[++i];
+                        } else {
+                            fprintf(stderr, "pv: option '-%c' requires an argument\n", opt);
+                            return false;
+                        }
+                        if (opt == 's') self->target_size = parse_size_suffix(optval);
+                        else if (opt == 'L') self->rate_limit = parse_size_suffix(optval);
+                        else if (opt == 'B') self->buffer_size = (size_t)parse_size_suffix(optval);
+                        else if (opt == 'i') self->interval = atof(optval);
+                        else if (opt == 'w') self->term_width = atoi(optval);
+                        else if (opt == 'H') self->term_height = atoi(optval);
+                        else if (opt == 'N') strncpy(self->name, optval, sizeof(self->name) - 1);
+                        else if (opt == 'D') self->delay_start = atof(optval);
+                        else if (opt == 'P') strncpy(self->pidfile, optval, sizeof(self->pidfile) - 1);
+                        break;
+                    }
+                    default:
+                        fprintf(stderr, "pv: invalid option -- '%c'\nTry 'pv --help' for more information.\n", arg[c]);
+                        return false;
+                }
+            }
+        } else {
+            /* File argument */
+            self->input_files = &argv[i];
+            self->input_file_count = argc - i;
+            break;
+        }
+    }
+
+    /* Default modifiers if none were explicitly turned on */
+    if (!explicit_display && !self->flag_numeric) {
+        self->flag_bytes = true;
+        self->flag_timer = true;
+        self->flag_rate = true;
+        self->flag_progress = true;
+        self->flag_eta = true;
+    }
+
+    return true;
+}
+
+static PvConfig *PvConfig_New(void) {
+    PvConfig *self = (PvConfig *)calloc(1, sizeof(PvConfig));
+    self->interval = DEFAULT_INTERVAL;
+    self->buffer_size = DEFAULT_BUFFER_SIZE;
+    self->print_help = PvConfig_print_help;
+    self->print_version = PvConfig_print_version;
+    self->parse_args = PvConfig_parse_args;
+    return self;
+}
+
+/* =========================================================================
+ * OOP: PvDisplay
+ * Encapsulates terminal measurements, format strings, and console outputs.
+ * ========================================================================= */
+
+typedef struct PvDisplay {
+    HANDLE h_stderr;
+    bool is_tty;
+    int width;
+    double last_render_time;
+
+    /* Class methods */
+    int  (*get_terminal_width)(struct PvDisplay *self);
+    void (*render)(struct PvDisplay *self, const PvConfig *cfg, uint64_t transferred,
+                   uint64_t target_size, double elapsed, double current_rate, double avg_rate);
+    void (*finish)(struct PvDisplay *self);
+} PvDisplay;
+
+static int PvDisplay_get_terminal_width(PvDisplay *self) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(self->h_stderr, &csbi)) {
+        return csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    }
+    return 80;
+}
+
+static void PvDisplay_render(PvDisplay *self, const PvConfig *cfg, uint64_t transferred,
+                             uint64_t target_size, double elapsed, double current_rate, double avg_rate) {
+    if (cfg->flag_quiet) return;
+
+    if (cfg->flag_numeric) {
+        if (target_size > 0) {
+            int pct = (int)((transferred * 100ULL) / target_size);
+            if (pct > 100) pct = 100;
+            fprintf(stderr, "%d\n", pct);
+        } else {
+            fprintf(stderr, "%llu\n", (unsigned long long)transferred);
+        }
+        return;
+    }
+
+    int term_w = (cfg->term_width > 0) ? cfg->term_width : self->get_terminal_width(self);
+    if (term_w < 20) term_w = 20;
+
+    char line_buf[1024];
+    char prefix[128] = "";
+    char info[512] = "";
+
+    if (cfg->name[0] != '\0') {
+        snprintf(prefix, sizeof(prefix), "%s: ", cfg->name);
+    }
+
+    /* 1. Bytes/Count */
+    if (cfg->flag_bytes) {
+        char s_b[64];
+        format_units(s_b, sizeof(s_b), transferred, cfg->flag_bits, cfg->flag_line_mode);
+        snprintf(info + strlen(info), sizeof(info) - strlen(info), "%s ", s_b);
+    }
+
+    /* 2. Timer */
+    if (cfg->flag_timer) {
+        char s_t[64];
+        format_time(s_t, sizeof(s_t), elapsed);
+        snprintf(info + strlen(info), sizeof(info) - strlen(info), "%s ", s_t);
+    }
+
+    /* 3. Rate */
+    if (cfg->flag_rate) {
+        char s_r[64];
+        format_units(s_r, sizeof(s_r), (uint64_t)current_rate, cfg->flag_bits, false);
+        snprintf(info + strlen(info), sizeof(info) - strlen(info), "[%s/s] ", s_r);
+    }
+
+    /* 4. Average Rate */
+    if (cfg->flag_average_rate) {
+        char s_ar[64];
+        format_units(s_ar, sizeof(s_ar), (uint64_t)avg_rate, cfg->flag_bits, false);
+        snprintf(info + strlen(info), sizeof(info) - strlen(info), "[avg: %s/s] ", s_ar);
+    }
+
+    /* 5. ETA and Finish Time */
+    char eta_buf[64] = "";
+    if ((cfg->flag_eta || cfg->flag_fineta) && target_size > 0 && transferred > 0) {
+        double rem_bytes = (target_size > transferred) ? (double)(target_size - transferred) : 0.0;
+        double speed = (avg_rate > 0) ? avg_rate : current_rate;
+        double eta_sec = (speed > 0) ? (rem_bytes / speed) : 0.0;
+
+        if (cfg->flag_eta) {
+            char t_eta[32];
+            format_time(t_eta, sizeof(t_eta), eta_sec);
+            snprintf(eta_buf + strlen(eta_buf), sizeof(eta_buf) - strlen(eta_buf), "ETA %s ", t_eta);
+        }
+        if (cfg->flag_fineta) {
+            time_t fin_t = time(NULL) + (time_t)eta_sec;
+            struct tm lt;
+            char t_fin[32];
+            if (localtime_s(&lt, &fin_t) == 0 &&
+                strftime(t_fin, sizeof(t_fin), "%H:%M:%S", &lt) > 0) {
+                snprintf(eta_buf + strlen(eta_buf), sizeof(eta_buf) - strlen(eta_buf), "Fin %s ", t_fin);
+            }
+        }
+    }
+
+    /* 6. Assemble line & Progress Bar */
+    if (cfg->flag_progress && target_size > 0) {
+        int pct = (int)((transferred * 100ULL) / target_size);
+        if (pct > 100) pct = 100;
+
+        char bar_fixed[256];
+        snprintf(bar_fixed, sizeof(bar_fixed), "%s%s%s%3d%% [", prefix, info, eta_buf, pct);
+        int bar_start_len = (int)strlen(bar_fixed);
+        int avail_bar_len = term_w - bar_start_len - 2; /* space for ']' and '\r' */
+
+        if (avail_bar_len > 3) {
+            int fill = (avail_bar_len * pct) / 100;
+            char bar[256];
+            int bidx = 0;
+            for (int i = 0; i < fill; i++) bar[bidx++] = '=';
+            if (fill < avail_bar_len) {
+                bar[bidx++] = '>';
+                for (int i = fill + 1; i < avail_bar_len; i++) bar[bidx++] = ' ';
+            }
+            bar[bidx] = '\0';
+            snprintf(line_buf, sizeof(line_buf), "%s%s]", bar_fixed, bar);
+        } else {
+            snprintf(line_buf, sizeof(line_buf), "%s%s%3d%%", prefix, info, pct);
+        }
+    } else {
+        snprintf(line_buf, sizeof(line_buf), "%s%s%s", prefix, info, eta_buf);
+    }
+
+    /* Truncate or Pad to clear remnants of longer previous line */
+    int cur_len = (int)strlen(line_buf);
+    if (cur_len > term_w - 1) {
+        line_buf[term_w - 1] = '\0';
+    } else {
+        while (cur_len < term_w - 1 && cur_len < (int)sizeof(line_buf) - 2) {
+            line_buf[cur_len++] = ' ';
+        }
+        line_buf[cur_len] = '\0';
+    }
+
+    fprintf(stderr, "\r%s", line_buf);
+    fflush(stderr);
+}
+
+static void PvDisplay_finish(PvDisplay *self) {
+    (void)self;
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
+
+static PvDisplay *PvDisplay_New(bool force) {
+    PvDisplay *self = (PvDisplay *)calloc(1, sizeof(PvDisplay));
+    self->h_stderr = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD mode;
+    self->is_tty = GetConsoleMode(self->h_stderr, &mode) || force;
+    self->get_terminal_width = PvDisplay_get_terminal_width;
+    self->render = PvDisplay_render;
+    self->finish = PvDisplay_finish;
+    return self;
+}
+
+/* =========================================================================
+ * OOP: PvEngine
+ * Encapsulates the I/O event loop, line processing, and rate throttling.
+ * ========================================================================= */
+
+typedef struct PvEngine {
+    PvConfig  *config;
+    PvDisplay *display;
+    uint64_t  total_transferred;
+    uint64_t  total_lines;
+    double    start_time;
+    double    last_update_time;
+    uint64_t  transferred_since_last;
+
+    /* Class methods */
+    int  (*run)(struct PvEngine *self);
+    bool (*process_file)(struct PvEngine *self, const char *filepath, char *buffer, size_t buf_sz);
+} PvEngine;
+
+static bool PvEngine_process_file(PvEngine *self, const char *filepath, char *buffer, size_t buf_sz) {
+    FILE *in = stdin;
+    bool is_pipe = false;
+
+    if (filepath != NULL) {
+        if (fopen_s(&in, filepath, "rb") != 0 || !in) {
+            fprintf(stderr, "\npv: cannot open '%s': %s\n", filepath, strerror(errno));
+            return false;
+        }
+        /* If size not explicitly specified, resolve file size */
+        if (self->config->target_size == 0) {
+            _fseeki64(in, 0, SEEK_END);
+            self->config->target_size = _ftelli64(in);
+            _fseeki64(in, 0, SEEK_SET);
+        }
+    } else {
+        is_pipe = true;
+    }
+
+    bool first_chunk = true;
+    double period_start = get_time_sec();
+    uint64_t period_bytes = 0;
+
+    while (1) {
+        /* Check termination size condition */
+        if (self->config->flag_stop_at_size && self->config->target_size > 0) {
+            if (self->total_transferred >= self->config->target_size) break;
+        }
+
+        size_t to_read = buf_sz;
+        if (self->config->flag_stop_at_size && self->config->target_size > 0) {
+            uint64_t remain = self->config->target_size - self->total_transferred;
+            if (remain < (uint64_t)to_read) to_read = (size_t)remain;
+        }
+
+        size_t n_read = fread(buffer, 1, to_read, in);
+        if (n_read == 0) {
+            if (ferror(in)) {
+                if (self->config->flag_skip_errors) {
+                    clearerr(in);
+                    continue;
+                }
+            }
+            break; /* EOF */
+        }
+
+        /* Write data directly to stdout */
+        size_t n_written = fwrite(buffer, 1, n_read, stdout);
+        if (n_written < n_read) {
+            fprintf(stderr, "\npv: write error: %s\n", strerror(errno));
+            if (!is_pipe) fclose(in);
+            return false;
+        }
+
+        /* Update counters */
+        self->total_transferred += n_written;
+        self->transferred_since_last += n_written;
+        period_bytes += n_written;
+
+        /* Line counting */
+        if (self->config->flag_line_mode) {
+            char target_char = self->config->flag_null ? '\0' : '\n';
+            for (size_t i = 0; i < n_written; i++) {
+                if (buffer[i] == target_char) self->total_lines++;
+            }
+        }
+
+        double now = get_time_sec();
+
+        /* Rate limiting */
+        if (self->config->rate_limit > 0) {
+            double expected_duration = (double)period_bytes / (double)self->config->rate_limit;
+            double actual_duration = now - period_start;
+            if (actual_duration < expected_duration) {
+                DWORD sleep_ms = (DWORD)((expected_duration - actual_duration) * 1000.0);
+                if (sleep_ms > 0) {
+                    Sleep(sleep_ms);
+                    now = get_time_sec();
+                }
+            }
+            if (actual_duration >= 1.0) {
+                period_bytes = 0;
+                period_start = now;
+            }
+        }
+
+        if (first_chunk) {
+            if (self->start_time == 0.0) self->start_time = now;
+            first_chunk = false;
+        }
+
+        /* UI Rendering trigger */
+        if ((now - self->last_update_time) >= self->config->interval) {
+            if (!(self->config->flag_wait && self->total_transferred == 0)) {
+                double elapsed = now - self->start_time;
+                if (elapsed >= self->config->delay_start) {
+                    double dt = now - self->last_update_time;
+                    double cur_rate = (dt > 0.0) ? ((double)self->transferred_since_last / dt) : 0.0;
+                    double avg_rate = (elapsed > 0.0) ? ((double)self->total_transferred / elapsed) : 0.0;
+                    uint64_t count = self->config->flag_line_mode ? self->total_lines : self->total_transferred;
+
+                    self->display->render(self->display, self->config, count,
+                                          self->config->target_size, elapsed, cur_rate, avg_rate);
+                }
+            }
+            self->transferred_since_last = 0;
+            self->last_update_time = now;
+        }
+    }
+
+    if (!is_pipe) fclose(in);
+    return true;
+}
+
+static int PvEngine_run(PvEngine *self) {
+    /* Write PID file if requested */
+    if (self->config->pidfile[0] != '\0') {
+        FILE *pf;
+        if (fopen_s(&pf, self->config->pidfile, "w") == 0 && pf) {
+            fprintf(pf, "%lu\n", GetCurrentProcessId());
+            fclose(pf);
+        }
+    }
+
+    char *buffer = (char *)malloc(self->config->buffer_size);
+    if (!buffer) {
+        fprintf(stderr, "pv: out of memory allocating buffer\n");
+        return 1;
+    }
+
+    self->start_time = get_time_sec();
+    self->last_update_time = self->start_time;
+
+    if (self->config->input_file_count == 0) {
+        /* Read from Stdin */
+        self->process_file(self, NULL, buffer, self->config->buffer_size);
+    } else {
+        /* Iterate through command line files */
+        for (int i = 0; i < self->config->input_file_count; i++) {
+            if (strcmp(self->config->input_files[i], "-") == 0) {
+                self->process_file(self, NULL, buffer, self->config->buffer_size);
+            } else {
+                self->process_file(self, self->config->input_files[i], buffer, self->config->buffer_size);
+            }
+        }
+    }
+
+    /* Final statistics render */
+    double now = get_time_sec();
+    double elapsed = now - self->start_time;
+    double avg_rate = (elapsed > 0.0) ? ((double)self->total_transferred / elapsed) : 0.0;
+    uint64_t count = self->config->flag_line_mode ? self->total_lines : self->total_transferred;
+
+    if (!self->config->flag_quiet && !self->config->flag_numeric) {
+        self->display->render(self->display, self->config, count,
+                              self->config->target_size, elapsed, avg_rate, avg_rate);
+        self->display->finish(self->display);
+    }
+
+    free(buffer);
+    if (self->config->pidfile[0] != '\0') {
+        DeleteFileA(self->config->pidfile);
+    }
+    return 0;
+}
+
+static PvEngine *PvEngine_New(PvConfig *cfg, PvDisplay *disp) {
+    PvEngine *self = (PvEngine *)calloc(1, sizeof(PvEngine));
+    self->config = cfg;
+    self->display = disp;
+    self->process_file = PvEngine_process_file;
+    self->run = PvEngine_run;
+    return self;
+}
+
+/* =========================================================================
+ * Application Entry Point
+ * ========================================================================= */
+
+int main(int argc, char *argv[]) {
+    /* Ensure binary mode stream transfers on Windows */
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+
+    PvConfig *config = PvConfig_New();
+    if (!config->parse_args(config, argc, argv)) {
+        free(config);
+        return 1;
+    }
+
+    PvDisplay *display = PvDisplay_New(config->flag_force);
+    PvEngine *engine = PvEngine_New(config, display);
+
+    int exit_code = engine->run(engine);
+
+    free(engine);
+    free(display);
+    free(config);
+
+    return exit_code;
+}

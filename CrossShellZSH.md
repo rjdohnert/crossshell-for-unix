@@ -208,9 +208,21 @@ echo "Build started at $(date)" > build.log >> master.log
 
 ### Utilities & Helpers
 - **`which` / `type` / `whence [-v|-a|-p|-w]`**: Reports command classification and resolution path.
+- **`where cmd...`**: Lists all occurrences of each command in order across aliases, functions, builtins, and PATH directories.
 - **`command [-v|-V|-p] cmd`**: Bypasses functions/aliases to run builtins or external binaries directly.
 - **`builtin cmd`**: Executes shell builtins directly.
+- **`disable [-a|-f] [name...]`**: Disables built-in commands, aliases (`-a`), or functions (`-f`).
+- **`enable [-a|-f] [name...]`**: Re-enables built-in commands, aliases (`-a`), or functions (`-f`).
+- **`hash [-r] [-v] [-d] [name[=path]...]`**: Manages the command hash table, directory hash table (`-d`), or flushes cache (`-r`).
 - **`rehash`**: Invalidates and flushes the executable path cache.
+- **`limit [-h] [resource [value]]`**: Displays or configures named process resource limits.
+- **`unlimit [-h] [resource...]`**: Removes resource limits (sets them to unlimited).
+- **`ulimit [-a] [-opt [val]]`**: Queries and configures POSIX/KornShell resource limits (`-n`, `-u`, `-t`, `-f`, etc.).
+- **`vared [-p prompt] [-c] name`**: Interactively edits a variable or array value in-place using the terminal line editor.
+- **`suspend [-f]`**: Suspends shell execution until a key is pressed.
+- **`sched [+]time command...`**: Schedules a command for deferred background execution.
+- **`stat [-s] [-L] [-l] [-A array] [+field] files...`**: Displays low-level file metadata and status attributes without external processes.
+- **`echotc` / `echoti <cap> [args...]`**: Emits terminal capability escape sequences (`bold`, `clear`, `cols`, `lines`, `cup`).
 - **`times`**: Prints accumulated CPU execution time for shell and children.
 - **`getopts optstring name [args...]`**: Parses option flags.
 - **`nocorrect cmd`**: Runs command without spelling/typo correction.

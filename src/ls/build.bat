@@ -1,65 +1,59 @@
 @echo off
-setlocal enabledelayedexpansion
-
-echo [ls] Building ls...
-
+setlocal EnableExtensions
 set "SRC_DIR=%~dp0"
-cd /d "%SRC_DIR%"
+set "SOURCE_FILES=ls.c security.c files.c scan.c listing.c"
+set "NO_INSTALL=0"
+set "CLEAN=0"
 
-set "SOURCES=ls.cpp ls_app.cpp engine.cpp options.cpp reporter.cpp"
-set "LIBS=-ladvapi32"
-set "MSVC_LIBS=advapi32.lib"
-
-if "%1"=="clean" goto :clean
-
-:: Check for clang++
-where clang++ >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo [ls] Compiling with clang++...
-    clang++ -std=c++17 -O2 %SOURCES% %LIBS% -Wl,/subsystem:console -o ls.exe
-    if %ERRORLEVEL% equ 0 goto :success
-    echo [ls] Build failed with clang++
-    exit /b 1
-)
-
-:: Check for cl.exe
-where cl >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo [ls] Compiling with cl.exe...
-    cl /nologo /EHsc /std:c++17 /O2 %SOURCES% %MSVC_LIBS% /Fe:ls.exe
-    if %ERRORLEVEL% equ 0 (
-        del *.obj 2>nul
-        goto :success
-    )
-    echo [ls] Build failed with cl.exe
-    exit /b 1
-)
-
-:: Check for g++
-where g++ >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo [ls] Compiling with g++...
-    g++ -std=c++17 -O2 %SOURCES% %LIBS% -o ls.exe
-    if %ERRORLEVEL% equ 0 goto :success
-    echo [ls] Build failed with g++
-    exit /b 1
-)
-
-echo [ls] Error: No supported C++ compiler found (clang++, cl.exe, g++).
+:parse
+if "%~1"=="" goto configure
+if /i "%~1"=="clean" goto set_clean
+if /i "%~1"=="--clean" goto set_clean
+if /i "%~1"=="--no-install" goto set_no_install
+echo Unknown option: %~1
 exit /b 1
 
-:success
-echo [ls] Build successful: ls.exe
-if "%1"=="noinstall" goto :done
-if exist "..\..\bin" (
-    copy /y ls.exe "..\..\bin\ls.exe" >nul
-    echo [ls] Installed to bin\ls.exe
-)
-:done
-exit /b 0
+:set_clean
+set "CLEAN=1"
+shift /1
+goto parse
+
+:set_no_install
+set "NO_INSTALL=1"
+shift /1
+goto parse
+
+:configure
+pushd "%SRC_DIR%" || exit /b 1
+if "%CLEAN%"=="1" goto clean
+where clang >nul 2>nul
+if not errorlevel 1 goto clang_build
+where cl.exe >nul 2>nul
+if not errorlevel 1 goto msvc_build
+echo A Windows C compiler is required: clang or cl.exe.
+set "RESULT=1"
+goto done
+
+:clang_build
+clang -std=c17 -O2 -Wall -Wextra %SOURCE_FILES% -ladvapi32 -o ls.exe
+goto compiled
+
+:msvc_build
+cl.exe /nologo /std:c17 /TC /O2 /W4 /Fe:ls.exe %SOURCE_FILES% Advapi32.lib
+
+:compiled
+set "RESULT=%errorlevel%"
+if not "%RESULT%"=="0" goto done
+if "%NO_INSTALL%"=="1" goto done
+if not exist "..\..\bin" mkdir "..\..\bin"
+copy /y ls.exe "..\..\bin\ls.exe" >nul
+set "RESULT=%errorlevel%"
+goto done
 
 :clean
-echo [ls] Cleaning build artifacts...
 del /q ls.exe *.obj *.o *.pdb *.ilk 2>nul
-echo [ls] Clean complete.
-exit /b 0
+set "RESULT=0"
+
+:done
+popd
+exit /b %RESULT%

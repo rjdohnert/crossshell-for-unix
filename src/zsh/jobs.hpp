@@ -32,6 +32,14 @@ void suspend_win32_process(DWORD pid);
 bool resume_win32_process(DWORD pid);
 void check_window_resize_event();
 
+bool create_process_with_handle_list(
+    const wstring& application_name,
+    wstring command_line,
+    const STARTUPINFOW& startup,
+    DWORD creation_flags,
+    PROCESS_INFORMATION& process_info);
+wstring system_cmd_exe_path();
+
 int execute_pipeline_native(const Pipeline& pl);
 bool save_pipeline_shell_state(const string& path);
 bool load_pipeline_shell_state(const string& path);

@@ -213,24 +213,18 @@ public:
         std::wcout << std::left 
                    << std::setw(14) << L"Class"
                    << std::setw(6)  << L"I"
-                   << std::setw(opts.fullView ? 42 : 28) << L"H/W Path"
                    << std::setw(16) << L"Driver"
                    << std::setw(14) << L"S/W State"
                    << std::setw(12) << L"H/W Type"
                    << L"Description\n";
 
-        std::wcout << std::wstring(opts.fullView ? 125 : 105, L'=') << L"\n";
+        std::wcout << std::wstring(opts.fullView ? 95 : 85, L'=') << L"\n";
 
         for (const auto& dev : devices) {
-            std::wstring pathDisplay = opts.agileView ? dev.instanceId : dev.hwPath;
-            if (!opts.fullView && pathDisplay.length() > 26) {
-                pathDisplay = L"..." + pathDisplay.substr(pathDisplay.length() - 23);
-            }
 
             std::wcout << std::left
                        << std::setw(14) << dev.className.substr(0, 13)
                        << std::setw(6)  << dev.index
-                       << std::setw(opts.fullView ? 42 : 28) << pathDisplay
                        << std::setw(16) << dev.driver.substr(0, 15)
                        << std::setw(14) << dev.swState
                        << std::setw(12) << dev.hwType

@@ -13,6 +13,7 @@ public:
     bool showCpu{false};
     bool showMemory{false};
     bool showTpm{false};
+    bool showOs{false};
     bool showAll{false};
     enum class OutputFormat { Table, Csv, Json } format{OutputFormat::Table};
     std::vector<std::wstring> filters;

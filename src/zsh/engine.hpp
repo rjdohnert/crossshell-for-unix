@@ -23,6 +23,8 @@ bool split_zsh_registry_path(const string& property_path, HKEY& root, wstring& k
 bool read_zsh_registry_property(const string& property_path, string& value, RegistryValueMetadata& metadata);
 bool write_zsh_registry_property(const string& property_path, const string& value);
 
+vector<string> find_all_executables_in_path(const string& bin);
+
 string win_quote_arg(const string& arg);
 string cmd_escape_meta(const string& s);
 
@@ -48,6 +50,14 @@ public:
     vector<string> dir_stack;
     vector<string> history;
     vector<BackgroundJob> jobs;
+    
+    set<string> disabled_builtins;
+    set<string> disabled_aliases;
+    set<string> disabled_functions;
+    map<string, string> command_hash_table;
+    map<string, string> named_directories;
+    map<string, string> resource_limits;
+    vector<pair<time_t, string>> scheduled_events;
     
     string home_dir;
     string zshrc_path;

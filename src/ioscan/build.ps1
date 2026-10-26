@@ -19,7 +19,7 @@ try {
     }
 
     Write-Host "[ioscan] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 ioscan.cpp -lsetupapi -lcfgmgr32 -Wl,/subsystem:console -o ioscan.exe
+    & clang++ -std=c++17 -O2 ioscan.cpp -lsetupapi -lcfgmgr32 '-Wl,/subsystem:console' -o ioscan.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[ioscan] Build failed."
         exit $LASTEXITCODE

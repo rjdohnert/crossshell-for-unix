@@ -3,10 +3,12 @@
 #include "dependency_spec.hpp"
 #include "file_spec.hpp"
 #include "rpmbuild.hpp"
+#include <set>
 
 class SpecParser {
 public:
     std::map<std::string, std::string> macros;
+    std::set<std::string> cliDefinedMacros;
     std::string name;
     std::string version;
     std::string release = "1";
@@ -34,12 +36,15 @@ public:
     std::vector<DependencySpec> requirements;
     std::vector<DependencySpec> provides;
     std::vector<DependencySpec> conflicts;
+    std::vector<std::string> sources;
+    std::vector<std::string> patches;
 
     SpecParser();
 
     static std::string stripQuotes(const std::string& str);
 
     std::string expand(const std::string& input);
+    std::string expandBracedOnly(const std::string& input);
 
     std::string getMacroValue(const std::string& key);
 

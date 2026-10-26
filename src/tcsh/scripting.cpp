@@ -359,7 +359,8 @@ void TcshEngine::executeSingleCommandLine(std::string line) {
             return;
         }
 
-        if (executeBuiltin(pipeline.commands[0].args)) return;
+        if (pipeline.commands[0].redirections.empty() && !pipeline.background &&
+            executeBuiltin(pipeline.commands[0].args)) return;
     }
 
     executePipeline(pipeline);

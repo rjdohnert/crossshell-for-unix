@@ -2,6 +2,103 @@
 #include "engine.hpp"
 #include "scripting.hpp"
 
+wstring system_cmd_exe_path() {
+    wchar_t system_directory[MAX_PATH] = {};
+    UINT length = GetSystemDirectoryW(system_directory, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) return L"";
+
+    wstring result(system_directory, length);
+    if (!result.empty() && result.back() != L'\\') result += L'\\';
+    return result + L"cmd.exe";
+}
+
+bool create_process_with_handle_list(
+    const wstring& application_name,
+    wstring command_line,
+    const STARTUPINFOW& startup,
+    DWORD creation_flags,
+    PROCESS_INFORMATION& process_info) {
+    const wchar_t* application = application_name.empty() ? nullptr : application_name.c_str();
+    STARTUPINFOW startup_copy = startup;
+    if ((startup.dwFlags & STARTF_USESTDHANDLES) == 0) {
+        return CreateProcessW(application, command_line.data(), nullptr, nullptr, FALSE,
+                              creation_flags, nullptr, nullptr, &startup_copy, &process_info) != FALSE;
+    }
+
+    STARTUPINFOEXW startup_ex{};
+    startup_ex.StartupInfo = startup;
+    startup_ex.StartupInfo.cb = sizeof(startup_ex);
+
+    HANDLE source_handles[] = { startup.hStdInput, startup.hStdOutput, startup.hStdError };
+    HANDLE* target_handles[] = {
+        &startup_ex.StartupInfo.hStdInput,
+        &startup_ex.StartupInfo.hStdOutput,
+        &startup_ex.StartupInfo.hStdError
+    };
+    vector<pair<HANDLE, HANDLE>> handle_map;
+    vector<HANDLE> inherited_handles;
+    vector<unique_handle> duplicate_owners;
+    vector<unique_handle> fallback_owners;
+
+    for (size_t i = 0; i < _countof(source_handles); ++i) {
+        HANDLE source = source_handles[i];
+        DWORD handle_flags = 0;
+        if (source == nullptr || source == INVALID_HANDLE_VALUE || !GetHandleInformation(source, &handle_flags)) {
+            SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+            HANDLE null_handle = CreateFileW(L"NUL", i == 0 ? GENERIC_READ : GENERIC_WRITE,
+                                             FILE_SHARE_READ | FILE_SHARE_WRITE, &security,
+                                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (null_handle == INVALID_HANDLE_VALUE) return false;
+            fallback_owners.push_back(make_unique_handle(null_handle));
+            source = null_handle;
+        }
+
+        auto existing = find_if(handle_map.begin(), handle_map.end(),
+                                [&](const auto& entry) { return entry.first == source; });
+        if (existing != handle_map.end()) {
+            *target_handles[i] = existing->second;
+            continue;
+        }
+
+        HANDLE duplicate = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &duplicate,
+                             0, TRUE, DUPLICATE_SAME_ACCESS)) {
+            return false;
+        }
+        handle_map.emplace_back(source, duplicate);
+        inherited_handles.push_back(duplicate);
+        duplicate_owners.push_back(make_unique_handle(duplicate));
+        *target_handles[i] = duplicate;
+    }
+
+    if (inherited_handles.empty()) {
+        return CreateProcessW(application, command_line.data(), nullptr, nullptr, FALSE,
+                              creation_flags, nullptr, nullptr, &startup_copy, &process_info) != FALSE;
+    }
+
+    SIZE_T attribute_list_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_list_size);
+    if (attribute_list_size == 0) return false;
+    vector<unsigned char> attribute_list_buffer(attribute_list_size);
+    auto attribute_list = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attribute_list_buffer.data());
+    if (!InitializeProcThreadAttributeList(attribute_list, 1, 0, &attribute_list_size)) return false;
+
+    BOOL updated = UpdateProcThreadAttribute(attribute_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                              inherited_handles.data(),
+                                              inherited_handles.size() * sizeof(HANDLE),
+                                              nullptr, nullptr);
+    BOOL created = FALSE;
+    if (updated) {
+        startup_ex.lpAttributeList = attribute_list;
+        created = CreateProcessW(application, command_line.data(), nullptr, nullptr, TRUE,
+                                 creation_flags | EXTENDED_STARTUPINFO_PRESENT,
+                                 nullptr, nullptr, &startup_ex.StartupInfo, &process_info);
+    }
+
+    DeleteProcThreadAttributeList(attribute_list);
+    return created != FALSE;
+}
+
 void write_binary_string(ofstream& output, const string& value) {
     uint64_t size = static_cast<uint64_t>(value.size());
     output.write(reinterpret_cast<const char*>(&size), sizeof(size));
@@ -441,6 +538,7 @@ int execute_pipeline_native(const Pipeline& pl) {
         }
 
         bool use_cmd_fallback = is_script;
+        wstring application_name = string_to_wstring(exe_path);
         bool is_cmd_exe = false;
         if (!exe_path.empty()) {
             string exe_name = fs::path(exe_path).filename().string();
@@ -473,6 +571,13 @@ int execute_pipeline_native(const Pipeline& pl) {
             }
         } else {
             // cmd.exe /c: use cmd-native quoting, NOT win_quote_arg (which uses CRT rules).
+            application_name = system_cmd_exe_path();
+            if (application_name.empty()) {
+                cerr << "zsh: unable to locate system cmd.exe\n";
+                launch_failed = true;
+                launch_error = GetLastError();
+                break;
+            }
             string target = is_script ? exe_path : cmd.args[0];
             string inner = cmd_quote_arg(target);
             for (size_t k = 1; k < cmd.args.size(); ++k) inner += " " + cmd_quote_arg(cmd.args[k]);
@@ -619,9 +724,11 @@ int execute_pipeline_native(const Pipeline& pl) {
 
         ZeroMemory(&pi_list[i], sizeof(PROCESS_INFORMATION));
         DWORD creation_flags = pl.background ? CREATE_SUSPENDED : 0;
-        if (!CreateProcessW(NULL, &wcmd[0], NULL, NULL, TRUE, creation_flags, NULL, NULL, &si, &pi_list[i])) {
+        if (!create_process_with_handle_list(application_name, std::move(wcmd), si,
+                             creation_flags, pi_list[i])) {
             launch_error = GetLastError();
-            cerr << COLOR_RED << "zsh: " << cmd.args[0] << ": command not found" << COLOR_RESET << "\n";
+            cerr << COLOR_RED << "zsh: " << cmd.args[0] << ": failed to start (error "
+                 << launch_error << ")" << COLOR_RESET << "\n";
             launch_failed = true;
             break;
         }
@@ -654,10 +761,9 @@ int execute_pipeline_native(const Pipeline& pl) {
     if (launch_failed) {
         if (background_job.get()) {
             TerminateJobObject((HANDLE)background_job.get(), launch_error == ERROR_SUCCESS ? 1 : launch_error);
-        } else {
-            for (auto& process : proc_handles)
-                if (process.get()) TerminateProcess((HANDLE)process.get(), 1);
         }
+        for (auto& process : proc_handles)
+            if (process.get()) TerminateProcess((HANDLE)process.get(), 1);
         for (size_t i = 0; i + 1 < num_cmds; ++i) {
             if (hPipesRead[i]) { CloseHandle(hPipesRead[i]); hPipesRead[i] = nullptr; }
             if (hPipesWrite[i]) { CloseHandle(hPipesWrite[i]); hPipesWrite[i] = nullptr; }

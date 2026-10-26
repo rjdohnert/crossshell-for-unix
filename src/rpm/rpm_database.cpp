@@ -27,7 +27,7 @@ bool RpmDatabase::lock() {
         hLock = CreateFileW(lockPath.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hLock == INVALID_HANDLE_VALUE) return false;
-        OVERLAPPED ov = {0};
+        OVERLAPPED ov{};
         if (!LockFileEx(hLock, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ov)) {
             CloseHandle(hLock);
             hLock = INVALID_HANDLE_VALUE;
@@ -38,7 +38,7 @@ bool RpmDatabase::lock() {
 
 void RpmDatabase::unlock() {
         if (hLock != INVALID_HANDLE_VALUE) {
-            OVERLAPPED ov = {0};
+            OVERLAPPED ov{};
             UnlockFileEx(hLock, 0, MAXDWORD, MAXDWORD, &ov);
             CloseHandle(hLock);
             hLock = INVALID_HANDLE_VALUE;
@@ -180,11 +180,21 @@ void RpmDatabase::save() {
         MoveFileExW(tmp.c_str(), manifestPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
     }
 
-bool RpmDatabase::isInstalled(const std::string& name) { return packages.find(name) != packages.end(); }
+bool RpmDatabase::isInstalled(const std::string& name) { return find(name) != nullptr; }
 
 RpmMetadata* RpmDatabase::find(const std::string& name) {
         auto it = packages.find(name);
-        return it != packages.end() ? &it->second : nullptr;
+        if (it != packages.end()) return &it->second;
+
+        for (auto& [pkgName, pkgMeta] : packages) {
+            std::string nvr = pkgMeta.name + "-" + pkgMeta.version + "-" + pkgMeta.release;
+            std::string nvra = nvr + "." + pkgMeta.arch;
+            std::string nv = pkgMeta.name + "-" + pkgMeta.version;
+            if (name == nvra || name == nvr || name == nv) {
+                return &pkgMeta;
+            }
+        }
+        return nullptr;
     }
 
 const std::map<std::string, RpmMetadata>& RpmDatabase::all() const { return packages; }
@@ -192,6 +202,10 @@ const std::map<std::string, RpmMetadata>& RpmDatabase::all() const { return pack
 void RpmDatabase::add(const RpmMetadata& pkg) { packages[pkg.name] = pkg; save(); }
 
 bool RpmDatabase::erase(const std::string& name) {
-        if (packages.erase(name) > 0) { save(); return true; }
+        RpmMetadata* found = find(name);
+        if (found) {
+            std::string actualName = found->name;
+            if (packages.erase(actualName) > 0) { save(); return true; }
+        }
         return false;
     }

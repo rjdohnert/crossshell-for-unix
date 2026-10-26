@@ -133,7 +133,18 @@ static int runInternalSelfTests() {
         assert_eq(shell.getVar("seq"), "3", "|| sequence on failure");
     }
 
-    // 9. One-shot -c command execution
+    // 9. Failed output redirections must not run the command or fall back to stdout.
+    {
+        TcshEngine shell(false);
+        std::ostringstream output;
+        std::streambuf* oldOutput = std::cout.rdbuf(output.rdbuf());
+        shell.executeCommandLine("echo SHOULD_NOT_RUN > .");
+        std::cout.rdbuf(oldOutput);
+        assert_true(shell.getStatus() != 0, "output redirection failure sets non-zero status");
+        assert_true(output.str().empty(), "output redirection failure does not leak output to stdout");
+    }
+
+    // 10. One-shot -c command execution
     {
         TcshEngine shell(false);
         int code = shell.executeCommandString("set result = success", "tcsh");

@@ -2,7 +2,6 @@
     WindowLayout m_windowLayout = WindowLayout::Split;
 
     bool m_running = true;
-    bool m_terminalMode = false;
 
 public:
     CrossForgeEngine() {
@@ -315,8 +314,9 @@ private:
             "node.exe", "tsc.cmd"
         };
 
+        std::error_code ec;
         for (const char* tool : kToolNames) {
-            if (fs::exists(dir / tool)) {
+            if (fs::exists(dir / tool, ec) && !ec) {
                 return true;
             }
         }
@@ -352,7 +352,8 @@ private:
                 continue;
             }
             fs::path dirPath(dir);
-            if (!fs::exists(dirPath) || !fs::is_directory(dirPath) || !IsLikelyCompilerToolDirectory(dirPath)) {
+            std::error_code ec;
+            if (!fs::exists(dirPath, ec) || ec || !fs::is_directory(dirPath, ec) || ec || !IsLikelyCompilerToolDirectory(dirPath)) {
                 continue;
             }
 
@@ -594,7 +595,7 @@ private:
     // Parse SGR mouse params "b;x;y" into a MOUSE_EVENT INPUT_RECORD.
     void ParseSgrMouse(INPUT_RECORD& ir, const std::string& params, bool pressed) {
         int btn = 0, x = 0, y = 0;
-        sscanf(params.c_str(), "%d;%d;%d", &btn, &x, &y);
+        sscanf_s(params.c_str(), "%d;%d;%d", &btn, &x, &y);
         ir.EventType = MOUSE_EVENT;
         auto& me = ir.Event.MouseEvent;
         // Clamp to a sane console range so a malformed/hostile sequence can't
@@ -1433,7 +1434,6 @@ private:
             }
 
             INPUT_RECORD ir;
-            DWORD read;
             ReadInputEvent(ir);
 
             if (ir.EventType == WINDOW_BUFFER_SIZE_EVENT) {
@@ -1676,7 +1676,6 @@ private:
             }
 
             INPUT_RECORD ir;
-            DWORD read;
             ReadInputEvent(ir);
 
             if (ir.EventType == WINDOW_BUFFER_SIZE_EVENT) {
@@ -1869,7 +1868,6 @@ private:
         FlushBuffer();
 
         INPUT_RECORD ir;
-        DWORD read;
         while (true) {
             ReadInputEvent(ir);
             if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
@@ -1908,7 +1906,6 @@ private:
         FlushBuffer();
 
         INPUT_RECORD ir;
-        DWORD read;
         while (true) {
             ReadInputEvent(ir);
             if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
@@ -2119,9 +2116,10 @@ private:
 
         std::stringstream ss(pathValue);
         std::string item;
+        std::error_code ec;
         while (std::getline(ss, item, ';')) {
             fs::path p = fs::path(item) / exeName;
-            if (fs::exists(p)) {
+            if (fs::exists(p, ec) && !ec) {
                 return p.string();
             }
         }
@@ -2229,7 +2227,6 @@ private:
         FlushBuffer();
 
         INPUT_RECORD ir;
-        DWORD read;
         while (true) {
             ReadInputEvent(ir);
             if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
@@ -3007,7 +3004,8 @@ private:
             if (!m_recentFiles.empty()) {
                 if (m_recentIndex >= m_recentFiles.size()) m_recentIndex = 0;
                 std::string path = m_recentFiles[m_recentIndex++];
-                if (fs::exists(path)) {
+                std::error_code ec;
+                if (fs::exists(path, ec) && !ec) {
                     auto doc = std::make_shared<Document>(static_cast<int>(m_documents.size()) + 1, path);
                     doc->Lang = m_langRegistry.DetectLanguage(path);
                     m_documents.push_back(doc);
@@ -3144,7 +3142,6 @@ private:
             }
 
             INPUT_RECORD ir;
-            DWORD read;
             ReadInputEvent(ir);
 
             if (ir.EventType == WINDOW_BUFFER_SIZE_EVENT) {
@@ -3692,7 +3689,6 @@ private:
             }
 
             INPUT_RECORD ir;
-            DWORD read;
             ReadInputEvent(ir);
 
             if (ir.EventType == WINDOW_BUFFER_SIZE_EVENT) {
@@ -3775,7 +3771,6 @@ private:
         FlushBuffer();
 
         INPUT_RECORD ir;
-        DWORD read;
         while (true) {
             ReadInputEvent(ir);
             if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
@@ -3834,7 +3829,6 @@ private:
         FlushBuffer();
 
         INPUT_RECORD ir;
-        DWORD read;
         while (true) {
             ReadInputEvent(ir);
             if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
@@ -3891,6 +3885,8 @@ private:
         SetConsoleCP(CP_UTF8);
         ApplyEditorConsoleModes();
         FlushConsoleInputBuffer(m_hStdIn);
+        m_inBuf.clear();
+        m_inPos = 0;
         m_needsRender = true;
     }
 

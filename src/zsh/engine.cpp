@@ -206,9 +206,16 @@ string current_shell_executable_path() {
 
 string find_executable_in_path(const string& bin) {
     error_code ec;
-    if (fs::exists(bin, ec) && !fs::is_directory(bin, ec)) return bin;
-    for (const string& ext : { ".exe", ".com", ".bat", ".cmd" }) {
-        if (fs::exists(bin + ext, ec)) return bin + ext;
+    auto resolve_candidate = [&](const string& base) -> string {
+        if (fs::exists(base, ec) && !fs::is_directory(base, ec)) return base;
+        for (const string& ext : { ".exe", ".com", ".bat", ".cmd" }) {
+            if (fs::exists(base + ext, ec) && !fs::is_directory(base + ext, ec)) return base + ext;
+        }
+        return "";
+    };
+
+    if (bin.find_first_of("/\\:") != string::npos) {
+        return resolve_candidate(normalize_path_to_win(bin));
     }
 
     string self_path = current_shell_executable_path();
@@ -216,10 +223,8 @@ string find_executable_in_path(const string& bin) {
         string self_dir = fs::path(self_path).parent_path().string();
         if (!self_dir.empty()) {
             string base = self_dir + "\\" + bin;
-            if (fs::exists(base, ec) && !fs::is_directory(base, ec)) return base;
-            for (const string& ext : { ".exe", ".com", ".bat", ".cmd" }) {
-                if (fs::exists(base + ext, ec)) return base + ext;
-            }
+            string resolved = resolve_candidate(base);
+            if (!resolved.empty()) return resolved;
         }
     }
 
@@ -230,12 +235,55 @@ string find_executable_in_path(const string& bin) {
     string dir;
     while (getline(ss, dir, ';')) {
         string base = normalize_path_to_win(dir) + "\\" + bin;
-        if (fs::exists(base, ec) && !fs::is_directory(base, ec)) return base;
-        for (const string& ext : { ".exe", ".com", ".bat", ".cmd" }) {
-            if (fs::exists(base + ext, ec)) return base + ext;
-        }
+        string resolved = resolve_candidate(base);
+        if (!resolved.empty()) return resolved;
     }
     return "";
+}
+
+vector<string> find_all_executables_in_path(const string& bin) {
+    vector<string> results;
+    error_code ec;
+    auto resolve_candidate = [&](const string& base) -> string {
+        if (fs::exists(base, ec) && !fs::is_directory(base, ec)) return base;
+        for (const string& ext : { ".exe", ".com", ".bat", ".cmd" }) {
+            if (fs::exists(base + ext, ec) && !fs::is_directory(base + ext, ec)) return base + ext;
+        }
+        return "";
+    };
+
+    if (bin.find_first_of("/\\:") != string::npos) {
+        string r = resolve_candidate(normalize_path_to_win(bin));
+        if (!r.empty()) results.push_back(r);
+        return results;
+    }
+
+    string self_path = current_shell_executable_path();
+    if (!self_path.empty()) {
+        string self_dir = fs::path(self_path).parent_path().string();
+        if (!self_dir.empty()) {
+            string base = self_dir + "\\" + bin;
+            string resolved = resolve_candidate(base);
+            if (!resolved.empty()) results.push_back(resolved);
+        }
+    }
+
+    char* path_env = getenv("PATH");
+    if (!path_env) return results;
+
+    stringstream ss(path_env);
+    string dir;
+    while (getline(ss, dir, ';')) {
+        if (dir.empty()) continue;
+        string base = normalize_path_to_win(dir) + "\\" + bin;
+        string resolved = resolve_candidate(base);
+        if (!resolved.empty()) {
+            if (find(results.begin(), results.end(), resolved) == results.end()) {
+                results.push_back(resolved);
+            }
+        }
+    }
+    return results;
 }
 
 bool split_zsh_registry_path(const string& property_path, HKEY& root, wstring& key_path, wstring& value_name) {
@@ -378,6 +426,17 @@ ZshEnvironment::ZshEnvironment() {
         catch (...) { vars["PWD"] = vars["OLDPWD"]; }
         SetEnvironmentVariableA("OLDPWD", vars["OLDPWD"].c_str());
         SetEnvironmentVariableA("PWD", vars["PWD"].c_str());
+
+        resource_limits["cputime"] = "unlimited";
+        resource_limits["filesize"] = "unlimited";
+        resource_limits["datasize"] = "unlimited";
+        resource_limits["stacksize"] = "2048";
+        resource_limits["coredumpsize"] = "0";
+        resource_limits["memoryuse"] = "unlimited";
+        resource_limits["maxproc"] = "1024";
+        resource_limits["descriptors"] = "2048";
+        resource_limits["memorylocked"] = "unlimited";
+        resource_limits["addressspace"] = "unlimited";
     }
 
 void ZshEnvironment::load_history() {

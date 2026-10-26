@@ -29,6 +29,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`gsar`](docs/gsar.md) — Searches and replaces byte patterns or strings in text and binary files.
 - [`head`](docs/head.md) — Prints the beginning of a file or stream.
 - [`join`](docs/join.md) — Joins lines of two files on a common field.
+- [`jq`](docs/jq.md) — Processes JSON input with filters, formatting, and value/argument options.
 - [`less`](docs/less.md) — Views files and output one screen at a time with paging and search.
 - [`m4`](docs/m4.md) — Processes macro-based text transformations.
 - [`man`](docs/man.md) — Displays manual pages for commands.
@@ -42,6 +43,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`printf`](docs/printf.md) — Formats and prints output.
 - [`read`](docs/read.md) — Reads input from standard input or a file.
 - [`recode`](docs/recode.md) — Converts text between character encodings.
+- [`rgx`](docs/rgx.md) — Recursively searches text with ripgrep-style regex, context, glob, and ignore options on Windows.
 - [`search`](docs/search.md) — Recursively searches files and directories by name, extension, type, and metadata filters.
 - [`sed`](docs/sed.md) — Edits text streams using sed-style scripts and substitution commands.
 - [`seq`](docs/seq.md) — Generates sequences of numbers.
@@ -105,7 +107,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`locate`](docs/locate.md) — Finds files by name in a filesystem index.
 - [`ls`](docs/ls.md) — Lists files and directories, with human-readable, JSON, CSV, and table output modes for direct piping.
 - [`lsattr`](docs/lsattr.md) — Lists Windows file attributes using Unix-style flag letters.
-- [`lsblk`](docs/lsblk.md) — Lists block-style devices and mounted volumes.
+- [`diskinfo`](docs/diskinfo.md) — Lists block-style devices and mounted volumes.
 - [`md5sum`](docs/md5sum.md) — Computes MD5 checksums.
 - [`mkfifo`](docs/mkfifo.md) — Creates Windows named pipes.
 - [`mktemp`](docs/mktemp.md) — Creates secure temporary files or directories.
@@ -138,6 +140,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`xz`](docs/xz.md) — Compresses files into `.xz` format through an external xz backend.
 - [`zcat`](docs/zcat.md) — Prints decompressed `.gz` file content to standard output.
 - [`zip`](docs/zip.md) — Creates and updates ZIP archives.
+- [`zstd`](docs/zstd.md) — Compresses, decompresses, tests, lists, and benchmarks Zstandard files.
 
 ---
 
@@ -189,6 +192,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`printenv`](docs/printenv.md) — Prints environment variables.
 - [`ps`](docs/ps.md) — Lists process status, PID, session, and resource information.
 - [`pskill`](docs/pskill.md) — Terminates processes by PID or name pattern with tree traversal, signal modes, and dry-run preview.
+- [`winobj`](docs/winobj.md) — Browses Windows NT Object Manager namespaces and enumerates named pipes.
 - [`pstree`](docs/pstree.md) — Displays running processes as a tree illustrating parent-child relationships.
 - [`pthctl`](docs/pthctl.md) — Manages User and System PATH entries (list, add, remove, check, and clean duplicates).
 - [`reboot`](docs/reboot.md) — Restarts the system cleanly.
@@ -226,6 +230,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`mailx`](docs/mailx.md) — Sends email messages via SMTP.
 - [`mtr`](docs/mtr.md) — Continuously traces an IPv4 route and reports per-hop latency and packet-loss statistics.
 - [`nc`](docs/nc.md) — Creates TCP/UDP client and listener sockets for relay, scan, and command-pipe workflows (netcat).
+- [`netconf`](docs/netconf.md) — Displays network port configuration, operational link states, duplex notations, and IP/gateway telemetry in HP-UX portconf style.
 - [`netctl`](docs/netctl.md) — Captures and analyzes network traffic with Winsock or optional Npcap backends.
 - [`nfsctl`](docs/nfsctl.md) — Controls and diagnoses Windows NFS client/server state, mounts, probes, and registry settings.
 - [`rcp`](docs/rcp.md) — Copies files and directories between local and remote hosts using the remote copy protocol.
@@ -265,14 +270,18 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`prtconf`](docs/prtconf.md) — Prints system configuration summary in an AIX-inspired format.
 - [`ps`](docs/ps.md) — Lists process information.
 - [`ptime`](docs/ptime.md) — Reports high-resolution process execution timing and elapsed time.
+- [`pv`](docs/pv.md) — Copies input streams while displaying transfer progress, rate, and estimated completion time.
 - [`setboot`](docs/setboot.md) — Views and updates UEFI boot parameters and boot-order settings.
 - [`swlist`](docs/swlist.md) — Lists installed software from Windows registry sources in HP-UX-style views.
+- [`sysctl`](docs/sysctl.md) — Inspects and configures system parameters in an OpenBSD-style MIB hierarchy.
 - [`top`](docs/top.md) — Shows live system and process CPU/memory activity.
 - [`tty`](docs/tty.md) — Prints the console terminal device name.
 - [`uname`](docs/uname.md) — Prints operating system and kernel release information.
 - [`uptime`](docs/uptime.md) — Shows how long the Windows system has been running.
 - [`vmstat`](docs/vmstat.md) — Reports virtual memory, paging, interrupt, and CPU activity over time.
 - [`whereami`](docs/whereami.md) — Reports geographic coordinates and optional address, altitude, accuracy, and network details.
+- [`wslmgr`](docs/wslmgr.md) — Interactively manages WSL distributions, imports, diagnostics, and lifecycle operations.
+- [`xmic`](docs/xmic.md) — Queries Windows system information through WMI with presets, custom queries, scripts, and DCOM/WinRM/SSH transports.
 
 ---
 
@@ -292,3 +301,4 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`rpmbuild`](docs/rpmbuild.md) — Builds RPM binary and source packages from specification files.
 - [`tmux`](docs/tmux.md) — Provides terminal multiplexer sessions, windows, and panes.
 - [`ts`](docs/ts.md) — Prefixes standard input lines with timestamps.
+- [`yum`](docs/yum.md) — Manages winget packages and queries or installs Windows updates through the native Windows Update Agent.

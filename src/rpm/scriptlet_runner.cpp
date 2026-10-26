@@ -9,7 +9,8 @@ bool ScriptletRunner::execute(const std::string& script, const std::string& phas
             out << "@echo off\r\n" << script << "\r\n";
         }
 
-        STARTUPINFOA si = { sizeof(si) };
+        STARTUPINFOA si{};
+        si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
         std::string cmd = "cmd.exe /s /c \"\"" + tempScript.string() + "\"\"";
 

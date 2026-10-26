@@ -11,7 +11,11 @@
         }
 
         // Assigning replaces the slot with a fresh immutable line.
-        void set(size_t i, std::string s) { m_lines[i] = std::make_shared<const std::string>(std::move(s)); }
+        void set(size_t i, std::string s) {
+            if (i < m_lines.size()) {
+                m_lines[i] = std::make_shared<const std::string>(std::move(s));
+            }
+        }
 
         void push_back(const std::string& s) { m_lines.push_back(std::make_shared<const std::string>(s)); }
 
@@ -36,7 +40,9 @@
         // Replace every line with a fresh string (used by replace-all).
         void replaceEach(const std::function<std::string(const std::string&)>& fn) {
             for (size_t i = 0; i < m_lines.size(); ++i) {
-                set(i, fn(*m_lines[i]));
+                if (m_lines[i]) {
+                    set(i, fn(*m_lines[i]));
+                }
             }
         }
 

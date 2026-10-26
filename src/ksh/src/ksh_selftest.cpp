@@ -109,6 +109,18 @@ int run_internal_self_tests() {
     assert_eq(evaluate_arithmetic(L"1 || 0"), L"1", L"arithmetic logical or parses rhs");
     assert_eq(evaluate_arithmetic(L"0 && 1"), L"0", L"arithmetic logical and parses rhs");
     assert_eq(evaluate_arithmetic(L"0 ? 7 : 9"), L"9", L"arithmetic ternary operator");
+    assert_eq(evaluate_arithmetic(L"0x1F + 1"), L"32", L"arithmetic hex constant");
+    assert_eq(evaluate_arithmetic(L"0b1010 + 2"), L"12", L"arithmetic binary constant");
+    assert_eq(evaluate_arithmetic(L"0o77 + 1"), L"64", L"arithmetic octal constant");
+    assert_eq(evaluate_arithmetic(L"~0"), L"-1", L"arithmetic bitwise not");
+    assert_eq(evaluate_arithmetic(L"!0"), L"1", L"arithmetic logical not zero");
+    assert_eq(evaluate_arithmetic(L"!5"), L"0", L"arithmetic logical not nonzero");
+    assert_eq(evaluate_arithmetic(L"0x1F + 1"), L"32", L"arithmetic hex constant");
+    assert_eq(evaluate_arithmetic(L"0b1010 + 2"), L"12", L"arithmetic binary constant");
+    assert_eq(evaluate_arithmetic(L"0o77 + 1"), L"64", L"arithmetic octal constant");
+    assert_eq(evaluate_arithmetic(L"~0"), L"-1", L"arithmetic bitwise not");
+    assert_eq(evaluate_arithmetic(L"!0"), L"1", L"arithmetic logical not zero");
+    assert_eq(evaluate_arithmetic(L"!5"), L"0", L"arithmetic logical not nonzero");
 
     // Test integer casting for whole number indices in arithmetic evaluations
     {
@@ -256,6 +268,15 @@ int run_internal_self_tests() {
             assert_eq(tokens2[1], L"\"hello world\"", L"preserve quotes with tab separation");
             assert_eq(tokens2[2], L"'foo\tbar'", L"tab preserved inside quotes");
         }
+    }
+
+    {
+        bool should_exit = false;
+        std::wstring output;
+        g_builtin_capture_output = &output;
+        execute_command_line(L"echo before & echo after", should_exit);
+        g_builtin_capture_output = nullptr;
+        assert_eq(output, L"before\nafter\n", L"background ampersand separates following command");
     }
 
     // 14. Process Substitution Quote Context Verification

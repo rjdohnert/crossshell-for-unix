@@ -212,13 +212,30 @@ bool ArchiveExtractionEngine::extract(const fs::path& rpmPath, std::streampos of
                         // Look up true mode from headerFiles if available
                         uint32_t mode = 0100644;
                         std::string relGen = rel.generic_string();
+                        while (!relGen.empty() && (relGen.front() == '/' || relGen.front() == '\\' || relGen.front() == '.')) {
+                            relGen.erase(relGen.begin());
+                        }
+
+                        bool foundMatch = false;
                         for (const auto& hf : headerFiles) {
-                            fs::path hfPath(hf.path);
-                            if (hfPath.generic_string() == relGen ||
-                                hfPath.filename() == rel.filename() ||
-                                hf.path.find(relGen) != std::string::npos) {
+                            std::string hfNorm = fs::path(hf.path).generic_string();
+                            if (hfNorm.size() >= 2 && hfNorm[1] == ':') hfNorm = hfNorm.substr(2);
+                            while (!hfNorm.empty() && (hfNorm.front() == '/' || hfNorm.front() == '\\' || hfNorm.front() == '.')) {
+                                hfNorm.erase(hfNorm.begin());
+                            }
+                            if (_stricmp(hfNorm.c_str(), relGen.c_str()) == 0) {
                                 mode = hf.mode;
+                                foundMatch = true;
                                 break;
+                            }
+                        }
+                        if (!foundMatch) {
+                            for (const auto& hf : headerFiles) {
+                                fs::path hfPath(hf.path);
+                                if (_stricmp(hfPath.filename().string().c_str(), rel.filename().string().c_str()) == 0) {
+                                    mode = hf.mode;
+                                    break;
+                                }
                             }
                         }
                         if (mode == 0) mode = 0100644;
