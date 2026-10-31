@@ -7,7 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ToolName = 'typeset'
-$SourceFiles = @("environment_store.cpp", "option_parser.cpp", "output_formatter.cpp", "registry_environment_store.cpp", "string_utils.cpp", "typeset_app.cpp", "typeset_pipe.cpp", "typeset.cpp")
+$SourceFiles = @("typeset.c", "strutil.c", "variable.c", "symtab.c", "app.c")
 Push-Location $PSScriptRoot
 try {
     if ($Clean) {
@@ -15,20 +15,22 @@ try {
         return
     }
     if ($Compiler -eq 'auto') {
-        if (Get-Command clang++ -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
+        if (Get-Command clang -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
         elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) { $Compiler = 'cl' }
-        elseif (Get-Command g++ -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
-        else { throw 'No suitable C++ compiler found (clang++, cl, or g++ required).' }
+        elseif (Get-Command gcc -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
+        else { throw 'No suitable C compiler found (clang, cl, or gcc required).' }
     }
     switch ($Compiler) {
-        'clang' { & clang++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "$ToolName.exe" @SourceFiles -ladvapi32 -luser32 }
-        'cl' { & cl.exe /nologo /std:c++17 /O2 /EHsc /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:$ToolName.exe" @SourceFiles advapi32.lib user32.lib }
-        'gcc' { & g++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -municode  -o "$ToolName.exe" @SourceFiles -ladvapi32 -luser32 }
+        'clang' { & clang -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "$ToolName.exe" @SourceFiles  }
+        'cl' { & cl.exe /nologo /std:c17 /O2 /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:$ToolName.exe" @SourceFiles  }
+        'gcc' { & gcc -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX   -o "$ToolName.exe" @SourceFiles  }
     }
     if ($LASTEXITCODE -ne 0) { throw "Build failed for $ToolName (exit $LASTEXITCODE)." }
+    Write-Host "[$ToolName] Build successful: $ToolName.exe"
     if (-not $NoInstall) {
         $BinDir = Join-Path $PSScriptRoot '../../bin'
         New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
         Copy-Item "$ToolName.exe" $BinDir -Force
+        Write-Host "[$ToolName] Installed to $BinDir\$ToolName.exe"
     }
 } finally { Pop-Location }

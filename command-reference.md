@@ -65,6 +65,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`autotool`](docs/autotool.md) — Bundles native automake, autoconf, libtool-style library orchestration, and build/port helper subcommands.
 - [`bc`](docs/bc.md) — Provides an arbitrary-precision calculator for arithmetic expressions.
 - [`cbasic`](docs/cbasic.md) — Runs BASIC programs with a lightweight interpreter.
+- [`cc`](docs/cc.md) — Intelligent Clang/GCC compiler wrapper that auto-detects a backend even off the system PATH and forwards standard flags.
 - [`crossforge`](docs/crossforge.md) — Provides a menu-driven console IDE with syntax highlighting, Rust/Go and native toolchain autodetection, WSL/SSH terminals, and sandboxed build/run/debug.
 - [`dc`](docs/dc.md) — Evaluates arbitrary-precision reverse-Polish arithmetic with stack, register, macro, radix, and scale operations.
 - [`kgdb`](docs/kgdb.md) — Launches or interacts with kernel debugging tools.
@@ -106,6 +107,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`ln`](docs/ln.md) — Creates hard links, symbolic links, and NTFS junctions between files.
 - [`locate`](docs/locate.md) — Finds files by name in a filesystem index.
 - [`ls`](docs/ls.md) — Lists files and directories, with human-readable, JSON, CSV, and table output modes for direct piping.
+- [`xls`](docs/xls.md) — Extended `ls` with NTFS cluster allocation, disk slack, attribute flags, and volume telemetry in human-readable sizes.
 - [`lsattr`](docs/lsattr.md) — Lists Windows file attributes using Unix-style flag letters.
 - [`diskinfo`](docs/diskinfo.md) — Lists block-style devices and mounted volumes.
 - [`md5sum`](docs/md5sum.md) — Computes MD5 checksums.
@@ -129,6 +131,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`touch`](docs/touch.md) — Updates timestamps or creates empty files.
 - [`truncate`](docs/truncate.md) — Shrinks, extends, or rounds file lengths to a requested size.
 - [`umask`](docs/umask.md) — Displays or sets the file creation mask.
+- [`uncompress`](docs/uncompress.md) — Decompresses classic Unix LZW (.Z) archives.
 - [`unxz`](docs/unxz.md) — Decompresses `.xz` files through an external xz backend.
 - [`unzip`](docs/unzip.md) — Lists or extracts ZIP archive contents.
 - [`vhdctl`](docs/vhdctl.md) — Controls or inspects virtual hard disk (VHD/VHDX) operations.

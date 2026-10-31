@@ -1,0 +1,1165 @@
+#define UNICODE
+#define _UNICODE
+
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+#include <wchar.h>
+#include <io.h>
+#include <fcntl.h>
+
+#define COMPRESS_VERSION L"3.3.0"
+#define MAGIC_BYTE_0     0x1F
+#define MAGIC_BYTE_1     0x9D
+#define BLOCK_MASK       0x80
+#define BITS_MASK        0x1F
+#define INIT_BITS        9
+#define DEFAULT_BITS     16
+#define CLEAR_CODE       256
+#define FIRST_FREE_CODE  257
+#define HASH_SIZE        69001
+#define IO_BUFFER_SIZE   (64 * 1024)
+#define STACK_SIZE       65536
+#define CHECK_GAP        10000
+
+/* ========================================================================= */
+/* GLOBAL ATOMIC CLEANUP HANDLER                                             */
+/* ========================================================================= */
+
+static wchar_t *g_active_temp_file = NULL;
+static CRITICAL_SECTION g_cleanup_lock;
+
+static void register_active_temp_file(const wchar_t *path) {
+    EnterCriticalSection(&g_cleanup_lock);
+    if (g_active_temp_file) {
+        free(g_active_temp_file);
+        g_active_temp_file = NULL;
+    }
+    if (path) {
+        g_active_temp_file = _wcsdup(path);
+    }
+    LeaveCriticalSection(&g_cleanup_lock);
+}
+
+static BOOL WINAPI console_ctrl_handler(DWORD ctrl_type) {
+    switch (ctrl_type) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+            EnterCriticalSection(&g_cleanup_lock);
+            if (g_active_temp_file) {
+                DeleteFileW(g_active_temp_file);
+                free(g_active_temp_file);
+                g_active_temp_file = NULL;
+            }
+            LeaveCriticalSection(&g_cleanup_lock);
+            break;
+        default:
+            break;
+    }
+    return FALSE;
+}
+
+/* ========================================================================= */
+/* INTERFACE: IByteStream                                                    */
+/* ========================================================================= */
+
+typedef struct IByteStream IByteStream;
+
+typedef struct {
+    size_t   (*read)(IByteStream *this, void *buf, size_t size);
+    size_t   (*write)(IByteStream *this, const void *buf, size_t size);
+    bool     (*flush)(IByteStream *this);
+    uint64_t (*get_bytes_transferred)(const IByteStream *this);
+    bool     (*has_error)(const IByteStream *this);
+    void     (*destroy)(IByteStream *this);
+} IByteStreamVtbl;
+
+struct IByteStream {
+    const IByteStreamVtbl *vptr;
+};
+
+/* ---------------- Concrete Class: FileStream ---------------- */
+
+typedef struct {
+    IByteStream base;
+    HANDLE hFile;
+    uint64_t bytes_transferred;
+    bool should_close;
+    bool error_flag;
+} FileStream;
+
+static size_t FileStream_read(IByteStream *super, void *buf, size_t size) {
+    FileStream *this = (FileStream *)super;
+    if (this->error_flag || this->hFile == INVALID_HANDLE_VALUE) return 0;
+
+    size_t total_read = 0;
+    char *p = (char *)buf;
+
+    // Loop to guarantee full packet delivery across fragmented Windows pipes
+    while (total_read < size) {
+        DWORD bytes_to_read = (DWORD)(size - total_read);
+        DWORD bytesRead = 0;
+        if (!ReadFile(this->hFile, p + total_read, bytes_to_read, &bytesRead, NULL)) {
+            DWORD err = GetLastError();
+            if (err != ERROR_HANDLE_EOF && err != ERROR_BROKEN_PIPE) {
+                this->error_flag = true;
+            }
+            break;
+        }
+        if (bytesRead == 0) {
+            break; // True EOF
+        }
+        total_read += bytesRead;
+    }
+
+    this->bytes_transferred += total_read;
+    return total_read;
+}
+
+static size_t FileStream_write(IByteStream *super, const void *buf, size_t size) {
+    FileStream *this = (FileStream *)super;
+    if (this->error_flag || this->hFile == INVALID_HANDLE_VALUE) return 0;
+
+    size_t total_written = 0;
+    const char *p = (const char *)buf;
+
+    while (total_written < size) {
+        DWORD bytes_to_write = (DWORD)(size - total_written);
+        DWORD bytesWritten = 0;
+        if (!WriteFile(this->hFile, p + total_written, bytes_to_write, &bytesWritten, NULL) || bytesWritten == 0) {
+            this->error_flag = true;
+            break;
+        }
+        total_written += bytesWritten;
+    }
+
+    this->bytes_transferred += total_written;
+    return total_written;
+}
+
+static bool FileStream_flush(IByteStream *super) {
+    FileStream *this = (FileStream *)super;
+    if (this->hFile != INVALID_HANDLE_VALUE) {
+        return FlushFileBuffers(this->hFile) != FALSE;
+    }
+    return true;
+}
+
+static uint64_t FileStream_get_bytes(const IByteStream *super) {
+    return ((const FileStream *)super)->bytes_transferred;
+}
+
+static bool FileStream_has_error(const IByteStream *super) {
+    return ((const FileStream *)super)->error_flag;
+}
+
+static void FileStream_destroy(IByteStream *super) {
+    FileStream *this = (FileStream *)super;
+    if (this) {
+        if (this->should_close && this->hFile != INVALID_HANDLE_VALUE) {
+            CloseHandle(this->hFile);
+        }
+        free(this);
+    }
+}
+
+static const IByteStreamVtbl FileStream_Vtbl = {
+    .read = FileStream_read,
+    .write = FileStream_write,
+    .flush = FileStream_flush,
+    .get_bytes_transferred = FileStream_get_bytes,
+    .has_error = FileStream_has_error,
+    .destroy = FileStream_destroy
+};
+
+IByteStream *FileStream_create(const wchar_t *path, DWORD access, DWORD creation) {
+    DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    HANDLE h = CreateFileW(path, access, share, NULL, creation, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+
+    FileStream *stream = (FileStream *)calloc(1, sizeof(FileStream));
+    if (!stream) {
+        CloseHandle(h);
+        return NULL;
+    }
+    stream->base.vptr = &FileStream_Vtbl;
+    stream->hFile = h;
+    stream->should_close = true;
+    return (IByteStream *)stream;
+}
+
+IByteStream *StdioStream_create(DWORD stdHandleType) {
+    HANDLE h = GetStdHandle(stdHandleType);
+    if (h == INVALID_HANDLE_VALUE || h == NULL) return NULL;
+
+    FileStream *stream = (FileStream *)calloc(1, sizeof(FileStream));
+    if (!stream) return NULL;
+    stream->base.vptr = &FileStream_Vtbl;
+    stream->hFile = h;
+    stream->should_close = false;
+    return (IByteStream *)stream;
+}
+
+/* ========================================================================= */
+/* CLASS: BitWriter (Standard UNIX 8-Token Aligned Bit Packer)               */
+/* ========================================================================= */
+
+typedef struct {
+    IByteStream *output;
+    uint8_t packet[DEFAULT_BITS + 4];
+    int bit_offset;
+    bool error_flag;
+} BitWriter;
+
+BitWriter *BitWriter_create(IByteStream *output) {
+    BitWriter *this = (BitWriter *)calloc(1, sizeof(BitWriter));
+    if (!this) return NULL;
+    this->output = output;
+    return this;
+}
+
+bool BitWriter_write(BitWriter *this, uint32_t code, int n_bits) {
+    if (this->error_flag) return false;
+
+    int byte_idx = this->bit_offset >> 3;
+    int bit_idx = this->bit_offset & 7;
+
+    this->packet[byte_idx] |= (uint8_t)((code << bit_idx) & 0xFF);
+    this->packet[byte_idx + 1] |= (uint8_t)((code >> (8 - bit_idx)) & 0xFF);
+    if (bit_idx + n_bits > 16) {
+        this->packet[byte_idx + 2] |= (uint8_t)((code >> (16 - bit_idx)) & 0xFF);
+    }
+
+    this->bit_offset += n_bits;
+
+    if (this->bit_offset >= (n_bits << 3)) {
+        size_t written = this->output->vptr->write(this->output, this->packet, n_bits);
+        if (written != (size_t)n_bits) {
+            this->error_flag = true;
+            return false;
+        }
+        memset(this->packet, 0, sizeof(this->packet));
+        this->bit_offset = 0;
+    }
+    return true;
+}
+
+bool BitWriter_align(BitWriter *this, int n_bits) {
+    if (this->error_flag) return false;
+    if (this->bit_offset > 0) {
+        size_t bytes_to_write = (size_t)n_bits;
+        size_t written = this->output->vptr->write(this->output, this->packet, bytes_to_write);
+        if (written != bytes_to_write) {
+            this->error_flag = true;
+            return false;
+        }
+        memset(this->packet, 0, sizeof(this->packet));
+        this->bit_offset = 0;
+    }
+    return true;
+}
+
+bool BitWriter_flush(BitWriter *this) {
+    if (this->error_flag) return false;
+    if (this->bit_offset > 0) {
+        size_t bytes_to_write = (this->bit_offset + 7) >> 3;
+        size_t written = this->output->vptr->write(this->output, this->packet, bytes_to_write);
+        if (written != bytes_to_write) {
+            this->error_flag = true;
+            return false;
+        }
+        memset(this->packet, 0, sizeof(this->packet));
+        this->bit_offset = 0;
+    }
+    return this->output->vptr->flush(this->output);
+}
+
+bool BitWriter_destroy(BitWriter *this) {
+    if (!this) return true;
+    bool ok = BitWriter_flush(this);
+    if (this->error_flag) ok = false;
+    free(this);
+    return ok;
+}
+
+/* ========================================================================= */
+/* CLASS: BitReader (Standard UNIX 8-Token Aligned Bit Unpacker)             */
+/* ========================================================================= */
+
+typedef struct {
+    IByteStream *input;
+    uint8_t packet[DEFAULT_BITS + 4];
+    int bit_offset;
+    size_t packet_size;
+    bool eof_flag;
+    bool error_flag;
+} BitReader;
+
+BitReader *BitReader_create(IByteStream *input) {
+    BitReader *this = (BitReader *)calloc(1, sizeof(BitReader));
+    if (!this) return NULL;
+    this->input = input;
+    return this;
+}
+
+bool BitReader_read(BitReader *this, int n_bits, uint32_t *out_code) {
+    if (this->error_flag || this->eof_flag) return false;
+
+    if (this->bit_offset + n_bits > ((int)this->packet_size << 3)) {
+        this->packet_size = this->input->vptr->read(this->input, this->packet, n_bits);
+        this->bit_offset = 0;
+        if (this->packet_size == 0) {
+            this->eof_flag = true;
+            return false;
+        }
+        if (this->packet_size < (size_t)n_bits) {
+            memset(this->packet + this->packet_size, 0, sizeof(this->packet) - this->packet_size);
+        }
+        if (this->bit_offset + n_bits > ((int)this->packet_size << 3)) {
+            this->eof_flag = true;
+            return false;
+        }
+    }
+
+    int byte_idx = this->bit_offset >> 3;
+    int bit_idx = this->bit_offset & 7;
+
+    uint32_t code = ((uint32_t)this->packet[byte_idx]) >> bit_idx;
+    if (bit_idx + n_bits > 8) {
+        code |= ((uint32_t)this->packet[byte_idx + 1]) << (8 - bit_idx);
+    }
+    if (bit_idx + n_bits > 16) {
+        code |= ((uint32_t)this->packet[byte_idx + 2]) << (16 - bit_idx);
+    }
+
+    code &= (1U << n_bits) - 1;
+    this->bit_offset += n_bits;
+    *out_code = code;
+    return true;
+}
+
+void BitReader_align(BitReader *this) {
+    this->packet_size = 0;
+    this->bit_offset = 0;
+}
+
+void BitReader_destroy(BitReader *this) {
+    free(this);
+}
+
+/* ========================================================================= */
+/* INTERFACE: ICodec                                                         */
+/* ========================================================================= */
+
+typedef struct ICodec ICodec;
+
+typedef struct {
+    bool     (*execute)(ICodec *this, IByteStream *src, IByteStream *dst);
+    uint64_t (*get_bytes_in)(const ICodec *this);
+    uint64_t (*get_bytes_out)(const ICodec *this);
+    void     (*destroy)(ICodec *this);
+} ICodecVtbl;
+
+struct ICodec {
+    const ICodecVtbl *vptr;
+};
+
+/* ---------------- Concrete Class: LzwCompressor ---------------- */
+
+typedef struct {
+    ICodec base;
+    int max_bits;
+    bool block_mode;
+    uint64_t bytes_in;
+    uint64_t bytes_out;
+    int32_t *codetab;
+    uint32_t *htab;
+} LzwCompressor;
+
+static void LzwCompressor_clear_table(LzwCompressor *this) {
+    memset(this->codetab, -1, HASH_SIZE * sizeof(int32_t));
+}
+
+static bool LzwCompressor_execute(ICodec *super, IByteStream *src, IByteStream *dst) {
+    LzwCompressor *this = (LzwCompressor *)super;
+
+    uint8_t header[3] = {
+        MAGIC_BYTE_0,
+        MAGIC_BYTE_1,
+        (uint8_t)((this->max_bits & BITS_MASK) | (this->block_mode ? BLOCK_MASK : 0))
+    };
+    if (dst->vptr->write(dst, header, 3) != 3) return false;
+
+    BitWriter *writer = BitWriter_create(dst);
+    if (!writer) return false;
+
+    int n_bits = INIT_BITS;
+    uint32_t maxcode = (1U << n_bits) - 1;
+    uint32_t free_ent = this->block_mode ? FIRST_FREE_CODE : 256;
+    LzwCompressor_clear_table(this);
+
+    uint64_t checkpoint = CHECK_GAP;
+    double prev_ratio = 0.0;
+
+    uint8_t in_buf[IO_BUFFER_SIZE];
+    size_t bytes_read = src->vptr->read(src, in_buf, IO_BUFFER_SIZE);
+    if (bytes_read == 0) {
+        bool flush_ok = BitWriter_destroy(writer);
+        this->bytes_out = dst->vptr->get_bytes_transferred(dst);
+        return flush_ok && !src->vptr->has_error(src) && !dst->vptr->has_error(dst);
+    }
+
+    this->bytes_in += bytes_read;
+    uint32_t ent = in_buf[0];
+
+    size_t idx_in = 1;
+    while (true) {
+        if (idx_in >= bytes_read) {
+            bytes_read = src->vptr->read(src, in_buf, IO_BUFFER_SIZE);
+            if (bytes_read == 0) break;
+            this->bytes_in += bytes_read;
+            idx_in = 0;
+        }
+
+        uint32_t ch = in_buf[idx_in++];
+        uint32_t key = (ent << 8) | ch;
+        uint32_t idx = key % HASH_SIZE;
+        uint32_t step = 1 + (key % (HASH_SIZE - 1));
+        bool found = false;
+
+        while (this->codetab[idx] != -1) {
+            if (this->htab[idx] == key) {
+                ent = (uint32_t)this->codetab[idx];
+                found = true;
+                break;
+            }
+            idx = (idx + step) % HASH_SIZE;
+        }
+
+        if (!found) {
+            if (!BitWriter_write(writer, ent, n_bits)) {
+                BitWriter_destroy(writer);
+                return false;
+            }
+
+            if (free_ent < (1U << this->max_bits)) {
+                this->codetab[idx] = (int32_t)free_ent++;
+                this->htab[idx] = key;
+                if (free_ent > maxcode && n_bits < this->max_bits) {
+                    if (!BitWriter_align(writer, n_bits)) {
+                        BitWriter_destroy(writer);
+                        return false;
+                    }
+                    n_bits++;
+                    maxcode = (n_bits == this->max_bits) ? (1U << this->max_bits) : ((1U << n_bits) - 1);
+                }
+            } else if (this->block_mode && this->bytes_in >= checkpoint) {
+                checkpoint = this->bytes_in + CHECK_GAP;
+                uint64_t cur_out = dst->vptr->get_bytes_transferred(dst);
+                double cur_ratio = (cur_out > 0) ? ((double)this->bytes_in / (double)cur_out) : 0.0;
+
+                if (cur_ratio < prev_ratio) {
+                    if (!BitWriter_write(writer, CLEAR_CODE, n_bits) || !BitWriter_align(writer, n_bits)) {
+                        BitWriter_destroy(writer);
+                        return false;
+                    }
+                    LzwCompressor_clear_table(this);
+                    free_ent = FIRST_FREE_CODE;
+                    n_bits = INIT_BITS;
+                    maxcode = (1U << INIT_BITS) - 1;
+                    prev_ratio = 0.0;
+                } else {
+                    prev_ratio = cur_ratio;
+                }
+            }
+            ent = ch;
+        }
+    }
+
+    if (!BitWriter_write(writer, ent, n_bits)) {
+        BitWriter_destroy(writer);
+        return false;
+    }
+
+    bool flush_ok = BitWriter_destroy(writer);
+    this->bytes_out = dst->vptr->get_bytes_transferred(dst);
+    return flush_ok && !dst->vptr->has_error(dst) && !src->vptr->has_error(src);
+}
+
+static uint64_t LzwCompressor_get_in(const ICodec *super) {
+    return ((const LzwCompressor *)super)->bytes_in;
+}
+
+static uint64_t LzwCompressor_get_out(const ICodec *super) {
+    return ((const LzwCompressor *)super)->bytes_out;
+}
+
+static void LzwCompressor_destroy(ICodec *super) {
+    LzwCompressor *this = (LzwCompressor *)super;
+    if (this) {
+        free(this->codetab);
+        free(this->htab);
+        free(this);
+    }
+}
+
+static const ICodecVtbl LzwCompressor_Vtbl = {
+    .execute = LzwCompressor_execute,
+    .get_bytes_in = LzwCompressor_get_in,
+    .get_bytes_out = LzwCompressor_get_out,
+    .destroy = LzwCompressor_destroy
+};
+
+ICodec *LzwCompressor_create(int max_bits) {
+    LzwCompressor *this = (LzwCompressor *)calloc(1, sizeof(LzwCompressor));
+    if (!this) return NULL;
+    this->base.vptr = &LzwCompressor_Vtbl;
+    this->max_bits = max_bits;
+    this->block_mode = true;
+    this->codetab = (int32_t *)malloc(HASH_SIZE * sizeof(int32_t));
+    this->htab = (uint32_t *)malloc(HASH_SIZE * sizeof(uint32_t));
+    if (!this->codetab || !this->htab) {
+        LzwCompressor_destroy((ICodec *)this);
+        return NULL;
+    }
+    return (ICodec *)this;
+}
+
+/* ---------------- Concrete Class: LzwDecompressor ---------------- */
+
+typedef struct {
+    ICodec base;
+    uint64_t bytes_in;
+    uint64_t bytes_out;
+    uint16_t *prefix;
+    uint8_t *suffix;
+    uint8_t *stack;
+    uint8_t out_buf[IO_BUFFER_SIZE];
+    size_t out_pos;
+} LzwDecompressor;
+
+static bool LzwDecompressor_flush_out(LzwDecompressor *this, IByteStream *dst) {
+    if (this->out_pos > 0) {
+        size_t written = dst->vptr->write(dst, this->out_buf, this->out_pos);
+        if (written != this->out_pos) return false;
+        this->bytes_out += written;
+        this->out_pos = 0;
+    }
+    return true;
+}
+
+static bool LzwDecompressor_execute(ICodec *super, IByteStream *src, IByteStream *dst) {
+    LzwDecompressor *this = (LzwDecompressor *)super;
+
+    uint8_t header[3];
+    if (src->vptr->read(src, header, 3) < 3) {
+        fwprintf(stderr, L"compress: stdin: unexpected end of file reading header\n");
+        return false;
+    }
+
+    if (header[0] != MAGIC_BYTE_0 || header[1] != MAGIC_BYTE_1) {
+        fwprintf(stderr, L"compress: not in compressed format\n");
+        return false;
+    }
+
+    int max_bits = header[2] & BITS_MASK;
+    bool block_mode = (header[2] & BLOCK_MASK) != 0;
+
+    if (max_bits < INIT_BITS || max_bits > DEFAULT_BITS) {
+        fwprintf(stderr, L"compress: archive compressed with %d bits, can only handle %d bits\n", max_bits, DEFAULT_BITS);
+        return false;
+    }
+
+    BitReader *reader = BitReader_create(src);
+    if (!reader) return false;
+
+    int n_bits = INIT_BITS;
+    uint32_t maxcode = (1U << n_bits) - 1;
+    uint32_t free_ent = block_mode ? FIRST_FREE_CODE : 256;
+
+    for (size_t i = 0; i < 256; i++) {
+        this->prefix[i] = 0;
+        this->suffix[i] = (uint8_t)i;
+    }
+
+    uint32_t code = 0;
+    if (!BitReader_read(reader, n_bits, &code)) {
+        BitReader_destroy(reader);
+        return !src->vptr->has_error(src);
+    }
+
+    uint32_t oldcode = code;
+    uint8_t finchar = (uint8_t)oldcode;
+
+    this->out_buf[this->out_pos++] = finchar;
+    int stack_ptr = 0;
+
+    while (BitReader_read(reader, n_bits, &code)) {
+        if (code == CLEAR_CODE && block_mode) {
+            for (size_t i = 0; i < 256; i++) {
+                this->prefix[i] = 0;
+                this->suffix[i] = (uint8_t)i;
+            }
+            free_ent = FIRST_FREE_CODE;
+            n_bits = INIT_BITS;
+            maxcode = (1U << n_bits) - 1;
+            BitReader_align(reader);
+
+            if (!BitReader_read(reader, n_bits, &code)) break;
+            oldcode = code;
+            finchar = (uint8_t)oldcode;
+            if (this->out_pos >= IO_BUFFER_SIZE) {
+                if (!LzwDecompressor_flush_out(this, dst)) {
+                    BitReader_destroy(reader);
+                    return false;
+                }
+            }
+            this->out_buf[this->out_pos++] = finchar;
+            continue;
+        }
+
+        uint32_t incode = code;
+        stack_ptr = 0;
+
+        if (code >= free_ent) {
+            if (code > free_ent) {
+                fwprintf(stderr, L"compress: corrupt input stream: invalid code %u >= %u\n", code, free_ent);
+                BitReader_destroy(reader);
+                return false;
+            }
+            this->stack[stack_ptr++] = finchar;
+            code = oldcode;
+        }
+
+        while (code >= 256) {
+            if (stack_ptr >= STACK_SIZE) {
+                fwprintf(stderr, L"compress: fatal error: cyclic graph detected in dictionary\n");
+                BitReader_destroy(reader);
+                return false;
+            }
+            this->stack[stack_ptr++] = this->suffix[code];
+            code = this->prefix[code];
+        }
+
+        finchar = this->suffix[code];
+        if (stack_ptr >= STACK_SIZE) {
+            fwprintf(stderr, L"compress: fatal error: dictionary stack exhausted\n");
+            BitReader_destroy(reader);
+            return false;
+        }
+        this->stack[stack_ptr++] = finchar;
+
+        while (stack_ptr > 0) {
+            if (this->out_pos >= IO_BUFFER_SIZE) {
+                if (!LzwDecompressor_flush_out(this, dst)) {
+                    BitReader_destroy(reader);
+                    return false;
+                }
+            }
+            this->out_buf[this->out_pos++] = this->stack[--stack_ptr];
+        }
+
+        if (free_ent < (1U << max_bits)) {
+            this->prefix[free_ent] = (uint16_t)oldcode;
+            this->suffix[free_ent] = finchar;
+            free_ent++;
+            if (free_ent > maxcode && n_bits < max_bits) {
+                BitReader_align(reader);
+                n_bits++;
+                maxcode = (n_bits == max_bits) ? (1U << max_bits) : ((1U << n_bits) - 1);
+            }
+        }
+        oldcode = incode;
+    }
+
+    if (!LzwDecompressor_flush_out(this, dst)) {
+        BitReader_destroy(reader);
+        return false;
+    }
+
+    BitReader_destroy(reader);
+    this->bytes_in = src->vptr->get_bytes_transferred(src);
+    return !src->vptr->has_error(src) && !dst->vptr->has_error(dst);
+}
+
+static uint64_t LzwDecompressor_get_in(const ICodec *super) {
+    return ((const LzwDecompressor *)super)->bytes_in;
+}
+
+static uint64_t LzwDecompressor_get_out(const ICodec *super) {
+    return ((const LzwDecompressor *)super)->bytes_out;
+}
+
+static void LzwDecompressor_destroy(ICodec *super) {
+    LzwDecompressor *this = (LzwDecompressor *)super;
+    if (this) {
+        free(this->prefix);
+        free(this->suffix);
+        free(this->stack);
+        free(this);
+    }
+}
+
+static const ICodecVtbl LzwDecompressor_Vtbl = {
+    .execute = LzwDecompressor_execute,
+    .get_bytes_in = LzwDecompressor_get_in,
+    .get_bytes_out = LzwDecompressor_get_out,
+    .destroy = LzwDecompressor_destroy
+};
+
+ICodec *LzwDecompressor_create(void) {
+    LzwDecompressor *this = (LzwDecompressor *)calloc(1, sizeof(LzwDecompressor));
+    if (!this) return NULL;
+    this->base.vptr = &LzwDecompressor_Vtbl;
+    this->prefix = (uint16_t *)malloc(65536 * sizeof(uint16_t));
+    this->suffix = (uint8_t *)malloc(65536 * sizeof(uint8_t));
+    this->stack  = (uint8_t *)malloc(STACK_SIZE * sizeof(uint8_t));
+    if (!this->prefix || !this->suffix || !this->stack) {
+        LzwDecompressor_destroy((ICodec *)this);
+        return NULL;
+    }
+    return (ICodec *)this;
+}
+
+/* ========================================================================= */
+/* CLASS: FileMetadata (Timestamp and Attribute Replication)                 */
+/* ========================================================================= */
+
+typedef struct {
+    FILETIME ftCreation;
+    FILETIME ftLastAccess;
+    FILETIME ftLastWrite;
+    DWORD dwAttributes;
+    bool valid;
+} FileMetadata;
+
+bool FileMetadata_capture(FileMetadata *this, const wchar_t *src_path) {
+    DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    HANDLE h = CreateFileW(src_path, GENERIC_READ, share, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        this->valid = false;
+        return false;
+    }
+    this->valid = GetFileTime(h, &this->ftCreation, &this->ftLastAccess, &this->ftLastWrite) != FALSE;
+    CloseHandle(h);
+    this->dwAttributes = GetFileAttributesW(src_path);
+    return this->valid;
+}
+
+bool FileMetadata_apply(const FileMetadata *this, const wchar_t *dst_path) {
+    if (!this->valid) return false;
+
+    DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    HANDLE h = CreateFileW(dst_path, FILE_WRITE_ATTRIBUTES, share, NULL, OPEN_EXISTING, 0, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        SetFileTime(h, &this->ftCreation, &this->ftLastAccess, &this->ftLastWrite);
+        CloseHandle(h);
+    }
+    if (this->dwAttributes != INVALID_FILE_ATTRIBUTES) {
+        SetFileAttributesW(dst_path, this->dwAttributes);
+    }
+    return true;
+}
+
+/* ========================================================================= */
+/* CLASS: CompressApp (Controller)                                           */
+/* ========================================================================= */
+
+typedef struct {
+    int max_bits;
+    bool force;
+    bool verbose;
+    bool decompress;
+    bool to_stdout;
+    bool keep;
+} AppConfig;
+
+typedef struct {
+    AppConfig config;
+    wchar_t **files;
+    int file_count;
+} CompressApp;
+
+CompressApp *CompressApp_create(void) {
+    CompressApp *this = (CompressApp *)calloc(1, sizeof(CompressApp));
+    if (!this) return NULL;
+    this->config.max_bits = DEFAULT_BITS;
+    return this;
+}
+
+void CompressApp_destroy(CompressApp *this) {
+    if (this) {
+        free(this->files);
+        free(this);
+    }
+}
+
+void CompressApp_print_help(void) {
+    wprintf(L"Usage: compress [OPTION]... [FILE]...\n");
+    wprintf(L"   or: uncompress [OPTION]... [FILE]...\n\n");
+    wprintf(L"Compress or uncompress files using LZW encoding fully wire-compatible with\n");
+    wprintf(L"classic UNIX .Z archives (ncompress, gzip -d, 7-Zip).\n\n");
+    wprintf(L"Options:\n");
+    wprintf(L"  -b, --bits BITS      set maximum code width (9..16, default: 16)\n");
+    wprintf(L"  -c, --stdout         write output to standard output; leave files unchanged\n");
+    wprintf(L"  -d, --decompress     decompress mode (identical to uncompress)\n");
+    wprintf(L"  -f, --force          force overwrite and allow compression even if file grows\n");
+    wprintf(L"  -k, --keep           keep (do not remove) original files\n");
+    wprintf(L"  -v, --verbose        display compression statistics and ratio\n");
+    wprintf(L"  -h, --help           display this help information and exit\n");
+    wprintf(L"  -V, --version        print version details and exit\n\n");
+    wprintf(L"Standard input is processed if no files or '-' are provided.\n");
+}
+
+void CompressApp_print_version(void) {
+    wprintf(L"compress %ls\n", COMPRESS_VERSION);
+    wprintf(L"Copyright (C) 2026, PC/OpenSystems LLC\n");
+}
+
+bool CompressApp_parse_args(CompressApp *this, int argc, wchar_t **argv) {
+    wchar_t *prog = wcsrchr(argv[0], L'\\');
+    prog = prog ? (prog + 1) : argv[0];
+    if (_wcsicmp(prog, L"uncompress") == 0 || _wcsicmp(prog, L"uncompress.exe") == 0) {
+        this->config.decompress = true;
+    }
+
+    this->files = (wchar_t **)calloc(argc, sizeof(wchar_t *));
+    this->file_count = 0;
+
+    for (int i = 1; i < argc; i++) {
+        wchar_t *arg = argv[i];
+        if (arg[0] == L'-' && arg[1] != L'\0') {
+            if (wcscmp(arg, L"--help") == 0 || wcscmp(arg, L"-h") == 0) {
+                CompressApp_print_help();
+                exit(0);
+            }
+            if (wcscmp(arg, L"--version") == 0 || wcscmp(arg, L"-V") == 0) {
+                CompressApp_print_version();
+                exit(0);
+            }
+            if (wcscmp(arg, L"--stdout") == 0)     { this->config.to_stdout = true; continue; }
+            if (wcscmp(arg, L"--decompress") == 0) { this->config.decompress = true; continue; }
+            if (wcscmp(arg, L"--force") == 0)      { this->config.force = true; continue; }
+            if (wcscmp(arg, L"--keep") == 0)       { this->config.keep = true; continue; }
+            if (wcscmp(arg, L"--verbose") == 0)    { this->config.verbose = true; continue; }
+
+            for (size_t j = 1; j < wcslen(arg); j++) {
+                switch (arg[j]) {
+                    case L'c': this->config.to_stdout = true; break;
+                    case L'd': this->config.decompress = true; break;
+                    case L'f': this->config.force = true; break;
+                    case L'k': this->config.keep = true; break;
+                    case L'v': this->config.verbose = true; break;
+                    case L'b':
+                        if (arg[j + 1] != L'\0') {
+                            this->config.max_bits = _wtoi(&arg[j + 1]);
+                            j = wcslen(arg) - 1;
+                        } else if (i + 1 < argc) {
+                            this->config.max_bits = _wtoi(argv[++i]);
+                        } else {
+                            fwprintf(stderr, L"compress: missing argument for '-b'\n");
+                            return false;
+                        }
+                        if (this->config.max_bits < 9 || this->config.max_bits > 16) {
+                            fwprintf(stderr, L"compress: invalid bits parameter %d (must be 9..16)\n", this->config.max_bits);
+                            return false;
+                        }
+                        break;
+                    default:
+                        fwprintf(stderr, L"compress: unknown option -- '%c'\n", arg[j]);
+                        return false;
+                }
+            }
+        } else {
+            this->files[this->file_count++] = arg;
+        }
+    }
+    return true;
+}
+
+bool CompressApp_process_stream(CompressApp *this, IByteStream *in, IByteStream *out) {
+    ICodec *codec = this->config.decompress 
+                    ? LzwDecompressor_create() 
+                    : LzwCompressor_create(this->config.max_bits);
+    if (!codec) return false;
+
+    bool ok = codec->vptr->execute(codec, in, out);
+    codec->vptr->destroy(codec);
+    return ok;
+}
+
+bool CompressApp_process_file(CompressApp *this, const wchar_t *src_path) {
+    wchar_t *actual_src_path = NULL;
+    wchar_t *dst_path = NULL;
+    wchar_t *tmp_path = NULL;
+    size_t path_len = wcslen(src_path);
+
+    // Fix 1: Independent buffer allocation eliminating pointer aliasing
+    if (this->config.decompress) {
+        if (path_len > 2 && _wcsicmp(&src_path[path_len - 2], L".Z") == 0) {
+            actual_src_path = _wcsdup(src_path);
+            dst_path = (wchar_t *)malloc((path_len + 1) * sizeof(wchar_t));
+            if (!actual_src_path || !dst_path) goto cleanup_alloc;
+            wmemcpy(dst_path, src_path, path_len - 2);
+            dst_path[path_len - 2] = L'\0';
+        } else {
+            wchar_t candidate[32768];
+            swprintf(candidate, 32768, L"%ls.Z", src_path);
+            DWORD attr = GetFileAttributesW(candidate);
+            if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                actual_src_path = _wcsdup(candidate);
+                dst_path = _wcsdup(src_path);
+                if (!actual_src_path || !dst_path) goto cleanup_alloc;
+            } else {
+                fwprintf(stderr, L"compress: %ls: unrecognized extension or %ls not found -- ignored\n", src_path, candidate);
+                return false;
+            }
+        }
+    } else {
+        actual_src_path = _wcsdup(src_path);
+        dst_path = (wchar_t *)malloc((path_len + 16) * sizeof(wchar_t));
+        if (!actual_src_path || !dst_path) goto cleanup_alloc;
+        swprintf(dst_path, path_len + 16, L"%ls.Z", src_path);
+    }
+
+    size_t dst_len = wcslen(dst_path);
+    tmp_path = (wchar_t *)malloc((dst_len + 64) * sizeof(wchar_t));
+    if (!tmp_path) goto cleanup_alloc;
+
+    // Fix 2: POSIX Directory check guard
+    DWORD src_attr = GetFileAttributesW(actual_src_path);
+    if (src_attr == INVALID_FILE_ATTRIBUTES) {
+        fwprintf(stderr, L"compress: %ls: No such file or directory\n", actual_src_path);
+        free(actual_src_path);
+        free(dst_path);
+        free(tmp_path);
+        return false;
+    }
+    if (src_attr & FILE_ATTRIBUTE_DIRECTORY) {
+        fwprintf(stderr, L"compress: %ls: Is a directory -- ignored\n", actual_src_path);
+        free(actual_src_path);
+        free(dst_path);
+        free(tmp_path);
+        return false;
+    }
+
+    if (!this->config.to_stdout && !this->config.force) {
+        if (GetFileAttributesW(dst_path) != INVALID_FILE_ATTRIBUTES) {
+            fwprintf(stderr, L"compress: %ls already exists; do you wish to overwrite (y or n)? ", dst_path);
+            wchar_t ans[16];
+            if (fgetws(ans, 16, stdin) == NULL || (ans[0] != L'y' && ans[0] != L'Y')) {
+                fwprintf(stderr, L"\tfile not overwritten\n");
+                free(actual_src_path);
+                free(dst_path);
+                free(tmp_path);
+                return false;
+            }
+        }
+    }
+
+    FileMetadata meta = {0};
+    FileMetadata_capture(&meta, actual_src_path);
+
+    IByteStream *in_stream = FileStream_create(actual_src_path, GENERIC_READ, OPEN_EXISTING);
+    if (!in_stream) {
+        fwprintf(stderr, L"compress: cannot open input '%ls'\n", actual_src_path);
+        free(actual_src_path);
+        free(dst_path);
+        free(tmp_path);
+        return false;
+    }
+
+    IByteStream *out_stream = NULL;
+    if (this->config.to_stdout) {
+        out_stream = StdioStream_create(STD_OUTPUT_HANDLE);
+    } else {
+        swprintf(tmp_path, dst_len + 64, L"%ls.tmp.%lu_%u", dst_path, GetCurrentProcessId(), rand());
+        register_active_temp_file(tmp_path);
+        out_stream = FileStream_create(tmp_path, GENERIC_WRITE, CREATE_ALWAYS);
+    }
+
+    if (!out_stream) {
+        fwprintf(stderr, L"compress: cannot open output destination\n");
+        in_stream->vptr->destroy(in_stream);
+        register_active_temp_file(NULL);
+        free(actual_src_path);
+        free(dst_path);
+        free(tmp_path);
+        return false;
+    }
+
+    ICodec *codec = this->config.decompress 
+                    ? LzwDecompressor_create() 
+                    : LzwCompressor_create(this->config.max_bits);
+
+    bool ok = codec->vptr->execute(codec, in_stream, out_stream);
+    uint64_t bytes_in = codec->vptr->get_bytes_in(codec);
+    uint64_t bytes_out = codec->vptr->get_bytes_out(codec);
+    codec->vptr->destroy(codec);
+
+    in_stream->vptr->destroy(in_stream);
+    out_stream->vptr->destroy(out_stream);
+
+    if (!ok) {
+        if (!this->config.to_stdout) DeleteFileW(tmp_path);
+        register_active_temp_file(NULL);
+        free(actual_src_path);
+        free(dst_path);
+        free(tmp_path);
+        return false;
+    }
+
+    if (!this->config.decompress && !this->config.force && !this->config.to_stdout) {
+        if (bytes_out >= bytes_in && bytes_in > 0) {
+            fwprintf(stderr, L"compress: %ls: file would increase in size; unchanged\n", actual_src_path);
+            DeleteFileW(tmp_path);
+            register_active_temp_file(NULL);
+            free(actual_src_path);
+            free(dst_path);
+            free(tmp_path);
+            return false;
+        }
+    }
+
+    if (!this->config.to_stdout) {
+        if (this->config.force) {
+            DWORD dst_attr = GetFileAttributesW(dst_path);
+            if (dst_attr != INVALID_FILE_ATTRIBUTES && (dst_attr & FILE_ATTRIBUTE_READONLY)) {
+                SetFileAttributesW(dst_path, dst_attr & ~FILE_ATTRIBUTE_READONLY);
+            }
+        }
+
+        if (!MoveFileExW(tmp_path, dst_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            fwprintf(stderr, L"compress: atomic commit failed: Error %lu\n", GetLastError());
+            DeleteFileW(tmp_path);
+            register_active_temp_file(NULL);
+            free(actual_src_path);
+            free(dst_path);
+            free(tmp_path);
+            return false;
+        }
+        register_active_temp_file(NULL);
+
+        FileMetadata_apply(&meta, dst_path);
+    }
+
+    if (this->config.verbose) {
+        if (this->config.decompress) {
+            wprintf(L"%ls: -- decompressed (%llu bytes)\n", actual_src_path, bytes_out);
+        } else {
+            double ratio = (bytes_in > 0) ? (1.0 - ((double)bytes_out / (double)bytes_in)) * 100.0 : 0.0;
+            wprintf(L"%ls: -- replaced with %ls (%.2f%% reduction)\n", actual_src_path, dst_path, ratio);
+        }
+    }
+
+    if (!this->config.to_stdout && !this->config.keep) {
+        DWORD cur_src_attr = GetFileAttributesW(actual_src_path);
+        if (cur_src_attr != INVALID_FILE_ATTRIBUTES && (cur_src_attr & FILE_ATTRIBUTE_READONLY)) {
+            SetFileAttributesW(actual_src_path, cur_src_attr & ~FILE_ATTRIBUTE_READONLY);
+        }
+        if (!DeleteFileW(actual_src_path)) {
+            fwprintf(stderr, L"compress: %ls: cannot unlink: Error %lu\n", actual_src_path, GetLastError());
+            free(actual_src_path);
+            free(dst_path);
+            free(tmp_path);
+            return false;
+        }
+    }
+
+    free(actual_src_path);
+    free(dst_path);
+    free(tmp_path);
+    return true;
+
+cleanup_alloc:
+    free(actual_src_path);
+    free(dst_path);
+    free(tmp_path);
+    return false;
+}
+
+int CompressApp_run(CompressApp *this, int argc, wchar_t **argv) {
+    if (!CompressApp_parse_args(this, argc, argv)) {
+        return 1;
+    }
+
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+
+    if ((this->config.to_stdout || this->file_count == 0) && !this->config.decompress && !this->config.force) {
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (GetFileType(hOut) == FILE_TYPE_CHAR) {
+            fwprintf(stderr, L"compress: compressed data not written to a terminal. Use -f to force.\n");
+            return 1;
+        }
+    }
+
+    if (this->file_count == 0) {
+        HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+        if (GetFileType(hIn) == FILE_TYPE_CHAR) {
+            fwprintf(stderr, L"compress: standard input is a terminal -- ignoring\n");
+            fwprintf(stderr, L"Try 'compress --help' for more information.\n");
+            return 1;
+        }
+
+        IByteStream *in_stream = StdioStream_create(STD_INPUT_HANDLE);
+        IByteStream *out_stream = StdioStream_create(STD_OUTPUT_HANDLE);
+        bool ok = CompressApp_process_stream(this, in_stream, out_stream);
+        in_stream->vptr->destroy(in_stream);
+        out_stream->vptr->destroy(out_stream);
+        return ok ? 0 : 1;
+    }
+
+    int exit_code = 0;
+    for (int i = 0; i < this->file_count; i++) {
+        if (wcscmp(this->files[i], L"-") == 0) {
+            HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+            if (GetFileType(hIn) == FILE_TYPE_CHAR) {
+                fwprintf(stderr, L"compress: standard input is a terminal -- ignoring\n");
+                exit_code = 1;
+                continue;
+            }
+
+            IByteStream *in_stream = StdioStream_create(STD_INPUT_HANDLE);
+            IByteStream *out_stream = StdioStream_create(STD_OUTPUT_HANDLE);
+            if (!CompressApp_process_stream(this, in_stream, out_stream)) {
+                exit_code = 1;
+            }
+            in_stream->vptr->destroy(in_stream);
+            out_stream->vptr->destroy(out_stream);
+        } else {
+            if (!CompressApp_process_file(this, this->files[i])) {
+                exit_code = 1;
+            }
+        }
+    }
+
+    return exit_code;
+}
+
+/* ========================================================================= */
+/* Application Entry Point                                                   */
+/* ========================================================================= */
+
+int wmain(int argc, wchar_t *argv[]) {
+    srand((unsigned int)GetTickCount64() ^ GetCurrentProcessId());
+    InitializeCriticalSection(&g_cleanup_lock);
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+
+    CompressApp *app = CompressApp_create();
+    if (!app) {
+        fwprintf(stderr, L"Fatal: out of memory initializing runtime.\n");
+        DeleteCriticalSection(&g_cleanup_lock);
+        return 1;
+    }
+
+    int result = CompressApp_run(app, argc, argv);
+    CompressApp_destroy(app);
+
+    DeleteCriticalSection(&g_cleanup_lock);
+    return result;
+}

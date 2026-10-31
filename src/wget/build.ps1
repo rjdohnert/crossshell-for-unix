@@ -7,7 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ToolName = 'wget'
-$SourceFiles = @("http_downloader.cpp", "http_url.cpp", "output_quoting.cpp", "pipe_buffer.cpp", "pipe_session.cpp", "url_filename.cpp", "wget_app.cpp", "wget_help.cpp", "wget.cpp")
+$SourceFiles = @("wget.c")
 Push-Location $PSScriptRoot
 try {
     if ($Clean) {
@@ -15,20 +15,22 @@ try {
         return
     }
     if ($Compiler -eq 'auto') {
-        if (Get-Command clang++ -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
+        if (Get-Command clang -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
         elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) { $Compiler = 'cl' }
-        elseif (Get-Command g++ -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
-        else { throw 'No suitable C++ compiler found (clang++, cl, or g++ required).' }
+        elseif (Get-Command gcc -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
+        else { throw 'No suitable C compiler found (clang, cl, or gcc required).' }
     }
     switch ($Compiler) {
-        'clang' { & clang++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "$ToolName.exe" @SourceFiles -lwininet }
-        'cl' { & cl.exe /nologo /std:c++17 /O2 /EHsc /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:$ToolName.exe" @SourceFiles wininet.lib }
-        'gcc' { & g++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX   -o "$ToolName.exe" @SourceFiles -lwininet }
+        'clang' { & clang -std=c99 -O2 -o "$ToolName.exe" @SourceFiles -lwinhttp  }
+        'cl' { & cl.exe /nologo /std:c17 /O2 "/Fe:$ToolName.exe" @SourceFiles winhttp.lib  }
+        'gcc' { & gcc -std=c99 -O2   -o "$ToolName.exe" @SourceFiles -lwinhttp  }
     }
     if ($LASTEXITCODE -ne 0) { throw "Build failed for $ToolName (exit $LASTEXITCODE)." }
+    Write-Host "[$ToolName] Build successful: $ToolName.exe"
     if (-not $NoInstall) {
         $BinDir = Join-Path $PSScriptRoot '../../bin'
         New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
         Copy-Item "$ToolName.exe" $BinDir -Force
+        Write-Host "[$ToolName] Installed to $BinDir\$ToolName.exe"
     }
 } finally { Pop-Location }

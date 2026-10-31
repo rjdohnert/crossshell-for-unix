@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 set TOOL_NAME=wget
-set SOURCE_FILES=http_downloader.cpp http_url.cpp output_quoting.cpp pipe_buffer.cpp pipe_session.cpp url_filename.cpp wget_app.cpp wget_help.cpp wget.cpp
+set SOURCE_FILES=wget.c
 set NO_INSTALL=0
 set CLEAN=0
 :parse
@@ -24,30 +24,32 @@ goto parse
 :configure
 pushd "%~dp0" || exit /b 1
 if "%CLEAN%"=="1" goto clean
-where clang++ >nul 2>nul
+where clang >nul 2>nul
 if not errorlevel 1 goto clang
 where cl.exe >nul 2>nul
 if not errorlevel 1 goto msvc
-where g++ >nul 2>nul
+where gcc >nul 2>nul
 if not errorlevel 1 goto gcc
-echo No suitable C++ compiler found (clang++, cl.exe, or g++ required).
+echo No suitable C compiler found (clang, cl.exe, or gcc required).
 set RESULT=1
 goto done
 :clang
-clang++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "%TOOL_NAME%.exe" %SOURCE_FILES% -lwininet
+clang -std=c99 -O2 -o "%TOOL_NAME%.exe" %SOURCE_FILES% -lwinhttp 
 goto compiled
 :msvc
-cl.exe /nologo /std:c++17 /O2 /EHsc /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:%TOOL_NAME%.exe" %SOURCE_FILES% wininet.lib
+cl.exe /nologo /std:c17 /O2 "/Fe:%TOOL_NAME%.exe" %SOURCE_FILES% winhttp.lib 
 goto compiled
 :gcc
-g++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX   -o "%TOOL_NAME%.exe" %SOURCE_FILES% -lwininet
+gcc -std=c99 -O2   -o "%TOOL_NAME%.exe" %SOURCE_FILES% -lwinhttp 
 :compiled
 set RESULT=%errorlevel%
 if not "%RESULT%"=="0" goto done
+echo [%TOOL_NAME%] Build successful: %TOOL_NAME%.exe
 if "%NO_INSTALL%"=="1" goto done
 if not exist "..\..\bin" mkdir "..\..\bin"
 copy /y "%TOOL_NAME%.exe" "..\..\bin\%TOOL_NAME%.exe" >nul
 set RESULT=%errorlevel%
+if "%RESULT%"=="0" echo [%TOOL_NAME%] Installed to ..\..\bin\%TOOL_NAME%.exe
 goto done
 :clean
 del /q *.obj *.o "%TOOL_NAME%.exe" *.pdb *.ilk 2>nul

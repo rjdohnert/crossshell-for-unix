@@ -2,7 +2,7 @@
 
 ## What it does
 
-Displays a machine hardware and firmware summary similar to HP-UX `machinfo`, using Windows-native APIs.
+Displays a comprehensive hardware, OS, and security summary for Windows, similar to HP-UX `machinfo`. Collects OS configuration, hardware topology, memory utilization, network adapters, and native Trusted Platform Module (TPM 1.2 / 2.0) state via the Windows TBS API.
 
 ## Usage
 
@@ -10,40 +10,49 @@ Displays a machine hardware and firmware summary similar to HP-UX `machinfo`, us
 
 ## Options
 
-- `-a`, `--all`: show the complete machine summary
-- `-b`, `--bios`: machine identity and BIOS/firmware details
-- `-c`, `--cpu`: processor topology and capabilities
-- `-m`, `--memory`: physical memory and commit information
-- `-t`, `--tpm`: TPM status and version
-- `-v`, `--verbose`, `--extended`, `-x`: include cache, virtualization-firmware, and AVX2 details
-- `-q`, `--quiet`, `--brief`, `-s`, `--summary`: condensed summary
-- `-f`, `--format`, `--output`, `-o` followed by `table`, `csv`, or `json`
-- `--format=FORMAT`, `--output=FORMAT`, `--table`, `--csv`, `--json`: select output format
-- `--tpm-wmi`: opt into WMI enrichment for TPM metadata
-- Positional section filters: `bios`, `firmware`, `machine`, `cpu`, `processor`, `memory`, `ram`, `tpm`, `security`, `os`, `system`
-- `-h`, `--help`, `-?`, `/?`, `/help`: help
-- `-V`, `--version`: version
+- `-f`, `--format <table|json|csv>`: select output layout (default `table`)
+- `-t`, `--tpm-only`: restrict execution and output strictly to TPM subsystem telemetry
+- `-v`, `--verbose`: include detailed network adapter configuration and hardware IDs
+- `-n`, `--no-color`: suppress ANSI terminal escape sequences
+- `-V`, `--version`: display version information and exit
+- `-h`, `--help`: print the manual page and exit
+
+## Output formats
+
+- **table** (default): aligned key/value listing with optional ANSI color. Color is only used on an interactive console; when stdout is redirected to a file or pipe, color is automatically disabled and the console mode is restored on exit.
+- **json**: a single JSON object. All string values are escaped; measurements and flags use numeric/boolean types. Includes a `Network` array with one object per adapter.
+- **csv**: a header row plus one summary row, then a NIC section with one row per adapter. All values are quoted and escaped.
 
 ## Data sources
 
-- SMBIOS firmware tables (system/BIOS identity)
-- Logical processor topology APIs (socket/core/thread/cache)
-- TPM Base Services + registry + optional WMI fallback (TPM status/version)
-- Windows memory status APIs
-- NT kernel version query path
+- Windows registry (`CurrentVersion`, BIOS, CPU) for OS and hardware identity
+- `GetNativeSystemInfo` for processor architecture
+- `GlobalMemoryStatusEx` for physical/virtual memory
+- TPM Base Services (TBS) device-info and context-creation probe for TPM presence/readiness
+- `GetAdaptersAddresses` for network adapter enumeration
 
 ## Notes
 
-- On restricted environments, some TPM fields can remain `N/A`; readiness requires a successful TBS device-info query.
-- Quiet mode is useful for scripts; verbose mode adds cache, virtualization-firmware, and AVX2 details.
-- Architecture comes from the native Windows system info, and logical processor count includes active processor groups.
-- JSON uses numeric/boolean types for measurements and flags. CSV uses the same selected fields as JSON and quotes every value.
-- The TPM device-open probe treats access denied as evidence of presence only, not readiness.
-- Run `src/machinfo/test.ps1` to build and exercise serializer, option-parser, malformed-SMBIOS, structured-output, and section-filter regressions.
+- The TPM context-creation probe treats access denied (`TBS_E_ACCESS_DENIED`) as "present and enabled for a standard user," not full readiness.
+- On restricted environments some TPM fields can remain `N/A`.
+- Boot time is derived from `GetTickCount64` and may drift across suspend/hibernate.
 
 ## Examples
 
-- `machinfo`
-- `machinfo -q`
-- `machinfo -v`
-- `machinfo --h`
+```text
+machinfo
+machinfo -t
+machinfo --format json
+machinfo --format json | jq .System.Memory
+machinfo -v --format csv
+```
+
+## Build
+
+```text
+src\machinfo\build.bat       (auto-detects clang / cl / gcc, installs to bin\)
+src\machinfo\build.ps1       (same; -Clean, -NoInstall, -Compiler clang|cl|gcc)
+```
+
+Links against `tbs`, `iphlpapi`, `advapi32`, and `ws2_32`.
+

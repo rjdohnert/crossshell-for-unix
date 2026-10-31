@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 set TOOL_NAME=typeset
-set SOURCE_FILES=environment_store.cpp option_parser.cpp output_formatter.cpp registry_environment_store.cpp string_utils.cpp typeset_app.cpp typeset_pipe.cpp typeset.cpp
+set SOURCE_FILES=typeset.c strutil.c variable.c symtab.c app.c
 set NO_INSTALL=0
 set CLEAN=0
 :parse
@@ -24,30 +24,32 @@ goto parse
 :configure
 pushd "%~dp0" || exit /b 1
 if "%CLEAN%"=="1" goto clean
-where clang++ >nul 2>nul
+where clang >nul 2>nul
 if not errorlevel 1 goto clang
 where cl.exe >nul 2>nul
 if not errorlevel 1 goto msvc
-where g++ >nul 2>nul
+where gcc >nul 2>nul
 if not errorlevel 1 goto gcc
-echo No suitable C++ compiler found (clang++, cl.exe, or g++ required).
+echo No suitable C compiler found (clang, cl.exe, or gcc required).
 set RESULT=1
 goto done
 :clang
-clang++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "%TOOL_NAME%.exe" %SOURCE_FILES% -ladvapi32 -luser32
+clang -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "%TOOL_NAME%.exe" %SOURCE_FILES% 
 goto compiled
 :msvc
-cl.exe /nologo /std:c++17 /O2 /EHsc /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:%TOOL_NAME%.exe" %SOURCE_FILES% advapi32.lib user32.lib
+cl.exe /nologo /std:c17 /O2 /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:%TOOL_NAME%.exe" %SOURCE_FILES% 
 goto compiled
 :gcc
-g++ -std=c++17 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -municode  -o "%TOOL_NAME%.exe" %SOURCE_FILES% -ladvapi32 -luser32
+gcc -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX   -o "%TOOL_NAME%.exe" %SOURCE_FILES% 
 :compiled
 set RESULT=%errorlevel%
 if not "%RESULT%"=="0" goto done
+echo [%TOOL_NAME%] Build successful: %TOOL_NAME%.exe
 if "%NO_INSTALL%"=="1" goto done
 if not exist "..\..\bin" mkdir "..\..\bin"
 copy /y "%TOOL_NAME%.exe" "..\..\bin\%TOOL_NAME%.exe" >nul
 set RESULT=%errorlevel%
+if "%RESULT%"=="0" echo [%TOOL_NAME%] Installed to ..\..\bin\%TOOL_NAME%.exe
 goto done
 :clean
 del /q *.obj *.o "%TOOL_NAME%.exe" *.pdb *.ilk 2>nul

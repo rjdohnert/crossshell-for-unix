@@ -1,65 +1,61 @@
 @echo off
-setlocal enabledelayedexpansion
-
-echo [machinfo] Building machinfo...
-
-set "SRC_DIR=%~dp0"
-cd /d "%SRC_DIR%"
-
-set "SOURCES=machinfo.cpp machinfo_app.cpp engine.cpp options.cpp reporter.cpp"
-set "LIBS=-lwbemuuid -lole32 -loleaut32 -ltbs -ladvapi32"
-set "MSVC_LIBS=wbemuuid.lib ole32.lib oleaut32.lib tbs.lib advapi32.lib"
-
-if "%1"=="clean" goto :clean
-
-:: Check for clang++
-where clang++ >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo [machinfo] Compiling with clang++...
-    clang++ -std=c++17 -O2 %SOURCES% %LIBS% -Wl,/subsystem:console -o machinfo.exe
-    if %ERRORLEVEL% equ 0 goto :success
-    echo [machinfo] Build failed with clang++
-    exit /b 1
-)
-
-:: Check for cl.exe
-where cl >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo [machinfo] Compiling with cl.exe...
-    cl /nologo /EHsc /std:c++17 /O2 %SOURCES% %MSVC_LIBS% /Fe:machinfo.exe
-    if %ERRORLEVEL% equ 0 (
-        del *.obj 2>nul
-        goto :success
-    )
-    echo [machinfo] Build failed with cl.exe
-    exit /b 1
-)
-
-:: Check for g++
-where g++ >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo [machinfo] Compiling with g++...
-    g++ -std=c++17 -O2 -municode %SOURCES% %LIBS% -o machinfo.exe
-    if %ERRORLEVEL% equ 0 goto :success
-    echo [machinfo] Build failed with g++
-    exit /b 1
-)
-
-echo [machinfo] Error: No supported C++ compiler found (clang++, cl.exe, g++).
+setlocal EnableExtensions
+set TOOL_NAME=machinfo
+set SOURCE_FILES=machinfo.c
+set LIBS=-ltbs -liphlpapi -ladvapi32 -lws2_32
+set MSVC_LIBS=tbs.lib iphlpapi.lib advapi32.lib ws2_32.lib
+set NO_INSTALL=0
+set CLEAN=0
+:parse
+if "%~1"=="" goto configure
+if /i "%~1"=="clean" goto set_clean
+if /i "%~1"=="--clean" goto set_clean
+if /i "%~1"=="-Clean" goto set_clean
+if /i "%~1"=="--no-install" goto set_no_install
+if /i "%~1"=="-NoInstall" goto set_no_install
+echo Unknown option: %1
 exit /b 1
-
-:success
-echo [machinfo] Build successful: machinfo.exe
-if "%1"=="noinstall" goto :done
-if exist "..\..\bin" (
-    copy /y machinfo.exe "..\..\bin\machinfo.exe" >nul
-    echo [machinfo] Installed to bin\machinfo.exe
-)
-:done
-exit /b 0
-
+:set_clean
+set CLEAN=1
+shift /1
+goto parse
+:set_no_install
+set NO_INSTALL=1
+shift /1
+goto parse
+:configure
+pushd "%~dp0" || exit /b 1
+if "%CLEAN%"=="1" goto clean
+where clang >nul 2>nul
+if not errorlevel 1 goto clang
+where cl.exe >nul 2>nul
+if not errorlevel 1 goto msvc
+where gcc >nul 2>nul
+if not errorlevel 1 goto gcc
+echo No suitable C compiler found (clang, cl.exe, or gcc required).
+set RESULT=1
+goto done
+:clang
+clang -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "%TOOL_NAME%.exe" %SOURCE_FILES% %LIBS%
+goto compiled
+:msvc
+cl.exe /nologo /std:c17 /O2 /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:%TOOL_NAME%.exe" %SOURCE_FILES% /link %MSVC_LIBS%
+goto compiled
+:gcc
+gcc -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "%TOOL_NAME%.exe" %SOURCE_FILES% %LIBS%
+:compiled
+set RESULT=%errorlevel%
+if not "%RESULT%"=="0" goto done
+echo [%TOOL_NAME%] Build successful: %TOOL_NAME%.exe
+if "%NO_INSTALL%"=="1" goto done
+if not exist "..\..\bin" mkdir "..\..\bin"
+copy /y "%TOOL_NAME%.exe" "..\..\bin\%TOOL_NAME%.exe" >nul
+set RESULT=%errorlevel%
+if "%RESULT%"=="0" echo [%TOOL_NAME%] Installed to ..\..\bin\%TOOL_NAME%.exe
+goto done
 :clean
-echo [machinfo] Cleaning build artifacts...
-del /q machinfo.exe *.obj *.o *.pdb *.ilk 2>nul
-echo [machinfo] Clean complete.
-exit /b 0
+del /q *.obj *.o "%TOOL_NAME%.exe" *.pdb *.ilk 2>nul
+set RESULT=0
+:done
+popd
+exit /b %RESULT%

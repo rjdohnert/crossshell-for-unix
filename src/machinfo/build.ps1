@@ -1,83 +1,39 @@
-<#
-.SYNOPSIS
-    Builds the machinfo utility.
-.DESCRIPTION
-    Compiles all modular C++ source files for machinfo using available compilers (clang++, cl, or g++).
-    Optionally installs the resulting binary into the root bin/ directory.
-#>
 [CmdletBinding()]
-param (
-    [ValidateSet('auto', 'clang++', 'cl', 'g++')]
+param(
+    [ValidateSet('auto', 'clang', 'cl', 'gcc')]
     [string]$Compiler = 'auto',
-    [switch]$Install = $true,
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$NoInstall
 )
+$ErrorActionPreference = 'Stop'
+$ToolName = 'machinfo'
+$SourceFiles = @("machinfo.c")
+$Libs = @("-ltbs", "-liphlpapi", "-ladvapi32", "-lws2_32")
+$MsvcLibs = @("tbs.lib", "iphlpapi.lib", "advapi32.lib", "ws2_32.lib")
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Push-Location $scriptDir
-
+Push-Location $PSScriptRoot
 try {
     if ($Clean) {
-        Write-Host "[machinfo] Cleaning build artifacts..." -ForegroundColor Cyan
-        Remove-Item -Path "machinfo.exe", "*.obj", "*.o", "*.pdb", "*.ilk" -Force -ErrorAction SilentlyContinue
-        Write-Host "[machinfo] Clean complete." -ForegroundColor Green
+        Remove-Item *.obj, *.o, "$ToolName.exe", *.pdb, *.ilk -Force -ErrorAction SilentlyContinue
         return
     }
-
-    $sources = @(
-        "machinfo.cpp",
-        "machinfo_app.cpp",
-        "engine.cpp",
-        "options.cpp",
-        "reporter.cpp"
-    )
-
-    $selectedCompiler = $Compiler
-    if ($selectedCompiler -eq 'auto') {
-        if (Get-Command clang++ -ErrorAction SilentlyContinue) {
-            $selectedCompiler = 'clang++'
-        } elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) {
-            $selectedCompiler = 'cl'
-        } elseif (Get-Command g++ -ErrorAction SilentlyContinue) {
-            $selectedCompiler = 'g++'
-        } else {
-            Write-Error "[machinfo] No supported C++ compiler (clang++, cl.exe, g++) found in PATH."
-            exit 1
-        }
+    if ($Compiler -eq 'auto') {
+        if (Get-Command clang -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
+        elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) { $Compiler = 'cl' }
+        elseif (Get-Command gcc -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
+        else { throw 'No suitable C compiler found (clang, cl, or gcc required).' }
     }
-
-    Write-Host "[machinfo] Compiling with $selectedCompiler..." -ForegroundColor Cyan
-
-    $outputExe = Join-Path $scriptDir "machinfo.exe"
-
-    if ($selectedCompiler -eq 'clang++') {
-        $cmdArgs = @("-std=c++17", "-O2") + $sources + @("-lwbemuuid", "-lole32", "-loleaut32", "-ltbs", "-ladvapi32", "-Wl,/subsystem:console", "-o", $outputExe)
-        & clang++ $cmdArgs
-    } elseif ($selectedCompiler -eq 'cl') {
-        $cmdArgs = @("/nologo", "/EHsc", "/std:c++17", "/O2") + $sources + @("wbemuuid.lib", "ole32.lib", "oleaut32.lib", "tbs.lib", "advapi32.lib", "/Fe:$outputExe")
-        & cl $cmdArgs
-        Remove-Item -Path "*.obj" -Force -ErrorAction SilentlyContinue
-    } elseif ($selectedCompiler -eq 'g++') {
-        $cmdArgs = @("-std=c++17", "-O2", "-municode") + $sources + @("-lwbemuuid", "-lole32", "-loleaut32", "-ltbs", "-ladvapi32", "-o", $outputExe)
-        & g++ $cmdArgs
+    switch ($Compiler) {
+        'clang' { & clang -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "$ToolName.exe" @SourceFiles @Libs }
+        'cl' { & cl.exe /nologo /std:c17 /O2 /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:$ToolName.exe" @SourceFiles /link @MsvcLibs }
+        'gcc' { & gcc -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "$ToolName.exe" @SourceFiles @Libs }
     }
-
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "[machinfo] Compilation failed with exit code $LASTEXITCODE."
-        exit $LASTEXITCODE
+    if ($LASTEXITCODE -ne 0) { throw "Build failed for $ToolName (exit $LASTEXITCODE)." }
+    Write-Host "[$ToolName] Build successful: $ToolName.exe"
+    if (-not $NoInstall) {
+        $BinDir = Join-Path $PSScriptRoot '../../bin'
+        New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+        Copy-Item "$ToolName.exe" $BinDir -Force
+        Write-Host "[$ToolName] Installed to $BinDir\$ToolName.exe"
     }
-
-    Write-Host "[machinfo] Successfully built $outputExe" -ForegroundColor Green
-
-    if ($Install) {
-        $binDir = Resolve-Path (Join-Path $scriptDir "..\..\bin") -ErrorAction SilentlyContinue
-        if ($binDir -and (Test-Path $binDir)) {
-            $target = Join-Path $binDir "machinfo.exe"
-            Copy-Item -Path $outputExe -Destination $target -Force
-            Write-Host "[machinfo] Installed to $target" -ForegroundColor Green
-        }
-    }
-}
-finally {
-    Pop-Location
-}
+} finally { Pop-Location }
