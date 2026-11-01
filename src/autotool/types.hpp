@@ -38,7 +38,7 @@
 
 // Tool Metadata
 inline const std::string TOOL_NAME = "autotool";
-inline const std::string VERSION = "4.3.0";
+inline const std::string VERSION = "4.4.0";
 
 // Platform Detection
 #if defined(_WIN32) || defined(_WIN64)

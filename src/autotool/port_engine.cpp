@@ -68,6 +68,15 @@ vector<string> parse_pe_import_dlls(const string& exe_path) {
         return required_dlls;
     }
 
+    // Get the file size so all offsets can be bounds-checked.
+    LARGE_INTEGER file_size{};
+    if (!GetFileSizeEx(file, &file_size)) {
+        CloseHandle(mapping);
+        CloseHandle(file);
+        return required_dlls;
+    }
+    const size_t view_size = static_cast<size_t>(file_size.QuadPart);
+
     void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
     if (!view) {
         CloseHandle(mapping);
@@ -75,41 +84,63 @@ vector<string> parse_pe_import_dlls(const string& exe_path) {
         return required_dlls;
     }
 
-    const auto* dos_header = reinterpret_cast<const IMAGE_DOS_HEADER*>(view);
-    if (dos_header->e_magic != IMAGE_DOS_SIGNATURE) {
+    // Bounds-check helper: true if [offset, offset+size) is within the mapping.
+    auto in_bounds = [&](size_t offset, size_t size) -> bool {
+        return offset <= view_size && size <= view_size - offset;
+    };
+
+    auto cleanup = [&]() {
         UnmapViewOfFile(view);
         CloseHandle(mapping);
         CloseHandle(file);
+    };
+
+    if (!in_bounds(0, sizeof(IMAGE_DOS_HEADER))) { cleanup(); return required_dlls; }
+    const auto* dos_header = reinterpret_cast<const IMAGE_DOS_HEADER*>(view);
+    if (dos_header->e_magic != IMAGE_DOS_SIGNATURE) {
+        cleanup();
         return required_dlls;
     }
 
-    const auto* nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const BYTE*>(view) + dos_header->e_lfanew);
+    // Validate e_lfanew before dereferencing the NT headers.
+    size_t nt_offset = static_cast<size_t>(dos_header->e_lfanew);
+    if (!in_bounds(nt_offset, sizeof(IMAGE_NT_HEADERS))) { cleanup(); return required_dlls; }
+    const auto* nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const BYTE*>(view) + nt_offset);
     if (nt_headers->Signature != IMAGE_NT_SIGNATURE) {
-        UnmapViewOfFile(view);
-        CloseHandle(mapping);
-        CloseHandle(file);
+        cleanup();
         return required_dlls;
     }
 
     const auto* import_dir = &nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     if (import_dir->Size == 0 || import_dir->VirtualAddress == 0) {
-        UnmapViewOfFile(view);
-        CloseHandle(mapping);
-        CloseHandle(file);
+        cleanup();
         return required_dlls;
     }
 
-    const auto* import_desc = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(reinterpret_cast<const BYTE*>(view) + import_dir->VirtualAddress);
-    for (; import_desc->Name != 0; ++import_desc) {
-        const char* dll_name = reinterpret_cast<const char*>(reinterpret_cast<const BYTE*>(view) + import_desc->Name);
-        if (dll_name) {
-            required_dlls.push_back(dll_name);
+    // Validate the import descriptor table start.
+    size_t desc_offset = static_cast<size_t>(import_dir->VirtualAddress);
+    if (!in_bounds(desc_offset, sizeof(IMAGE_IMPORT_DESCRIPTOR))) { cleanup(); return required_dlls; }
+
+    const auto* import_desc = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(reinterpret_cast<const BYTE*>(view) + desc_offset);
+    size_t desc_index = 0;
+    const size_t max_descriptors = (view_size - desc_offset) / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    while (import_desc->Name != 0 && desc_index < max_descriptors) {
+        size_t name_offset = static_cast<size_t>(import_desc->Name);
+        // Validate the name pointer and that a NUL terminator exists in bounds.
+        if (in_bounds(name_offset, 1)) {
+            const char* dll_name = reinterpret_cast<const char*>(reinterpret_cast<const BYTE*>(view) + name_offset);
+            size_t max_len = view_size - name_offset;
+            size_t len = strnlen(dll_name, max_len);
+            if (len > 0 && len < max_len) {
+                required_dlls.push_back(string(dll_name, len));
+            }
         }
+        ++import_desc;
+        ++desc_index;
+        if (!in_bounds(desc_offset + (desc_index + 1) * sizeof(IMAGE_IMPORT_DESCRIPTOR), sizeof(IMAGE_IMPORT_DESCRIPTOR))) break;
     }
 
-    UnmapViewOfFile(view);
-    CloseHandle(mapping);
-    CloseHandle(file);
+    cleanup();
 #else
     (void)exe_path;
 #endif
@@ -130,11 +161,19 @@ void resolve_pe_dll_dependencies(const string& msys_root, const string& subsyste
     }
 
     for (const auto& dll : required_dlls) {
+        // Validate the DLL name: reject traversal/absolute paths so a malformed
+        // PE import cannot escape the target directory.
+        if (dll.empty() || dll.find("..") != string::npos ||
+            dll.find('/') != string::npos || dll.find('\\') != string::npos ||
+            dll.find(':') != string::npos) {
+            continue;
+        }
         fs::path src_dll = fs::path(bin_dir) / dll;
         fs::path dst_dll = target_dir / dll;
-        if (fs::exists(src_dll) && !fs::exists(dst_dll)) {
+        std::error_code ec;
+        if (fs::exists(src_dll, ec) && !fs::exists(dst_dll, ec)) {
             cout << "  Bundled Dependency: " << dll << " -> " << target_dir.string() << "\n";
-            fs::copy_file(src_dll, dst_dll, fs::copy_options::overwrite_existing);
+            fs::copy_file(src_dll, dst_dll, fs::copy_options::overwrite_existing, ec);
         }
     }
 }

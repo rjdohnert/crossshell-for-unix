@@ -1,0 +1,82 @@
+================================================================================
+autotool - Change Log
+================================================================================
+
+This file tracks changes to autotool, the CrossShell for UNIX native build and
+Autotools compatibility engine. autotool provides autoconf (configure.ac
+processing and compiler probes), automake (Makefile.in generation), libtool
+(shared/static library builds), a native parallel build engine, and an MSYS2
+GNU-port pipeline for Windows.
+
+--------------------------------------------------------------------------------
+v4.4.0 -- 2026-10-31
+--------------------------------------------------------------------------------
+
+This is a security and correctness release. It closes a systemic command-
+injection surface, fixes several autoconf checks that returned incorrect
+results, makes the PE import parser memory-safe, and hardens filesystem and
+argument handling across all modules.
+
+SECURITY FIXES
+--------------
+* Command execution: added an argv-based process runner (run_cmd_argv) that
+  does not invoke a shell, plus an is_shell_safe() validator that rejects shell
+  metacharacters, and hardened shell_quote() to also escape backslashes. These
+  provide a safe execution path and validation primitive for all modules,
+  addressing the systemic risk of user-controlled flags/paths/macros reaching
+  a shell.
+
+* Generated-header injection: config.h generation now validates macro names as
+  C identifiers, strips newlines from values, and uses a per-file include guard
+  (derived from the filename) instead of the same CONFIG_H_INCLUDED guard for
+  every header. A malicious configure.ac can no longer inject arbitrary
+  preprocessor directives.
+
+* Makefile injection: automake now validates variable names and strips newlines
+  from values before emitting them into the generated Makefile.in, preventing
+  injected rules or commands.
+
+* PE import parsing: the parser now bounds-checks the file size, the e_lfanew
+  offset, the NT-headers location, the import-descriptor table, and every
+  DLL-name pointer (with bounded strnlen). Malformed PE files can no longer
+  cause out-of-bounds reads or crashes.
+
+* DLL bundling: PE-discovered DLL names are validated to reject path traversal
+  and absolute paths, so a malformed import table cannot escape the target
+  directory.
+
+CORRECTNESS FIXES (autoconf checks)
+-----------------------------------
+* AC_CHECK_SIZEOF now measures the actual type size by compiling and running a
+  probe, and defines SIZEOF_* to the real value (previously it was always 1).
+
+* AC_CHECK_MEMBERS now tests the actual member against the actual struct type
+  (splitting "struct-type.member"), instead of testing a hard-coded field.
+
+* AC_SEARCH_LIBS now actually links the symbol against each candidate library
+  (and records the found library in LIBS), instead of only compiling.
+
+* AC_PROG_CC / AC_PROG_CXX now verify the compiler can create executables and
+  abort with a clear error if it cannot (matching real autoconf behavior).
+
+ROBUSTNESS FIXES
+----------------
+* Object-name collisions: build, libtool, and automake now derive object file
+  names from the full source path (sanitized) instead of just the file stem, so
+  same-named sources in different directories no longer collide.
+
+* Filesystem operations (create_directories, copy_file, remove_all) in the
+  build engine and libtool now use std::error_code and report failures instead
+  of throwing exceptions and terminating the process.
+
+* Job-count parsing (-j) is now guarded (range-checked 1-256, invalid values
+  fall back to the default), and a hardware_concurrency() of 0 falls back to 4
+  worker threads.
+
+================================================================================
+Notes
+================================================================================
+* All changes are backward compatible with existing configure.ac / Makefile.am
+  inputs and command-line usage.
+* For usage, run: autotool --help   (or 'autotool help <command>')
+================================================================================

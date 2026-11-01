@@ -55,6 +55,7 @@ namespace BuildModule {
 
 void run_native_build(const vector<string>& args) {
     int jobs = thread::hardware_concurrency();
+    if (jobs <= 0) jobs = 4; // hardware_concurrency() may return 0
     bool verbose = false;
     bool clean = false;
 
@@ -65,8 +66,18 @@ void run_native_build(const vector<string>& args) {
         else if (arg == "-c" || arg == "--clean") clean = true;
         else if (arg.rfind("-j", 0) == 0) {
             size_t eq = arg.find('=');
-            if (eq != string::npos) jobs = std::stoi(arg.substr(eq + 1));
-            else if (i + 1 < args.size()) jobs = std::stoi(args[++i]);
+            string numStr;
+            if (eq != string::npos) numStr = arg.substr(eq + 1);
+            else if (i + 1 < args.size()) numStr = args[++i];
+            if (!numStr.empty()) {
+                try {
+                    int parsed = std::stoi(numStr);
+                    if (parsed >= 1 && parsed <= 256) jobs = parsed;
+                    else { cerr << "build: warning: invalid job count '" << numStr << "', using default\n"; }
+                } catch (...) {
+                    cerr << "build: warning: invalid job count '" << numStr << "', using default\n";
+                }
+            }
         }
     }
 
@@ -90,17 +101,36 @@ void run_native_build(const vector<string>& args) {
 
     if (clean) {
         cout << "build: Cleaning build output directory '" << target.output_dir << "'...\n";
-        fs::remove_all(target.output_dir);
+        std::error_code ec;
+        fs::remove_all(target.output_dir, ec);
+        if (ec) {
+            cerr << "build: warning: could not clean '" << target.output_dir << "': " << ec.message() << "\n";
+        }
     }
 
-    fs::create_directories(target.output_dir);
+    {
+        std::error_code ec;
+        fs::create_directories(target.output_dir, ec);
+        if (ec) {
+            cerr << "build: error: cannot create output directory '" << target.output_dir << "': " << ec.message() << "\n";
+            return;
+        }
+    }
     vector<string> objects;
     vector<pair<string, string>> tasks;
 
     for (const auto& src : target.sources) {
-        string obj = (fs::path(target.output_dir) / (fs::path(src).stem().string() + OBJ_EXT)).string();
+        // Derive a unique object name from the full source path (not just the
+        // stem) so foo/a.cpp and bar/a.cpp do not collide.
+        string objName = fs::path(src).generic_string();
+        std::replace(objName.begin(), objName.end(), '/', '_');
+        std::replace(objName.begin(), objName.end(), '\\', '_');
+        std::replace(objName.begin(), objName.end(), ':', '_');
+        objName += OBJ_EXT;
+        string obj = (fs::path(target.output_dir) / objName).string();
         objects.push_back(obj);
-        if (!fs::exists(obj) || fs::last_write_time(src) > fs::last_write_time(obj)) {
+        std::error_code tec;
+        if (!fs::exists(obj, tec) || fs::last_write_time(src, tec) > fs::last_write_time(obj, tec)) {
             tasks.push_back({src, obj});
         }
     }

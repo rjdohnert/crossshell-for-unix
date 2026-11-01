@@ -117,7 +117,18 @@ void run_automake(const vector<string>& args) {
     out << "EXEEXT = " << (use_msvc ? ".exe" : "") << "\n";
     out << "OBJEXT = " << (use_msvc ? ".obj" : ".o") << "\n\n";
 
-    for (const auto& [k, v] : proj.variables) out << k << " = " << v << "\n";
+    for (const auto& [k, v] : proj.variables) {
+        // Validate the variable name and strip newlines from the value so a
+        // malicious Makefile.am cannot inject extra rules or commands.
+        if (!is_valid_identifier(k)) {
+            cerr << "automake: warning: skipping invalid variable name '" << k << "'\n";
+            continue;
+        }
+        string safeValue = v;
+        std::replace(safeValue.begin(), safeValue.end(), '\n', ' ');
+        std::replace(safeValue.begin(), safeValue.end(), '\r', ' ');
+        out << k << " = " << safeValue << "\n";
+    }
     out << "\n.PHONY: all clean install\n\nall:";
     for (const auto& p : proj.bin_programs) out << " " << p << "$(EXEEXT)";
     out << "\n\n";
@@ -132,7 +143,13 @@ void run_automake(const vector<string>& args) {
         vector<string> objs;
         if (proj.program_sources.count(p)) {
             for (const auto& s : proj.program_sources[p]) {
-                string obj = fs::path(s).stem().string() + "$(OBJEXT)";
+                // Derive a unique object name from the full source path so
+                // same-named sources in different directories do not collide.
+                string objBase = fs::path(s).generic_string();
+                std::replace(objBase.begin(), objBase.end(), '/', '_');
+                std::replace(objBase.begin(), objBase.end(), '\\', '_');
+                std::replace(objBase.begin(), objBase.end(), ':', '_');
+                string obj = objBase + "$(OBJEXT)";
                 objs.push_back(obj);
                 out << " " << obj;
             }

@@ -181,7 +181,12 @@ string native_object_output(const string& requested_output, const string& source
 bool compile_source(const Options& opts, CompilerType compiler_type, const string& compiler, const string& source_path, const string& object_path) {
     fs::path output_path = fs::path(object_path);
     if (output_path.has_parent_path() && !output_path.parent_path().empty()) {
-        fs::create_directories(output_path.parent_path());
+        std::error_code ec;
+        fs::create_directories(output_path.parent_path(), ec);
+        if (ec) {
+            cerr << "libtool: error: cannot create directory " << output_path.parent_path().string() << ": " << ec.message() << "\n";
+            return false;
+        }
     }
 
     const bool use_cxx = normalize_tag(opts.tag) != "CC";
@@ -213,7 +218,13 @@ bool collect_link_inputs(const Options& opts, CompilerType compiler_type, const 
 
     for (const auto& input : opts.inputs) {
         if (is_source_file(input)) {
-            fs::path generated = output_parent / fs::path(input).filename();
+            // Derive a unique object name from the full source path so sources
+            // in different directories with the same filename do not collide.
+            string objName = fs::path(input).generic_string();
+            std::replace(objName.begin(), objName.end(), '/', '_');
+            std::replace(objName.begin(), objName.end(), '\\', '_');
+            std::replace(objName.begin(), objName.end(), ':', '_');
+            fs::path generated = output_parent / objName;
             generated.replace_extension(OBJ_EXT);
             if (!compile_source(opts, compiler_type, compiler, input, generated.string())) {
                 return false;
@@ -285,7 +296,12 @@ bool run_link_mode(const Options& opts) {
 
     fs::path output_path = fs::path(output);
     if (output_path.has_parent_path() && !output_path.parent_path().empty()) {
-        fs::create_directories(output_path.parent_path());
+        std::error_code ec;
+        fs::create_directories(output_path.parent_path(), ec);
+        if (ec) {
+            cerr << "libtool: error: cannot create directory " << output_path.parent_path().string() << ": " << ec.message() << "\n";
+            return false;
+        }
     }
 
     string joined_inputs;
@@ -346,10 +362,15 @@ bool run_install_mode(const Options& opts) {
     }
 
     const bool dest_is_directory = explicit_destination || source_count > 1 || destination.extension().empty() || fs::is_directory(destination);
+    std::error_code dirEc;
     if (dest_is_directory) {
-        fs::create_directories(destination);
+        fs::create_directories(destination, dirEc);
     } else if (destination.has_parent_path() && !destination.parent_path().empty()) {
-        fs::create_directories(destination.parent_path());
+        fs::create_directories(destination.parent_path(), dirEc);
+    }
+    if (dirEc) {
+        cerr << "libtool: error: cannot create destination directory: " << dirEc.message() << "\n";
+        return false;
     }
 
     for (size_t i = 0; i < source_count; ++i) {
@@ -364,7 +385,12 @@ bool run_install_mode(const Options& opts) {
             cout << "libtool: install: " << src.string() << " -> " << target.string() << "\n";
         }
         if (!opts.dry_run) {
-            fs::copy_file(src, target, fs::copy_options::overwrite_existing);
+            std::error_code copyEc;
+            fs::copy_file(src, target, fs::copy_options::overwrite_existing, copyEc);
+            if (copyEc) {
+                cerr << "libtool: error: cannot install " << src.string() << ": " << copyEc.message() << "\n";
+                return false;
+            }
         }
     }
     return true;

@@ -53,6 +53,18 @@ std::string shell_quote(const std::string& value);
 std::string win_to_posix_path(const std::string& win_path);
 
 int run_cmd(const std::string& cmd, std::string& output);
+
+// argv-based process execution that does NOT invoke a shell. Use this for any
+// command built from user-controlled input to avoid shell injection.
+int run_cmd_argv(const std::string& exe, const std::vector<std::string>& args, std::string& output);
+
+// Validate that a string is safe to embed in a shell command: rejects shell
+// metacharacters. Returns true if the value contains no dangerous characters.
+bool is_shell_safe(const std::string& value);
+
+// True if the string is a valid C identifier (letter/underscore start, then
+// alnum/underscore). Used to validate macro names before emitting #define.
+bool is_valid_identifier(const std::string& value);
 std::string get_env_var(const char* name);
 std::string trim_path(const std::string& path);
 bool path_exists(const std::string& path);

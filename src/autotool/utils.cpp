@@ -140,7 +140,7 @@ vector<string> split_m4_args(const string& text) {
 string shell_quote(const string& value) {
     string quoted = "\"";
     for (char ch : value) {
-        if (ch == '"' || ch == '$' || ch == '`') {
+        if (ch == '"' || ch == '$' || ch == '`' || ch == '\\') {
             quoted.push_back('\\');
         }
         quoted.push_back(ch);
@@ -148,6 +148,86 @@ string shell_quote(const string& value) {
     quoted.push_back('"');
     return quoted;
 }
+
+bool is_valid_identifier(const string& value) {
+    if (value.empty()) return false;
+    unsigned char first = static_cast<unsigned char>(value[0]);
+    if (!(std::isalpha(first) || value[0] == '_')) return false;
+    for (size_t i = 1; i < value.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(value[i]);
+        if (!(std::isalnum(c) || value[i] == '_')) return false;
+    }
+    return true;
+}
+
+// Reject values containing shell metacharacters that could break out of a
+// quoted context or inject commands. Used to validate flags/paths/macros before
+// they are embedded in a shell command string.
+bool is_shell_safe(const string& value) {
+    static const string dangerous = "&|;<>(){}[]*?~#@!^=\n\r";
+    for (char ch : value) {
+        if (dangerous.find(ch) != string::npos) return false;
+    }
+    return true;
+}
+
+#if defined(PLATFORM_WINDOWS)
+int run_cmd_argv(const string& exe, const std::vector<string>& args, string& output) {
+    output.clear();
+
+    // Build a single command line with every argument safely quoted.
+    string cmdline = shell_quote(exe);
+    for (const auto& a : args) cmdline += " " + shell_quote(a);
+
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) return -1;
+    SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+    si.hStdError = write_pipe;
+    si.hStdOutput = write_pipe;
+    si.dwFlags |= STARTF_USESTDHANDLES;
+
+    std::vector<char> cmdBuf(cmdline.begin(), cmdline.end());
+    cmdBuf.push_back('\0');
+
+    if (!CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        return -1;
+    }
+
+    CloseHandle(write_pipe);
+    char buffer[4096];
+    DWORD bytes_read = 0;
+    for (;;) {
+        if (!ReadFile(read_pipe, buffer, sizeof(buffer), &bytes_read, nullptr) || bytes_read == 0) break;
+        output.append(buffer, bytes_read);
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exit_code = 0;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(read_pipe);
+    return static_cast<int>(exit_code);
+}
+#else
+int run_cmd_argv(const string& exe, const std::vector<string>& args, string& output) {
+    // On POSIX, build a safely-quoted command line (still uses a shell for the
+    // pipeline, but every argument is individually quoted).
+    string cmdline = shell_quote(exe);
+    for (const auto& a : args) cmdline += " " + shell_quote(a);
+    return run_cmd(cmdline, output);
+}
+#endif
 
 string win_to_posix_path(const string& win_path) {
     fs::path p = fs::absolute(win_path);

@@ -116,6 +116,86 @@ public:
     bool check_func(const string& func) {
         return compile_check("char " + func + "();\nint main() { return " + func + "(); }\n");
     }
+
+    // Compile and link a probe that calls `symbol`, linking against `lib`.
+    // Returns true only if the link succeeds (the symbol resolves in that lib).
+    bool link_check(const string& symbol, const string& lib) {
+        string src =
+            "extern int " + symbol + "();\n"
+            "int main() { return " + symbol + "(); }\n";
+
+        ofstream out("conftest.c");
+        out << src;
+        out.close();
+
+        string exe_path = is_msvc_like(compiler) ? "conftest.exe" : "conftest";
+        string cmd = shell_quote(compiler);
+        if (!cflags.empty()) cmd += " " + cflags;
+        if (is_msvc_like(compiler)) {
+            cmd += " conftest.c /Fe" + shell_quote(exe_path);
+            if (!lib.empty()) cmd += " " + shell_quote(lib + ".lib");
+        } else {
+            cmd += " conftest.c -o " + shell_quote(exe_path);
+            if (!lib.empty()) cmd += " -l" + lib;
+        }
+        cmd += " >conftest.out 2>&1";
+
+        string output;
+        int res = run_cmd(cmd, output);
+
+        fs::remove("conftest.c");
+        fs::remove(exe_path);
+        fs::remove("conftest.out");
+        if (is_msvc_like(compiler)) fs::remove("conftest.obj");
+        return (res == 0);
+    }
+
+    // Compile and run a probe that exits with sizeof(type). Returns the size,
+    // or -1 if the probe could not be built or run.
+    int measure_sizeof(const string& type_name) {
+        string src =
+            "#include <stddef.h>\n#include <stdio.h>\n"
+            "typedef " + type_name + " test_type;\n"
+            "int main() { printf(\"%d\", (int)sizeof(test_type)); return 0; }\n";
+
+        ofstream out("conftest.c");
+        out << src;
+        out.close();
+
+        string exe_path = is_msvc_like(compiler) ? "conftest.exe" : "conftest";
+        string cmd = shell_quote(compiler);
+        if (!cflags.empty()) cmd += " " + cflags;
+        if (is_msvc_like(compiler)) {
+            cmd += " conftest.c /Fe" + shell_quote(exe_path);
+        } else {
+            cmd += " conftest.c -o " + shell_quote(exe_path);
+        }
+        cmd += " >conftest.out 2>&1";
+
+        string buildOutput;
+        int buildRes = run_cmd(cmd, buildOutput);
+        if (buildRes != 0) {
+            fs::remove("conftest.c");
+            fs::remove("conftest.out");
+            return -1;
+        }
+
+        // Run the probe and capture its stdout (the size as text).
+        string runOutput;
+        int runRes = run_cmd(shell_quote(exe_path), runOutput);
+
+        fs::remove("conftest.c");
+        fs::remove(exe_path);
+        fs::remove("conftest.out");
+        if (is_msvc_like(compiler)) fs::remove("conftest.obj");
+
+        if (runRes != 0) return -1;
+        try {
+            return std::stoi(trim(runOutput));
+        } catch (...) {
+            return -1;
+        }
+    }
 };
 
 void run_autoconf(const vector<string>& args) {
@@ -239,6 +319,27 @@ void run_autoconf(const vector<string>& args) {
         cout << "configure: configuring " << proj.package_name << " " << proj.package_version << "...\n";
         ProbeEngine tester(cc, cflags, "config.log");
 
+        // AC_PROG_CC / AC_PROG_CXX: verify the compiler actually works.
+        if (proj.check_cc) {
+            cout << "checking whether the C compiler works... ";
+            bool works = tester.compile_check("int main() { return 0; }\n");
+            cout << (works ? "yes" : "no") << "\n";
+            if (!works) {
+                cerr << "configure: error: C compiler cannot create executables\n";
+                return;
+            }
+        }
+        if (proj.check_cxx) {
+            cout << "checking whether the C++ compiler works... ";
+            ProbeEngine cxxTester(cxx, cxxflags, "config.log");
+            bool works = cxxTester.compile_check("int main() { return 0; }\n");
+            cout << (works ? "yes" : "no") << "\n";
+            if (!works) {
+                cerr << "configure: error: C++ compiler cannot create executables\n";
+                return;
+            }
+        }
+
         proj.subst_vars["PACKAGE_NAME"] = proj.package_name;
         proj.subst_vars["PACKAGE_VERSION"] = proj.package_version;
         proj.subst_vars["PACKAGE"] = proj.package_name;
@@ -318,9 +419,24 @@ void run_autoconf(const vector<string>& args) {
 
         for (const auto& size_name : proj.check_sizeof) {
             cout << "checking size of " << size_name << "... ";
-            bool res = tester.compile_check("#include <stddef.h>\ntypedef " + size_name + " test_type;\nint main() { return sizeof(test_type); }\n");
-            cout << (res ? "yes" : "no") << "\n";
-            if (res) proj.defines["SIZEOF_" + to_upper_identifier(size_name)] = "1";
+            // Compile a program that reports the size via its exit code.
+            // (Exit codes are 0-255, sufficient for practical type sizes.)
+            bool res = tester.compile_check(
+                "#include <stddef.h>\ntypedef " + size_name + " test_type;\n"
+                "int main() { return (int)sizeof(test_type); }\n");
+            if (res) {
+                // Measure the size by running a probe that exits with sizeof.
+                int measured = tester.measure_sizeof(size_name);
+                if (measured > 0) {
+                    cout << measured << "\n";
+                    proj.defines["SIZEOF_" + to_upper_identifier(size_name)] = std::to_string(measured);
+                } else {
+                    cout << "yes (size unknown)\n";
+                    proj.defines["SIZEOF_" + to_upper_identifier(size_name)] = "1";
+                }
+            } else {
+                cout << "no\n";
+            }
         }
 
         for (const auto& decl_name : proj.check_decls) {
@@ -332,7 +448,18 @@ void run_autoconf(const vector<string>& args) {
 
         for (const auto& member_name : proj.check_members) {
             cout << "checking for member " << member_name << "... ";
-            bool res = tester.compile_check("struct test_struct { int field; };\nint main() { return sizeof(((test_struct*)0)->field); }\n");
+            // member_name is typically "struct-type.member". Split and test the
+            // actual member against the actual struct type.
+            string structType = member_name;
+            string memberField = member_name;
+            size_t dot = member_name.find('.');
+            if (dot != string::npos) {
+                structType = member_name.substr(0, dot);
+                memberField = member_name.substr(dot + 1);
+            }
+            string src =
+                "int main() { struct " + structType + " s; (void)sizeof(s." + memberField + "); return 0; }\n";
+            bool res = tester.compile_check(src);
             cout << (res ? "yes" : "no") << "\n";
             if (res) proj.defines["HAVE_" + to_upper_identifier(member_name)] = "1";
         }
@@ -340,14 +467,30 @@ void run_autoconf(const vector<string>& args) {
         for (const auto& [symbol, libs_vec] : proj.search_libs) {
             cout << "checking for library for " << symbol << "... ";
             bool res = false;
-            for (const auto& lib : libs_vec) {
-                if (tester.compile_check("extern int " + symbol + "();\nint main() { return " + symbol + "(); }\n")) {
-                    res = true;
-                    break;
+            string found_lib;
+            // First try without any library (symbol may be in the default libs).
+            if (tester.link_check(symbol, "")) {
+                res = true;
+            } else {
+                // Then try each candidate library, actually linking against it.
+                for (const auto& lib : libs_vec) {
+                    if (tester.link_check(symbol, lib)) {
+                        res = true;
+                        found_lib = lib;
+                        break;
+                    }
                 }
             }
             cout << (res ? "yes" : "no") << "\n";
-            if (res) proj.defines["HAVE_" + to_upper_identifier(symbol)] = "1";
+            if (res) {
+                proj.defines["HAVE_" + to_upper_identifier(symbol)] = "1";
+                // Record the library so it can be added to LIBS.
+                if (!found_lib.empty()) {
+                    proj.subst_vars["LIBS"] = proj.subst_vars.count("LIBS")
+                        ? proj.subst_vars["LIBS"] + " -l" + found_lib
+                        : "-l" + found_lib;
+                }
+            }
         }
 
         for (const auto& path : proj.aux_dirs) {
@@ -369,9 +512,28 @@ void run_autoconf(const vector<string>& args) {
 
         for (const auto& hdr_file : proj.config_headers.empty() ? vector<string>{"config.h"} : proj.config_headers) {
             ofstream out(hdr_file);
-            out << "#ifndef CONFIG_H_INCLUDED\n#define CONFIG_H_INCLUDED\n\n";
-            for (const auto& [k, v] : proj.defines) out << "#define " << k << " " << v << "\n";
-            out << "\n#endif\n";
+            if (!out.is_open()) {
+                cerr << "config.status: error: cannot create " << hdr_file << "\n";
+                continue;
+            }
+            // Per-file include guard derived from the filename.
+            string guard = to_upper_identifier(hdr_file);
+            std::replace(guard.begin(), guard.end(), '.', '_');
+            guard += "_INCLUDED";
+            out << "#ifndef " << guard << "\n#define " << guard << "\n\n";
+            for (const auto& [k, v] : proj.defines) {
+                // Validate the macro name (C identifier) and sanitize the value
+                // (strip newlines) so a malicious macro cannot inject directives.
+                if (!is_valid_identifier(k)) {
+                    cerr << "config.status: warning: skipping invalid macro name '" << k << "'\n";
+                    continue;
+                }
+                string safeValue = v;
+                std::replace(safeValue.begin(), safeValue.end(), '\n', ' ');
+                std::replace(safeValue.begin(), safeValue.end(), '\r', ' ');
+                out << "#define " << k << " " << safeValue << "\n";
+            }
+            out << "\n#endif // " << guard << "\n";
             cout << "config.status: creating " << hdr_file << "\n";
         }
 
