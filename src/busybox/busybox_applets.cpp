@@ -1,8 +1,178 @@
+// Hardened POSIX applets and the applet dispatch map.
+
+#include "busybox.h"
+#include "busybox_applets.h"
+#include "busybox_shell.h"
+
 // HARDENED POSIX APPLETS
 // ============================================================================
 
 int cmd_help(const std::vector<std::string>& args, ShellContext& ctx);
 std::string expand_history_designators(const std::string& line, ShellContext& ctx);
+
+// Escape a string for safe inclusion in JSON output (ls --json, find --json).
+// Handles quotes, backslashes, and control characters.
+static std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    return out;
+}
+
+// True if a path is a symlink or junction (reparse point). Used to avoid
+// following links during recursive delete/copy so operations stay in-tree.
+static bool path_is_reparse(const fs::path& p) {
+    std::error_code ec;
+    return fs::is_symlink(fs::symlink_status(p, ec));
+}
+
+// True if a path is the filesystem root (C:\, /, etc.) or an empty/current
+// path that would be dangerous to pass to a recursive delete.
+static bool path_is_rootish(const fs::path& p) {
+    std::error_code ec;
+    fs::path abs = fs::absolute(p, ec).lexically_normal();
+    if (ec) return true; // treat unresolvable as dangerous
+    return abs == abs.root_path();
+}
+
+// Read a REPL input line with tab-completion (applet names and file paths) and
+// up/down history recall. Returns false on EOF. Falls back to plain getline when
+// stdin is not an interactive console (piped/redirected).
+static bool read_repl_line(std::string& outLine, ShellContext& ctx) {
+    outLine.clear();
+
+    // Non-console stdin (piped/redirected): use plain getline.
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    bool isConsole = (hIn != INVALID_HANDLE_VALUE && GetConsoleMode(hIn, &mode));
+    if (!isConsole) {
+        return static_cast<bool>(std::getline(std::cin, outLine));
+    }
+
+    int histIdx = static_cast<int>(ctx.history.size());
+
+    auto complete = [&](const std::string& cur) -> std::string {
+        // Complete the last word on the line.
+        size_t wordStart = cur.find_last_of(" \t");
+        std::string prefix = (wordStart == std::string::npos) ? cur : cur.substr(wordStart + 1);
+        std::string before = (wordStart == std::string::npos) ? "" : cur.substr(0, wordStart + 1);
+        if (prefix.empty()) return cur;
+
+        std::vector<std::string> matches;
+        bool firstWord = (wordStart == std::string::npos);
+
+        if (firstWord) {
+            // Complete applet names.
+            for (const auto& kv : applets) {
+                if (kv.first.rfind(prefix, 0) == 0) matches.push_back(kv.first);
+            }
+        }
+        // Complete file/directory names in the current directory.
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(fs::current_path(ec), ec)) {
+            std::string name = path_to_utf8(entry.path().filename());
+            if (name.rfind(prefix, 0) == 0) {
+                matches.push_back(fs::is_directory(entry.path(), ec) ? name + "\\" : name);
+            }
+        }
+
+        if (matches.empty()) return cur;
+        if (matches.size() == 1) return before + matches[0];
+
+        // Multiple matches: complete to the common prefix, and list them.
+        std::string common = matches[0];
+        for (const auto& m : matches) {
+            size_t k = 0;
+            while (k < common.size() && k < m.size() && common[k] == m[k]) ++k;
+            common = common.substr(0, k);
+        }
+        if (common.size() > prefix.size()) return before + common;
+
+        // No longer common prefix: show the candidates.
+        std::cout << "\n";
+        for (const auto& m : matches) std::cout << m << "  ";
+        std::cout << "\n$ " << cur;
+        return cur;
+    };
+
+    while (true) {
+        if (!_kbhit()) { Sleep(1); continue; }
+        int c = _getch();
+
+        if (c == '\r' || c == '\n') { std::cout << "\n"; return true; }
+        if (c == 8) {
+            if (!outLine.empty()) { outLine.pop_back(); std::cout << "\b \b"; }
+            continue;
+        }
+        if (c == '\t') { // Tab: complete
+            std::string completed = complete(outLine);
+            if (completed != outLine) {
+                for (size_t k = 0; k < outLine.size(); ++k) std::cout << "\b \b";
+                outLine = completed;
+                std::cout << outLine;
+            }
+            continue;
+        }
+        if (c == 0 || c == 224) { // extended key
+            int ext = _getch();
+            if (ext == 72) { // Up
+                if (histIdx > 0) {
+                    histIdx--;
+                    for (size_t k = 0; k < outLine.size(); ++k) std::cout << "\b \b";
+                    outLine = ctx.history[histIdx];
+                    std::cout << outLine;
+                }
+            } else if (ext == 80) { // Down
+                if (histIdx < static_cast<int>(ctx.history.size())) {
+                    histIdx++;
+                    for (size_t k = 0; k < outLine.size(); ++k) std::cout << "\b \b";
+                    outLine = (histIdx < static_cast<int>(ctx.history.size())) ? ctx.history[histIdx] : "";
+                    std::cout << outLine;
+                }
+            }
+            continue;
+        }
+        if (c >= 32 && c < 127) {
+            outLine.push_back(static_cast<char>(c));
+            std::cout << static_cast<char>(c);
+        }
+    }
+}
+
+// Run the EXIT trap if one is registered. Shared by all shell exit paths.
+static void run_exit_trap(ShellContext& ctx) {
+    std::string exitTrap;
+    {
+        std::lock_guard<std::mutex> lock(ctx.ctx_mutex);
+        auto it = ctx.traps.find("EXIT");
+        if (it != ctx.traps.end()) exitTrap = it->second;
+    }
+    if (!exitTrap.empty()) {
+        Parser tp(tokenize(exitTrap));
+        auto tast = tp.parse_chain();
+        if (tast) {
+            try { tast->execute(ctx, NULL, NULL); } catch (...) {}
+        }
+    }
+}
 
 int cmd_sh(const std::vector<std::string>& args, ShellContext& ctx) {
     if (args.size() > 1) {
@@ -19,11 +189,14 @@ int cmd_sh(const std::vector<std::string>& args, ShellContext& ctx) {
             }
             Parser parser(tokenize(args[2]));
             auto ast = parser.parse_chain();
+            int rc = 0;
             try {
-                return ast ? ast->execute(ctx, NULL, NULL) : 0;
+                rc = ast ? ast->execute(ctx, NULL, NULL) : 0;
             } catch (const ShellExitSignal& signal) {
-                return signal.code();
+                rc = signal.code();
             }
+            run_exit_trap(ctx);
+            return rc;
         }
         for (size_t k = 1; k < args.size(); ++k) {
             ctx.set_var(std::to_string(k - 1), args[k]);
@@ -42,15 +215,20 @@ int cmd_sh(const std::vector<std::string>& args, ShellContext& ctx) {
         std::string script((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         Parser parser(tokenize(script));
         auto ast = parser.parse_chain();
+        int rc = 0;
         try {
-            return ast ? ast->execute(ctx, NULL, NULL) : 0;
+            rc = ast ? ast->execute(ctx, NULL, NULL) : 0;
         } catch (const ShellExitSignal& signal) {
-            return signal.code();
+            rc = signal.code();
         }
+        run_exit_trap(ctx);
+        return rc;
     }
-    std::cout << "BusyBox v17.0\nType 'help' for manual.\n$ ";
+    // Interactive REPL: mark the context so destructive applets may prompt.
+    ctx.interactive = true;
+    std::cout << "BusyBox v" BUSYBOX_VERSION "\nType 'help' for manual.\n$ ";
     std::string line;
-    while (std::getline(std::cin, line)) {
+    while (read_repl_line(line, ctx)) {
         std::string expanded = expand_history_designators(line, ctx);
         if (expanded != line) {
             std::cout << expanded << "\n";
@@ -62,6 +240,7 @@ int cmd_sh(const std::vector<std::string>& args, ShellContext& ctx) {
         std::cout << "$ ";
     }
     ctx.save_history();
+    run_exit_trap(ctx);
     return 0;
 }
 
@@ -81,11 +260,30 @@ int cmd_grep(const std::vector<std::string>& args, ShellContext& ctx) {
     std::vector<std::string> patterns;
     std::vector<std::string> files;
 
+    int after_context = 0, before_context = 0;
+    int max_matches = -1; // -m N
+    bool only_matching = false; // -o
     bool stop_flags = false;
     for (size_t i = 1; i < args.size(); ++i) {
         const std::string& arg = args[i];
         if (!stop_flags && arg == "--") { stop_flags = true; continue; }
         if (!stop_flags && arg == "-e" && i + 1 < args.size()) { patterns.push_back(args[++i]); continue; }
+        // Context options: -A n / -B n / -C n (also -An / -A=n forms).
+        if (!stop_flags && arg.size() >= 2 && arg[0] == '-' && (arg[1] == 'A' || arg[1] == 'B' || arg[1] == 'C')) {
+            char which = arg[1];
+            std::string numStr;
+            if (arg.size() > 2) {
+                numStr = (arg[2] == '=') ? arg.substr(3) : arg.substr(2);
+            } else if (i + 1 < args.size()) {
+                numStr = args[++i];
+            }
+            int n = 0;
+            try { n = std::max(0, std::stoi(numStr)); } catch (...) { n = 0; }
+            if (which == 'A') after_context = n;
+            else if (which == 'B') before_context = n;
+            else { after_context = n; before_context = n; }
+            continue;
+        }
         if (!stop_flags && arg == "-f" && i + 1 < args.size()) {
             std::ifstream pfile(utf8_to_utf16(normalize_path(args[++i])));
             std::string line;
@@ -108,6 +306,15 @@ int cmd_grep(const std::vector<std::string>& args, ShellContext& ctx) {
                 else if (flag == 'E') extended_regex = true;
                 else if (flag == 'H') force_filename = true;
                 else if (flag == 'h') suppress_filename = true;
+                else if (flag == 'o') only_matching = true;
+                else if (flag == 'm') {
+                    // -m N: max matches (value is next arg or rest of this arg)
+                    std::string numStr;
+                    if (j + 1 < arg.length()) numStr = arg.substr(j + 1);
+                    else if (i + 1 < args.size()) numStr = args[++i];
+                    try { max_matches = std::stoi(numStr); } catch (...) { max_matches = -1; }
+                    break; // rest of this arg consumed
+                }
             }
             continue;
         }
@@ -131,7 +338,15 @@ int cmd_grep(const std::vector<std::string>& args, ShellContext& ctx) {
         if (!fixed_strings) {
             std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript | std::regex_constants::optimize;
             if (ignore_case) flags |= std::regex_constants::icase;
-            try { spec.regex = std::regex(pattern, flags); } catch (const std::regex_error& e) { std::cerr << "grep: invalid regex: " << e.what() << "\n"; }
+            try {
+                spec.regex = std::regex(pattern, flags);
+            } catch (const std::regex_error& e) {
+                // Invalid regex: mark the spec so it never matches, and report.
+                std::cerr << "grep: invalid regex: " << e.what() << "\n";
+                spec.use_regex = false;
+                spec.use_literal = false;
+                spec.literal.clear();
+            }
         }
         compiled.push_back(spec);
     };
@@ -143,9 +358,11 @@ int cmd_grep(const std::vector<std::string>& args, ShellContext& ctx) {
         for (const auto& spec : compiled) {
             if (spec.use_literal) {
                 matched = (line.find(spec.literal) != std::string::npos);
-            } else {
+            } else if (spec.use_regex) {
                 matched = std::regex_search(line, spec.regex);
             }
+            // Specs that failed to compile (use_regex && use_literal both false)
+            // are skipped so an invalid pattern never matches unintentionally.
             if (matched) break;
         }
         return matched;
@@ -153,6 +370,8 @@ int cmd_grep(const std::vector<std::string>& args, ShellContext& ctx) {
 
     auto proc_stream = [&](std::istream& in, const std::string& name) {
         std::string line; size_t lineno = 0, matches = 0;
+        std::vector<std::pair<size_t, std::string>> before_buf; // ring of preceding lines
+        size_t after_remaining = 0;
         while (std::getline(in, line)) {
             lineno++;
             bool matched = matches_any(line);
@@ -162,12 +381,54 @@ int cmd_grep(const std::vector<std::string>& args, ShellContext& ctx) {
                 if (quiet) return;
                 if (files_with_matches) { std::cout << name << "\n"; return; }
                 if (!count_only) {
+                    auto make_prefix = [&](size_t ln) {
+                        std::string prefix;
+                        if (!name.empty() && !suppress_filename) prefix = name;
+                        if (!prefix.empty() && force_filename) prefix = name;
+                        if (!prefix.empty()) prefix += ":";
+                        if (line_num) prefix += std::to_string(ln) + ":";
+                        return prefix;
+                    };
+                    // Print pending before-context lines.
+                    for (const auto& bl : before_buf) {
+                        std::cout << make_prefix(bl.first) << bl.second << "\n";
+                    }
+                    before_buf.clear();
+                    if (only_matching) {
+                        // -o: print only the matched portions, one per line.
+                        for (const auto& spec : compiled) {
+                            if (spec.use_literal) {
+                                size_t pos = 0;
+                                while ((pos = line.find(spec.literal, pos)) != std::string::npos) {
+                                    std::cout << make_prefix(lineno) << spec.literal << "\n";
+                                    pos += spec.literal.size();
+                                }
+                            } else if (spec.use_regex) {
+                                for (std::sregex_iterator it(line.begin(), line.end(), spec.regex), end; it != end; ++it) {
+                                    std::cout << make_prefix(lineno) << it->str() << "\n";
+                                }
+                            }
+                        }
+                    } else {
+                        std::cout << make_prefix(lineno) << line << "\n";
+                    }
+                    after_remaining = static_cast<size_t>(after_context);
+                }
+                // -m: stop after max_matches matches.
+                if (max_matches >= 0 && static_cast<int>(matches) >= max_matches) return;
+            } else if (!count_only && !quiet && !files_with_matches) {
+                // Non-matching line: before-context buffer or after-context print.
+                if (after_remaining > 0) {
                     std::string prefix;
-                    if (!name.empty() && !suppress_filename) prefix = name;
-                    if (!prefix.empty() && force_filename) prefix = name;
-                    if (!prefix.empty()) std::cout << prefix << ":";
-                    if (line_num) std::cout << lineno << ":";
-                    std::cout << line << "\n";
+                    if (!name.empty() && !suppress_filename) prefix = name + "-";
+                    if (line_num) prefix += std::to_string(lineno) + "-";
+                    std::cout << prefix << line << "\n";
+                    after_remaining--;
+                } else if (before_context > 0) {
+                    before_buf.push_back({lineno, line});
+                    if (before_buf.size() > static_cast<size_t>(before_context)) {
+                        before_buf.erase(before_buf.begin());
+                    }
                 }
             }
         }
@@ -278,6 +539,25 @@ int cmd_sed(const std::vector<std::string>& args, ShellContext& ctx) {
                 } else if (body[0] == 'p') {
                     print_line = true;
                     if (quiet) continue;
+                } else if (body[0] == 'y' && body.size() >= 4) {
+                    // y/abc/xyz/ : transliterate characters (each char in the
+                    // first set maps to the corresponding char in the second).
+                    // The trailing delimiter is optional (y/abc/xyz).
+                    char delim = body[1];
+                    size_t p2 = body.find(delim, 2);
+                    if (p2 != std::string::npos) {
+                        size_t p3 = body.find(delim, p2 + 1);
+                        std::string from = body.substr(2, p2 - 2);
+                        std::string to = (p3 != std::string::npos)
+                            ? body.substr(p2 + 1, p3 - p2 - 1)
+                            : body.substr(p2 + 1);
+                        for (char& ch : current) {
+                            size_t idx = from.find(ch);
+                            if (idx != std::string::npos && idx < to.size()) {
+                                ch = to[idx];
+                            }
+                        }
+                    }
                 } else if (body[0] == 's' && body.size() >= 3) {
                     char delim = body[1];
                     size_t p2 = std::string::npos;
@@ -299,10 +579,14 @@ int cmd_sed(const std::vector<std::string>& args, ShellContext& ctx) {
                                 if (replace_str[k] == '\\' && k + 1 < replace_str.size() && replace_str[k + 1] == delim) { unescaped += delim; k++; }
                                 else unescaped += replace_str[k];
                             }
-                            std::regex re(find_str, std::regex_constants::ECMAScript | std::regex_constants::optimize);
-                            bool global = (body.substr(p3 + 1).find('g') != std::string::npos);
-                            if (global) current = std::regex_replace(current, re, unescaped);
-                            else current = std::regex_replace(current, re, unescaped, std::regex_constants::format_first_only);
+                            try {
+                                std::regex re(find_str, std::regex_constants::ECMAScript | std::regex_constants::optimize);
+                                bool global = (body.substr(p3 + 1).find('g') != std::string::npos);
+                                if (global) current = std::regex_replace(current, re, unescaped);
+                                else current = std::regex_replace(current, re, unescaped, std::regex_constants::format_first_only);
+                            } catch (const std::regex_error& e) {
+                                std::cerr << "sed: invalid regex in substitution: " << e.what() << "\n";
+                            }
                         }
                     }
                 }
@@ -364,33 +648,36 @@ int cmd_awk(const std::vector<std::string>& args, ShellContext& ctx) {
 
     std::string begin_block = extract_block("BEGIN");
     std::string end_block = extract_block("END");
+
+    // Remove a label{...} block from a script using brace matching.
+    auto remove_block = [&](std::string& src, const std::string& label) {
+        size_t pos = src.find(label);
+        if (pos == std::string::npos) return;
+        size_t brace = src.find('{', pos);
+        if (brace == std::string::npos) return;
+        int depth = 0;
+        for (size_t i = brace; i < src.size(); ++i) {
+            if (src[i] == '{') depth++;
+            else if (src[i] == '}') {
+                depth--;
+                if (depth == 0) { src.erase(pos, i - pos + 1); return; }
+            }
+        }
+    };
+
     std::string main_script = script;
-    if (!begin_block.empty()) {
-        size_t b = main_script.find("BEGIN");
-        if (b != std::string::npos) {
-            size_t brace = main_script.find('{', b);
-            size_t end = main_script.find('}', brace);
-            main_script.erase(b, end - b + 1);
-        }
-    }
-    if (!end_block.empty()) {
-        size_t e = main_script.find("END");
-        if (e != std::string::npos) {
-            size_t brace = main_script.find('{', e);
-            size_t end = main_script.find('}', brace);
-            main_script.erase(e, end - e + 1);
-        }
-    }
+    if (!begin_block.empty()) remove_block(main_script, "BEGIN");
+    if (!end_block.empty()) remove_block(main_script, "END");
 
     auto eval_print = [&](const std::string& expr, const std::vector<std::string>& fields, const std::string& line, size_t lineno, const std::string& filename) {
         std::string output;
         std::string current = trim_copy(expr);
         if (current.empty()) return line;
-        if (current.find("print") != std::string::npos) {
-            size_t start = current.find('(');
-            size_t end = current.rfind(')');
-            if (start != std::string::npos && end != std::string::npos) {
-                current = current.substr(start + 1, end - start - 1);
+        // Strip a leading 'print' keyword (with or without parentheses).
+        if (current.rfind("print", 0) == 0) {
+            current = trim_copy(current.substr(5));
+            if (!current.empty() && current.front() == '(' && current.back() == ')') {
+                current = current.substr(1, current.size() - 2);
             }
         }
         std::stringstream ss(current);
@@ -408,8 +695,13 @@ int cmd_awk(const std::vector<std::string>& args, ShellContext& ctx) {
                 else if (num == "NR") output += std::to_string(lineno);
                 else if (num == "FILENAME") output += filename;
                 else {
-                    size_t idx = std::stoul(num);
-                    if (idx > 0 && idx <= fields.size()) output += fields[idx - 1];
+                    // Guard against non-numeric field references.
+                    try {
+                        size_t idx = std::stoul(num);
+                        if (idx > 0 && idx <= fields.size()) output += fields[idx - 1];
+                    } catch (...) {
+                        output += token;
+                    }
                 }
             } else if (token == "NR") output += std::to_string(lineno);
             else if (token == "NF") output += std::to_string(fields.size());
@@ -443,6 +735,25 @@ int cmd_awk(const std::vector<std::string>& args, ShellContext& ctx) {
                 std::cout << line << "\n";
                 continue;
             }
+
+            // Pattern-based filtering: /regex/ { action } or /regex/ alone.
+            std::string pattern;
+            if (!action.empty() && action[0] == '/') {
+                size_t closeSlash = action.find('/', 1);
+                if (closeSlash != std::string::npos) {
+                    pattern = action.substr(1, closeSlash - 1);
+                    action = trim_copy(action.substr(closeSlash + 1));
+                    // If the line doesn't match the pattern, skip it.
+                    try {
+                        if (!std::regex_search(line, std::regex(pattern))) continue;
+                    } catch (const std::regex_error&) {
+                        // Invalid pattern: treat as literal substring.
+                        if (line.find(pattern) == std::string::npos) continue;
+                    }
+                    if (action.empty()) { std::cout << line << "\n"; continue; }
+                }
+            }
+
             if (action.find("{") != std::string::npos && action.find("}") != std::string::npos) {
                 std::string inner = action.substr(action.find('{') + 1, action.find_last_of('}') - action.find('{') - 1);
                 std::cout << eval_print(inner, fields, line, lineno, filename) << "\n";
@@ -661,17 +972,38 @@ int cmd_sort(const std::vector<std::string>& args, ShellContext& ctx) {
         else files.push_back(normalize_path(args[i]));
     }
 
+    // Cap the number of lines held in memory to avoid unbounded growth on huge
+    // inputs. Sorting inherently requires the full input, so we bound it.
+    const size_t MAX_SORT_LINES = 1000000;
     auto load_lines = [&](std::istream& in) -> std::vector<std::string> {
         std::vector<std::string> lines;
         std::string line;
-        while (std::getline(in, line)) lines.push_back(line);
+        while (std::getline(in, line)) {
+            lines.push_back(line);
+            if (lines.size() >= MAX_SORT_LINES) {
+                std::cerr << "sort: input too large; truncated to " << MAX_SORT_LINES << " lines\n";
+                break;
+            }
+        }
         return lines;
     };
 
     auto emit = [&](const std::vector<std::string>& lines) {
         std::vector<std::string> work = lines;
         std::stable_sort(work.begin(), work.end(), [&](const std::string& a, const std::string& b) {
-            if (numeric) return std::stoll(a) < std::stoll(b);
+            if (numeric) {
+                // Guard against non-numeric input: std::stoll throws on it.
+                auto toNum = [](const std::string& s) -> long long {
+                    try {
+                        size_t pos = 0;
+                        long long v = std::stoll(s, &pos);
+                        return v;
+                    } catch (...) {
+                        return 0;
+                    }
+                };
+                return toNum(a) < toNum(b);
+            }
             return a < b;
         });
         if (reverse) std::reverse(work.begin(), work.end());
@@ -1509,7 +1841,7 @@ int cmd_ls(const std::vector<std::string>& args, ShellContext& ctx) {
 
             auto size = entry.is_regular_file(ec) ? fs::file_size(entry.path(), ec) : 0;
             std::cout << "  {\n"
-                      << "    \"name\": \"" << filename << "\",\n"
+                      << "    \"name\": \"" << json_escape(filename) << "\",\n"
                       << "    \"type\": \"" << (entry.is_directory(ec) ? "directory" : "file") << "\",\n"
                       << "    \"size\": " << size << "\n"
                       << "  }";
@@ -1577,12 +1909,16 @@ int cmd_cp(const std::vector<std::string>& args, ShellContext& ctx) {
     if (args.size() > 1 && (args[1] == "--help" || args[1] == "-h")) return cmd_help({"help", "cp"}, ctx);
     if (args.size() < 3) return 1;
 
-    bool recursive = false;
+    bool recursive = false, no_clobber = false, interactive = false, archive = false;
     std::vector<std::string> sources;
     std::string dest = normalize_path(args.back());
 
     for (size_t i = 1; i < args.size() - 1; ++i) {
         if (args[i] == "-r" || args[i] == "-R") recursive = true;
+        else if (args[i] == "-a") { archive = true; recursive = true; } // -a implies -r
+        else if (args[i] == "-n") no_clobber = true;
+        else if (args[i] == "-i") interactive = true;
+        else if (args[i] == "-f") { interactive = false; no_clobber = false; }
         else sources.push_back(normalize_path(args[i]));
     }
 
@@ -1594,10 +1930,34 @@ int cmd_cp(const std::vector<std::string>& args, ShellContext& ctx) {
         fs::path src_path(utf8_to_utf16(src));
         fs::path target = dest_is_dir ? (dest_path / src_path.filename()) : dest_path;
 
+        // Do not silently overwrite an existing file unless forced.
+        if (fs::exists(target, ec)) {
+            if (no_clobber) {
+                continue; // -n: skip existing
+            }
+            if (interactive && !ctx.is_script_mode()) {
+                std::cerr << "cp: overwrite '" << path_to_utf8(target) << "'? [y/N] ";
+                std::string answer;
+                std::getline(std::cin, answer);
+                if (answer.empty() || (answer[0] != 'y' && answer[0] != 'Y')) {
+                    continue;
+                }
+            }
+        }
+
         auto options = fs::copy_options::overwrite_existing;
         if (recursive) options |= fs::copy_options::recursive;
+        // Do not follow directory symlinks/junctions during recursive copies.
+        if (recursive) options |= fs::copy_options::copy_symlinks;
 
         fs::copy(src_path, target, options, ec);
+
+        // -a (archive): preserve timestamps after copying.
+        if (archive && !ec) {
+            std::error_code tec;
+            auto modTime = fs::last_write_time(src_path, tec);
+            if (!tec) fs::last_write_time(target, modTime, tec);
+        }
         if (ec) {
             std::cerr << "cp: cannot copy '" << src << "': " << ec.message() << "\n";
             return 1;
@@ -1610,9 +1970,15 @@ int cmd_mv(const std::vector<std::string>& args, ShellContext& ctx) {
     if (args.size() > 1 && (args[1] == "--help" || args[1] == "-h")) return cmd_help({"help", "mv"}, ctx);
     if (args.size() < 3) return 1;
 
+    bool no_clobber = false, interactive = false;
     std::vector<std::string> sources;
     std::string dest = normalize_path(args.back());
-    for (size_t i = 1; i < args.size() - 1; ++i) sources.push_back(normalize_path(args[i]));
+    for (size_t i = 1; i < args.size() - 1; ++i) {
+        if (args[i] == "-n") no_clobber = true;
+        else if (args[i] == "-i") interactive = true;
+        else if (args[i] == "-f") { interactive = false; no_clobber = false; }
+        else sources.push_back(normalize_path(args[i]));
+    }
 
     std::error_code ec;
     fs::path dest_path(utf8_to_utf16(dest));
@@ -1622,26 +1988,69 @@ int cmd_mv(const std::vector<std::string>& args, ShellContext& ctx) {
         fs::path src_path(utf8_to_utf16(src));
         fs::path target = dest_is_dir ? (dest_path / src_path.filename()) : dest_path;
 
+        // Do not silently overwrite an existing target unless forced.
+        if (fs::exists(target, ec)) {
+            if (no_clobber) continue;
+            if (interactive && !ctx.is_script_mode()) {
+                std::cerr << "mv: overwrite '" << path_to_utf8(target) << "'? [y/N] ";
+                std::string answer;
+                std::getline(std::cin, answer);
+                if (answer.empty() || (answer[0] != 'y' && answer[0] != 'Y')) continue;
+            }
+        }
+
         fs::rename(src_path, target, ec);
         if (ec) {
-            std::cerr << "mv: cannot move '" << src << "': " << ec.message() << "\n";
-            return 1;
+            // Cross-volume move: fall back to copy + remove.
+            std::error_code copyEc;
+            fs::copy(src_path, target,
+                     fs::copy_options::recursive | fs::copy_options::overwrite_existing, copyEc);
+            if (!copyEc) {
+                fs::remove_all(src_path, copyEc);
+            }
+            if (copyEc) {
+                std::cerr << "mv: cannot move '" << src << "': " << ec.message() << "\n";
+                return 1;
+            }
+            ec.clear();
         }
     }
     return 0;
 }
 
+// Recursively delete a directory tree without following symlinks/junctions.
+// Reparse points are unlinked, not traversed, so deletion cannot escape the
+// intended tree.
+static void remove_all_no_follow(const fs::path& root, std::error_code& ec) {
+    if (path_is_reparse(root)) {
+        fs::remove(root, ec);
+        return;
+    }
+    std::error_code iterEc;
+    if (fs::is_directory(root, iterEc) && !path_is_reparse(root)) {
+        for (const auto& entry : fs::directory_iterator(root, fs::directory_options::skip_permission_denied, iterEc)) {
+            std::error_code childEc;
+            remove_all_no_follow(entry.path(), childEc);
+            if (childEc && !ec) ec = childEc;
+        }
+    }
+    fs::remove_all(root, ec);
+}
+
 int cmd_rm(const std::vector<std::string>& args, ShellContext& ctx) {
     if (args.size() > 1 && (args[1] == "--help" || args[1] == "-h")) return cmd_help({"help", "rm"}, ctx);
     if (args.size() < 2) return 1;
-    bool recursive = false, force = false;
+    bool recursive = false, force = false, no_preserve_root = false, interactive = false;
     std::vector<std::string> targets;
 
     for (size_t i = 1; i < args.size(); ++i) {
-        if (args[i][0] == '-') {
+        if (args[i] == "--no-preserve-root") { no_preserve_root = true; continue; }
+        if (args[i] == "--preserve-root") { continue; } // default; accepted for compatibility
+        if (args[i][0] == '-' && args[i].size() > 1) {
             for (size_t j = 1; j < args[i].length(); ++j) {
                 if (args[i][j] == 'r' || args[i][j] == 'R') recursive = true;
                 if (args[i][j] == 'f') force = true;
+                if (args[i][j] == 'i') interactive = true;
             }
         } else {
             targets.push_back(normalize_path(args[i]));
@@ -1651,13 +2060,31 @@ int cmd_rm(const std::vector<std::string>& args, ShellContext& ctx) {
     std::error_code ec;
     for (const auto& target : targets) {
         std::wstring wtarget = utf8_to_utf16(target);
-        if (fs::is_directory(wtarget, ec)) {
+        fs::path tpath(wtarget);
+
+        // --preserve-root: refuse to recursively delete the filesystem root.
+        if (recursive && !no_preserve_root && path_is_rootish(tpath)) {
+            std::cerr << "rm: refusing to remove root directory '" << target
+                      << "' (use --no-preserve-root to override)\n";
+            return 1;
+        }
+
+        if (fs::is_directory(wtarget, ec) && !path_is_reparse(tpath)) {
             if (!recursive) {
                 std::cerr << "rm: " << target << ": is a directory\n";
                 if (!force) return 1;
                 continue;
             }
-            fs::remove_all(wtarget, ec);
+            // Interactive / non-forced confirmation for recursive deletion.
+            if ((interactive || !force) && !ctx.is_script_mode()) {
+                std::cerr << "rm: descend into directory '" << target << "'? [y/N] ";
+                std::string answer;
+                std::getline(std::cin, answer);
+                if (answer.empty() || (answer[0] != 'y' && answer[0] != 'Y')) {
+                    continue;
+                }
+            }
+            remove_all_no_follow(tpath, ec);
         } else {
             fs::remove(wtarget, ec);
         }
@@ -1665,6 +2092,7 @@ int cmd_rm(const std::vector<std::string>& args, ShellContext& ctx) {
             std::cerr << "rm: cannot remove '" << target << "': " << ec.message() << "\n";
             return 1;
         }
+        ec.clear();
     }
     return 0;
 }
@@ -1761,7 +2189,7 @@ int cmd_find(const std::vector<std::string>& args, ShellContext& ctx) {
             for (char &c : path_str) { if (c == '\\') c = '/'; }
             auto size = entry.is_regular_file(ec) ? fs::file_size(entry.path(), ec) : 0;
             std::cout << "  {\n"
-                      << "    \"path\": \"" << path_str << "\",\n"
+                      << "    \"path\": \"" << json_escape(path_str) << "\",\n"
                       << "    \"type\": \"" << (entry.is_directory(ec) ? "directory" : "file") << "\",\n"
                       << "    \"size\": " << size << "\n"
                       << "  }";
@@ -1823,6 +2251,19 @@ int cmd_tail(const std::vector<std::string>& args, ShellContext& ctx) {
         while (true) {
             if (!std::getline(in, line)) {
                 if (follow) {
+                    // tail -f: at EOF, wait for more data. But bail out if the
+                    // stream is closed/broken (not just momentarily empty), so we
+                    // do not spin forever on a dead handle.
+                    if (in.eof() && file_path.empty()) {
+                        // stdin at EOF with no more writers: stop following.
+                        break;
+                    }
+                    if (in.bad() || in.fail()) {
+                        // Clear transient EOF state and retry after a short wait.
+                        in.clear();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                        continue;
+                    }
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }
@@ -2093,17 +2534,44 @@ std::string expand_history_designators(const std::string& line, ShellContext& ct
 int cmd_read(const std::vector<std::string>& args, ShellContext& ctx) {
     bool raw = false;
     std::string prompt;
+    int timeout_secs = -1;
     std::vector<std::string> var_names;
 
     for (size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "-r") raw = true;
         else if (args[i] == "-p" && i + 1 < args.size()) prompt = args[++i];
+        else if (args[i] == "-t" && i + 1 < args.size()) {
+            try { timeout_secs = std::stoi(args[++i]); } catch (...) { timeout_secs = -1; }
+        }
         else var_names.push_back(args[i]);
     }
 
     if (var_names.empty()) var_names.push_back("REPLY");
 
-    if (!prompt.empty()) std::cout << prompt;
+    if (!prompt.empty()) { std::cout << prompt; std::cout.flush(); }
+
+    // -t timeout: only meaningful on an interactive console. Poll the console
+    // input buffer until the timeout elapses.
+    if (timeout_secs >= 0) {
+        HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        bool isConsole = (hIn != INVALID_HANDLE_VALUE && GetConsoleMode(hIn, &mode));
+        if (isConsole) {
+            DWORD waited = 0;
+            const DWORD sliceMs = 50;
+            const DWORD limitMs = static_cast<DWORD>(timeout_secs) * 1000;
+            while (waited < limitMs) {
+                DWORD avail = 0;
+                if (GetNumberOfConsoleInputEvents(hIn, &avail) && avail > 0) break;
+                Sleep(sliceMs);
+                waited += sliceMs;
+            }
+            if (waited >= limitMs) {
+                return 1; // timed out
+            }
+        }
+    }
+
     std::string line;
     if (!std::getline(std::cin, line)) return 1;
 
@@ -2309,6 +2777,19 @@ int cmd_help(const std::vector<std::string>& args, ShellContext& ctx) {
         } else if (applet == "test" || applet == "[") {
             std::cout << "Usage: test EXPRESSION  or  [ EXPRESSION ]\n\n"
                       << "  Evaluate expression and return exit code 0 (true) or 1 (false).\n";
+        } else if (applet == "printf") {
+            std::cout << "Usage: printf FORMAT [ARG...]\n\n"
+                      << "  Format and print. Supports %s %d %i %f %x %X %o %c %% and \\n \\t \\r \\\\.\n";
+        } else if (applet == "set") {
+            std::cout << "Usage: set [-o|+o OPTION]\n\n"
+                      << "  Set or clear shell options. 'set -o pipefail' makes pipelines return the\n"
+                      << "  rightmost non-zero status. Bare 'set' lists current options.\n";
+        } else if (applet == "local") {
+            std::cout << "Usage: local VAR[=value] ...\n\n"
+                      << "  Declare function-local variables (only valid inside a function).\n";
+        } else if (applet == "trap") {
+            std::cout << "Usage: trap 'command' CONDITION ...\n\n"
+                      << "  Run command on a condition (e.g. EXIT, INT). 'trap - COND' clears it.\n";
         } else {
             std::cout << "Usage details available for applet: " << applet << "\n";
         }
@@ -2361,8 +2842,146 @@ int cmd_help(const std::vector<std::string>& args, ShellContext& ctx) {
     return 0;
 }
 
+// set -o pipefail / set +o pipefail: toggle pipeline exit-status behavior.
+int cmd_set(const std::vector<std::string>& args, ShellContext& ctx) {
+    for (size_t i = 1; i < args.size(); ++i) {
+        if ((args[i] == "-o" || args[i] == "+o") && i + 1 < args.size()) {
+            std::string opt = to_lower(args[i + 1]);
+            bool enable = (args[i] == "-o");
+            if (opt == "pipefail") {
+                ctx.pipefail = enable;
+                return 0;
+            }
+            std::cerr << "set: unknown option: " << args[i + 1] << "\n";
+            return 1;
+        }
+    }
+    // Bare `set` prints current options.
+    std::cout << "pipefail\t" << (ctx.pipefail ? "on" : "off") << "\n";
+    return 0;
+}
+
+// printf: formatted output. Supports %s %d %i %f %x %X %o %c %% and the
+// escape sequences \n \t \r \\ \0 in the format string.
+int cmd_printf(const std::vector<std::string>& args, ShellContext& ctx) {
+    if (args.size() > 1 && (args[1] == "--help" || args[1] == "-h")) return cmd_help({"help", "printf"}, ctx);
+    if (args.size() < 2) { std::cerr << "printf: missing format string\n"; return 1; }
+
+    const std::string& fmt = args[1];
+    size_t argIdx = 2;
+    std::string out;
+
+    auto nextArg = [&]() -> std::string {
+        return (argIdx < args.size()) ? args[argIdx++] : "";
+    };
+
+    for (size_t i = 0; i < fmt.size(); ++i) {
+        char c = fmt[i];
+        if (c == '\\' && i + 1 < fmt.size()) {
+            char e = fmt[++i];
+            if (e == 'n') out += '\n';
+            else if (e == 't') out += '\t';
+            else if (e == 'r') out += '\r';
+            else if (e == '\\') out += '\\';
+            else if (e == '0') out += '\0';
+            else { out += '\\'; out += e; }
+            continue;
+        }
+        if (c == '%' && i + 1 < fmt.size()) {
+            char spec = fmt[++i];
+            if (spec == '%') { out += '%'; continue; }
+            std::string a = nextArg();
+            switch (spec) {
+                case 's': out += a; break;
+                case 'c': out += a.empty() ? "" : std::string(1, a[0]); break;
+                case 'd': case 'i': {
+                    try { out += std::to_string(std::stoll(a)); } catch (...) { out += "0"; }
+                    break;
+                }
+                case 'f': {
+                    try { char b[64]; std::snprintf(b, sizeof(b), "%f", std::stod(a)); out += b; } catch (...) { out += "0.000000"; }
+                    break;
+                }
+                case 'x': {
+                    try { char b[32]; std::snprintf(b, sizeof(b), "%llx", (unsigned long long)std::stoull(a)); out += b; } catch (...) { out += "0"; }
+                    break;
+                }
+                case 'X': {
+                    try { char b[32]; std::snprintf(b, sizeof(b), "%llX", (unsigned long long)std::stoull(a)); out += b; } catch (...) { out += "0"; }
+                    break;
+                }
+                case 'o': {
+                    try { char b[32]; std::snprintf(b, sizeof(b), "%llo", (unsigned long long)std::stoull(a)); out += b; } catch (...) { out += "0"; }
+                    break;
+                }
+                default: out += '%'; out += spec; break;
+            }
+            continue;
+        }
+        out += c;
+    }
+    std::cout << out;
+    return 0;
+}
+
+// local VAR[=value] ...: declare function-local variables. Saves the prior value
+// on the current local scope; the variable is restored when the function returns.
+int cmd_local(const std::vector<std::string>& args, ShellContext& ctx) {
+    if (ctx.local_scopes.empty()) {
+        std::cerr << "local: can only be used inside a function\n";
+        return 1;
+    }
+    auto& scope = ctx.local_scopes.back();
+    for (size_t i = 1; i < args.size(); ++i) {
+        std::string name = args[i];
+        std::string value;
+        size_t eq = name.find('=');
+        if (eq != std::string::npos) {
+            value = name.substr(eq + 1);
+            name = name.substr(0, eq);
+        }
+        if (!is_valid_assignment_name(name)) {
+            std::cerr << "local: invalid variable name: " << name << "\n";
+            return 1;
+        }
+        // Save the prior value once per scope.
+        if (scope.find(name) == scope.end()) {
+            scope[name] = ctx.get_var(name);
+        }
+        ctx.set_var(name, value);
+    }
+    return 0;
+}
+
+// trap 'cmd' CONDITION ...: register a command to run on a condition (EXIT, INT).
+// trap - CONDITION: clear it. Bare trap: list registered traps.
+int cmd_trap(const std::vector<std::string>& args, ShellContext& ctx) {
+    if (args.size() == 1) {
+        std::lock_guard<std::mutex> lock(ctx.ctx_mutex);
+        for (const auto& kv : ctx.traps) {
+            std::cout << "trap '" << kv.second << "' " << kv.first << "\n";
+        }
+        return 0;
+    }
+    if (args.size() >= 3 && args[1] == "-") {
+        std::lock_guard<std::mutex> lock(ctx.ctx_mutex);
+        for (size_t i = 2; i < args.size(); ++i) ctx.traps.erase(args[i]);
+        return 0;
+    }
+    if (args.size() >= 3) {
+        std::lock_guard<std::mutex> lock(ctx.ctx_mutex);
+        for (size_t i = 2; i < args.size(); ++i) {
+            ctx.traps[args[i]] = args[1];
+        }
+        return 0;
+    }
+    std::cerr << "trap: usage: trap 'command' CONDITION [CONDITION...]\n";
+    return 1;
+}
+
 std::map<std::string, AppletFunc> applets = {
     {"sh", cmd_sh}, {"ksh", cmd_sh}, {"bash", cmd_sh},
+    {"set", cmd_set}, {"printf", cmd_printf}, {"local", cmd_local}, {"trap", cmd_trap},
     {"grep", cmd_grep}, {"sed", cmd_sed}, {"awk", cmd_awk},
     {"test", cmd_test}, {"[", cmd_test}, {"echo", cmd_echo},
     {"cat", cmd_cat}, {"pwd", cmd_pwd}, {"ls", cmd_ls},

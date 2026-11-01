@@ -1,3 +1,11 @@
+// Self-tests and CLI entry point.
+
+#include "busybox.h"
+#include "busybox_cli.h"
+#include "busybox_runtime.h"
+#include "busybox_shell.h"
+#include "busybox_applets.h"
+
 int run_self_test() {
     int failures = 0;
     auto check = [&](const std::string& name, bool passed) {
@@ -170,8 +178,10 @@ int main(int argc, char* argv[]) {
                 std::vector<std::string> help_args = (args.size() > 2) ? std::vector<std::string>{"help", args[2]} : std::vector<std::string>{"help"};
                 return cmd_help(help_args, ctx);
             }
-            if (first_arg == "--version" || first_arg == "-v") {
-                std::cout << "busybox\n";
+            if (first_arg == "--version" || first_arg == "-v" || first_arg == "-V") {
+                std::cout << "BusyBox for CrossShell v" BUSYBOX_VERSION " (Windows x86_64)\n";
+                std::cout << BUSYBOX_COPYRIGHT "\n";
+                std::cout << "Multi-call binary with POSIX shell and " << applets.size() << " applets.\n";
                 return 0;
             }
             if (applets.count(first_arg)) {

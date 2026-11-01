@@ -1,3 +1,10 @@
+#pragma once
+
+// Shell AST, parser, and execution engine for the busybox multi-call binary.
+
+#include "busybox.h"
+#include "busybox_runtime.h"
+
 // ============================================================================
 // ABSTRACT SYNTAX TREE (AST) & SECURE WIN32 EXECUTION ENGINE
 // ============================================================================
@@ -6,7 +13,11 @@ class ASTNode {
 public:
     std::string redirect_in;
     std::string redirect_out;
+    std::string redirect_err;
+    std::string heredoc_body;   // here-document content (<<)
+    std::string herestring;     // here-string content (<<<)
     bool append_out = false;
+    bool err_to_out = false;
     bool is_background = false;
 
     virtual ~ASTNode() = default;
@@ -28,6 +39,22 @@ public:
             if (h == INVALID_HANDLE_VALUE) { std::cerr << "busybox: cannot open " << exp_in << "\n"; return 1; }
             hFileIn = ScopedHandle(h); effective_in = hFileIn.get();
         }
+        // Here-document / here-string: feed the inline content as stdin via a pipe.
+        ScopedHandle hPipeInRead, hPipeInWrite;
+        std::string inlineInput;
+        if (!heredoc_body.empty()) inlineInput = heredoc_body;
+        else if (!herestring.empty()) inlineInput = herestring + "\n";
+        if (!inlineInput.empty()) {
+            SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+            HANDLE r, w;
+            if (CreatePipe(&r, &w, &sa, 0)) {
+                DWORD written = 0;
+                WriteFile(w, inlineInput.data(), static_cast<DWORD>(inlineInput.size()), &written, NULL);
+                CloseHandle(w); // signal EOF to the reader
+                hPipeInRead = ScopedHandle(r);
+                effective_in = hPipeInRead.get();
+            }
+        }
         if (!redirect_out.empty()) {
             std::string exp_out = argstring_to_string(expand_arg_variables(redirect_out, ctx));
             DWORD creation = append_out ? OPEN_ALWAYS : CREATE_ALWAYS;
@@ -46,191 +73,10 @@ class CommandNode : public ASTNode {
 public:
     std::vector<std::string> args;
 
-    int execute_impl(ShellContext& ctx, HANDLE hIn, HANDLE hOut, size_t depth) override {
-        if (args.empty()) return 0;
-
-        size_t raw_command_index = 0;
-        while (raw_command_index < args.size()) {
-            size_t eq = args[raw_command_index].find('=');
-            std::string name = eq == std::string::npos ? "" : args[raw_command_index].substr(0, eq);
-            if (eq == std::string::npos || !is_valid_assignment_name(name)) {
-                break;
-            }
-            std::string value = argstring_to_string(
-                expand_arg_variables(args[raw_command_index].substr(eq + 1), ctx));
-            ctx.set_var(name, value);
-            raw_command_index++;
-        }
-        if (raw_command_index == args.size()) return 0;
-
-        std::vector<ArgString> expanded_arg_objs;
-        for (size_t i = raw_command_index; i < args.size(); ++i) {
-            expanded_arg_objs.push_back(expand_arg_variables(args[i], ctx));
-        }
-        std::vector<std::string> expanded_args = expand_globs(expanded_arg_objs);
-
-        if (expanded_args.empty() || expanded_args[0].empty()) return 0;
-
-        if (expanded_args[0] == "cd") {
-            if (expanded_args.size() > 1) {
-                std::error_code ec;
-                fs::path target(utf8_to_utf16(normalize_path(expanded_args[1])));
-                if (ctx.pipeline_stage) {
-                    if (!fs::is_directory(target, ec)) {
-                        std::cerr << "cd: " << expanded_args[1] << ": No such directory\n";
-                        return 1;
-                    }
-                    return 0;
-                }
-                fs::current_path(target, ec);
-                if (ec) { std::cerr << "cd: " << expanded_args[1] << ": No such directory\n"; return 1; }
-            }
-            return 0;
-        }
-        if (expanded_args[0] == "exit") {
-            int exit_code = 0;
-            if (expanded_args.size() > 1) {
-                try {
-                    exit_code = std::stoi(expanded_args[1]);
-                } catch (...) {
-                    exit_code = 2;
-                }
-            }
-            throw ShellExitSignal(exit_code);
-        }
-
-        std::string cmd = to_lower(expanded_args[0]);
-        bool is_applet = (applets.count(cmd) > 0);
-        bool needs_process_isolation = (hIn != GetStdHandle(STD_INPUT_HANDLE) || hOut != GetStdHandle(STD_OUTPUT_HANDLE) || !redirect_in.empty() || !redirect_out.empty() || is_background);
-
-        if (is_applet && !needs_process_isolation) {
-            try { return applets[cmd](expanded_args, ctx); }
-            catch (const std::exception& e) { std::cerr << "busybox: applet exception: " << e.what() << "\n"; return 1; }
-        }
-
-        std::string resolved_exe;
-        std::string cmdline;
-        bool is_batch_file = false;
-
-        if (is_applet) {
-            resolved_exe = get_self_exe_path();
-            cmdline = escape_win32_arg(resolved_exe);
-            for (const auto& arg : expanded_args) cmdline += " " + escape_win32_arg(arg);
-        } else {
-            resolved_exe = resolve_executable_path(expanded_args[0]);
-            if (!resolved_exe.empty()) {
-                std::string ext = to_lower(fs::path(resolved_exe).extension().string());
-                if (ext == ".bat" || ext == ".cmd") is_batch_file = true;
-            }
-
-            if (is_batch_file) {
-                cmdline = "cmd.exe /c " + escape_win32_arg(resolved_exe);
-                for (size_t i = 1; i < expanded_args.size(); ++i) {
-                    cmdline += " " + escape_cmd_metachars(escape_win32_arg(expanded_args[i]));
-                }
-            } else {
-                if (!resolved_exe.empty()) {
-                    cmdline = escape_win32_arg(resolved_exe);
-                } else {
-                    cmdline = escape_win32_arg(expanded_args[0]);
-                }
-                for (size_t i = 1; i < expanded_args.size(); ++i) {
-                    cmdline += " " + escape_win32_arg(expanded_args[i]);
-                }
-            }
-        }
-
-        std::wstring resolved_exe_w = utf8_to_utf16(resolved_exe);
-        std::wstring cmdline_w = utf8_to_utf16(cmdline);
-
-        ctx.audit_log("EXEC", (resolved_exe.empty() ? expanded_args[0] : resolved_exe));
-
-        std::set<HANDLE> raw_handles;
-        if (hIn && hIn != INVALID_HANDLE_VALUE) raw_handles.insert(hIn);
-        if (hOut && hOut != INVALID_HANDLE_VALUE) raw_handles.insert(hOut);
-        HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
-        if (hErr && hErr != INVALID_HANDLE_VALUE) raw_handles.insert(hErr);
-
-        std::vector<HANDLE> valid_handles;
-        for (HANDLE h : raw_handles) {
-            SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-            valid_handles.push_back(h);
-        }
-
-        SIZE_T cbAttributeListSize = 0;
-        InitializeProcThreadAttributeList(NULL, 1, 0, &cbAttributeListSize);
-        std::vector<BYTE> attributeListBuffer(cbAttributeListSize);
-        PPROC_THREAD_ATTRIBUTE_LIST pAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attributeListBuffer.data());
-        InitializeProcThreadAttributeList(pAttributeList, 1, 0, &cbAttributeListSize);
-
-        if (!valid_handles.empty()) {
-            UpdateProcThreadAttribute(pAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, 
-                                      valid_handles.data(), valid_handles.size() * sizeof(HANDLE), NULL, NULL);
-        }
-
-        STARTUPINFOEXW siex = { 0 };
-        siex.StartupInfo.cb = sizeof(STARTUPINFOEXW);
-        siex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        siex.StartupInfo.hStdInput = hIn;
-        siex.StartupInfo.hStdOutput = hOut;
-        siex.StartupInfo.hStdError = hErr;
-        siex.lpAttributeList = pAttributeList;
-
-        PROCESS_INFORMATION pi = { 0 };
-        std::vector<wchar_t> cmd_buf(cmdline_w.begin(), cmdline_w.end()); cmd_buf.push_back(L'\0');
-
-        LPCWSTR lpAppName = (!resolved_exe_w.empty() && !is_batch_file) ? resolved_exe_w.c_str() : NULL;
-
-        BOOL created = CreateProcessW(lpAppName, cmd_buf.data(), NULL, NULL, TRUE, 
-                                      EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED, NULL, NULL, 
-                                      &siex.StartupInfo, &pi);
-
-        DeleteProcThreadAttributeList(pAttributeList);
-
-        if (created) {
-            ScopedHandle hProc(pi.hProcess), hThread(pi.hThread);
-            if (g_hJobObject) AssignProcessToJobObject(g_hJobObject, hProc.get());
-
-            if (is_background) {
-                HANDLE hThreadRelease = hThread.release();
-                HANDLE hProcRelease = hProc.release();
-
-                std::lock_guard<std::mutex> lock(ctx.ctx_mutex);
-                int job_id = static_cast<int>(ctx.jobs.size() + 1);
-
-                std::string full_cmd;
-                for (const auto& arg : expanded_args) {
-                    if (!full_cmd.empty()) full_cmd += " ";
-                    full_cmd += arg;
-                }
-
-                ctx.jobs.push_back({job_id, pi.dwProcessId, hProcRelease, full_cmd, true});
-                ResumeThread(hThreadRelease);
-                CloseHandle(hThreadRelease);
-
-                std::cout << "[" << job_id << "] " << pi.dwProcessId << "\n";
-                return 0;
-            }
-
-            register_active_process(hProc.get());
-            ResumeThread(hThread.get());
-
-            DWORD wait_res = WaitForSingleObject(hProc.get(), ctx.timeout_ms);
-            unregister_active_process(hProc.get());
-
-            if (wait_res == WAIT_TIMEOUT) {
-                TerminateProcess(hProc.get(), 124);
-                std::cerr << "busybox: execution timed out after " << ctx.timeout_ms << "ms\n";
-                return 124;
-            }
-            DWORD dwCode = 0; GetExitCodeProcess(hProc.get(), &dwCode);
-            return static_cast<int>(dwCode);
-        }
-
-        std::cerr << "busybox: " << expanded_args[0] << ": command not found or execution failed\n";
-        return 127;
-    }
+    int execute_impl(ShellContext& ctx, HANDLE hIn, HANDLE hOut, size_t depth) override;
 };
+
+
 
 class PipelineNode : public ASTNode {
 public:
@@ -273,8 +119,12 @@ public:
                 } catch (const ShellExitSignal& signal) {
                     exit_codes[i] = signal.code();
                 }
-                restore_nested_environment(ctx, stage_ctx);
-                
+                // Pipeline stages run concurrently and must NOT merge their
+                // shell variables back into the shared parent context (that
+                // races). Each stage's process-environment changes are reverted
+                // to the parent's values, restoring the pre-pipeline process env.
+                restore_process_environment(ctx, stage_ctx);
+
                 if (i < n - 1) hWrites[i].close();
                 if (i > 0) hReads[i - 1].close();
             });
@@ -284,6 +134,14 @@ public:
             if (th.joinable()) th.join();
         }
 
+        // pipefail: return the rightmost non-zero stage status; otherwise the
+        // last stage's status (POSIX default).
+        if (ctx.pipefail) {
+            for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
+                if (exit_codes[i] != 0) return exit_codes[i];
+            }
+            return 0;
+        }
         return exit_codes.back();
     }
 };
@@ -360,6 +218,40 @@ public:
     }
 };
 
+class CaseNode : public ASTNode {
+public:
+    std::string subject;                          // the word being matched
+    std::vector<std::pair<std::vector<std::string>, std::shared_ptr<ASTNode>>> clauses; // (patterns, body)
+
+    int execute_impl(ShellContext& ctx, HANDLE hIn, HANDLE hOut, size_t depth) override {
+        // Expand the subject once, then match against each clause's patterns.
+        std::string value = argstring_to_string(expand_arg_variables(subject, ctx));
+        for (const auto& clause : clauses) {
+            for (const auto& pat : clause.first) {
+                std::string expandedPat = argstring_to_string(expand_arg_variables(pat, ctx));
+                if (wildcard_match(value, expandedPat)) {
+                    return clause.second ? clause.second->execute(ctx, hIn, hOut, depth + 1) : 0;
+                }
+            }
+        }
+        return 0; // no clause matched
+    }
+};
+
+// Function definition: name() { body }. Stores the body source in the context's
+// function table; calling the name later re-parses and executes it.
+class FunctionDefNode : public ASTNode {
+public:
+    std::string name;
+    std::string body_source;
+
+    int execute_impl(ShellContext& ctx, HANDLE, HANDLE, size_t) override {
+        std::lock_guard<std::mutex> lock(ctx.ctx_mutex);
+        ctx.functions[to_lower(name)] = body_source;
+        return 0;
+    }
+};
+
 class SubshellNode : public ASTNode {
 public:
     std::shared_ptr<ASTNode> child;
@@ -381,10 +273,14 @@ public:
         } catch (const ShellExitSignal& signal) {
             res = signal.code();
         } catch (...) {
-            restore_nested_environment(ctx, sub_ctx);
+            // Revert the subshell's process-env changes to the parent's values;
+            // do not merge its shell variables back (subshells are isolated).
+            restore_process_environment(ctx, sub_ctx);
             throw;
         }
-        restore_nested_environment(ctx, sub_ctx);
+        // Subshell isolation: revert the subshell's process-env changes to the
+        // parent's values, but do NOT copy its shell variables back.
+        restore_process_environment(ctx, sub_ctx);
         ctx.last_return_code = res;
         return res;
     }
@@ -412,6 +308,54 @@ public:
             if (word == stop) return true;
         }
         return false;
+    }
+
+    // Collect here-document body: read raw tokens until a line whose trimmed
+    // content equals `delim`. Reconstructs the body text with newlines.
+    std::string collect_heredoc(const std::string& delim) {
+        std::string body;
+        std::string currentLine;
+        // Skip to the first newline (the delimiter line itself ends the << line).
+        while (pos_ < tokens_.size() && peek().type != LexTokenType::Newline) get();
+        if (peek().type == LexTokenType::Newline) get(); // consume it
+
+        while (pos_ < tokens_.size()) {
+            Token t = get();
+            if (t.type == LexTokenType::Newline) {
+                std::string trimmed = currentLine;
+                size_t b = trimmed.find_first_not_of(" \t\r");
+                size_t e = trimmed.find_last_not_of(" \t\r");
+                trimmed = (b == std::string::npos) ? "" : trimmed.substr(b, e - b + 1);
+                if (trimmed == delim) break;
+                body += currentLine + "\n";
+                currentLine.clear();
+            } else {
+                if (!currentLine.empty() && t.type == LexTokenType::Word) currentLine += " ";
+                currentLine += t.value;
+            }
+        }
+        return body;
+    }
+
+    // Reconstruct the source text of a brace/paren-delimited block, consuming
+    // tokens up to (and including) the matching closer. Handles nesting.
+    std::string collect_block_source(const std::string& closer) {
+        std::string src;
+        int depth = 0;
+        LexTokenType openType = (closer == "}") ? LexTokenType::LBrace : LexTokenType::LParen;
+        LexTokenType closeType = (closer == "}") ? LexTokenType::RBrace : LexTokenType::RParen;
+        while (pos_ < tokens_.size()) {
+            Token t = get();
+            if (t.type == openType) depth++;
+            if (t.type == closeType) {
+                if (depth == 0) break; // the matching closer
+                depth--;
+            }
+            if (!src.empty() && t.type != LexTokenType::Newline) src += " ";
+            if (t.type == LexTokenType::Newline) src += "\n";
+            else src += t.value;
+        }
+        return src;
     }
 
     std::shared_ptr<ASTNode> parse_command(std::initializer_list<std::string> stop_words = {}) {
@@ -469,6 +413,92 @@ public:
             for_node->body = parse_chain({"done"});
             if (peek().type == LexTokenType::Word && to_lower(peek().value) == "done") get();
             node = for_node;
+        } else if (peek().type == LexTokenType::Word && peek().value == "case") {
+            get();
+            auto case_node = std::make_shared<CaseNode>();
+            // case WORD in
+            if (peek().type == LexTokenType::Word) case_node->subject = get().value;
+            if (peek().type == LexTokenType::Word && to_lower(peek().value) == "in") get();
+
+            // Parse clauses: pattern [| pattern ...] ) body ;; ... esac
+            while (pos_ < tokens_.size()) {
+                // Skip separators/newlines between clauses.
+                while (peek().type == LexTokenType::Newline || peek().type == LexTokenType::Semi) get();
+                if (peek().type == LexTokenType::Word && to_lower(peek().value) == "esac") { get(); break; }
+                if (pos_ >= tokens_.size()) break;
+
+                // Collect patterns until ')'.
+                std::vector<std::string> patterns;
+                while (pos_ < tokens_.size()) {
+                    Token t = peek();
+                    if (t.type == LexTokenType::RParen) { get(); break; }
+                    if (t.type == LexTokenType::Word) {
+                        // '|' may arrive as a Pipe token between patterns.
+                        patterns.push_back(get().value);
+                    } else if (t.type == LexTokenType::Pipe) {
+                        get(); // pattern alternation
+                    } else {
+                        break;
+                    }
+                }
+
+                // Parse the clause body up to ';;' (two consecutive Semi tokens)
+                // or 'esac'. We parse commands one at a time and stop when we see
+                // the ';;' terminator.
+                std::shared_ptr<ASTNode> body;
+                while (pos_ < tokens_.size()) {
+                    // Detect ';;' = two Semi tokens in a row.
+                    if (peek().type == LexTokenType::Semi && pos_ + 1 < tokens_.size() &&
+                        tokens_[pos_ + 1].type == LexTokenType::Semi) {
+                        break;
+                    }
+                    if (peek().type == LexTokenType::Word && to_lower(peek().value) == "esac") break;
+                    if (peek().type == LexTokenType::Newline) { get(); continue; }
+
+                    auto cmd = parse_pipeline({"esac"});
+                    if (!cmd) break;
+                    if (!body) {
+                        body = cmd;
+                    } else {
+                        auto chain = std::make_shared<ChainNode>();
+                        chain->left = body; chain->right = cmd; chain->op = LexTokenType::Semi;
+                        body = chain;
+                    }
+                    // Consume a single statement separator (but not ';;').
+                    if (peek().type == LexTokenType::Semi && pos_ + 1 < tokens_.size() &&
+                        tokens_[pos_ + 1].type == LexTokenType::Semi) {
+                        break;
+                    }
+                    if (peek().type == LexTokenType::Semi || peek().type == LexTokenType::Newline) get();
+                }
+                // Consume the ';;' terminator.
+                if (peek().type == LexTokenType::Semi && pos_ + 1 < tokens_.size() &&
+                    tokens_[pos_ + 1].type == LexTokenType::Semi) {
+                    get(); get();
+                }
+
+                if (!patterns.empty()) {
+                    case_node->clauses.push_back({patterns, body});
+                }
+            }
+            node = case_node;
+        } else if (peek().type == LexTokenType::Word && pos_ + 2 < tokens_.size() &&
+                   tokens_[pos_ + 1].type == LexTokenType::LParen && tokens_[pos_ + 2].type == LexTokenType::RParen) {
+            // Function definition: name() { body }  or  name() ( body )
+            auto fn_node = std::make_shared<FunctionDefNode>();
+            fn_node->name = get().value; // function name
+            get(); // (
+            get(); // )
+            // Skip separators before the body opener.
+            while (peek().type == LexTokenType::Newline || peek().type == LexTokenType::Semi) get();
+            if (peek().type == LexTokenType::LBrace) {
+                get(); // {
+                fn_node->body_source = collect_block_source("}");
+            } else if (peek().type == LexTokenType::LParen) {
+                get(); // (
+                fn_node->body_source = collect_block_source(")");
+            }
+            node = fn_node;
         } else {
             auto cmd = std::make_shared<CommandNode>();
             while (pos_ < tokens_.size()) {
@@ -483,6 +513,22 @@ public:
                 else if (t.type == LexTokenType::RedirectIn) {
                     get(); if (peek().type == LexTokenType::Word) cmd->redirect_in = get().value;
                 }
+                else if (t.type == LexTokenType::RedirectErr) {
+                    get(); if (peek().type == LexTokenType::Word) cmd->redirect_err = get().value;
+                }
+                else if (t.type == LexTokenType::RedirectErrToOut) {
+                    get(); cmd->err_to_out = true;
+                }
+                else if (t.type == LexTokenType::RedirectHerestring) {
+                    get(); if (peek().type == LexTokenType::Word) cmd->herestring = get().value;
+                }
+                else if (t.type == LexTokenType::RedirectHeredoc) {
+                    get();
+                    if (peek().type == LexTokenType::Word) {
+                        std::string delim = get().value;
+                        cmd->heredoc_body = collect_heredoc(delim);
+                    }
+                }
                 else break;
             }
             node = cmd;
@@ -496,6 +542,10 @@ public:
                 get(); if (peek().type == LexTokenType::Word) node->redirect_out = get().value; node->append_out = true;
             } else if (t.type == LexTokenType::RedirectIn) {
                 get(); if (peek().type == LexTokenType::Word) node->redirect_in = get().value;
+            } else if (t.type == LexTokenType::RedirectErr) {
+                get(); if (peek().type == LexTokenType::Word) node->redirect_err = get().value;
+            } else if (t.type == LexTokenType::RedirectErrToOut) {
+                get(); node->err_to_out = true;
             } else if (t.type == LexTokenType::Ampersand) {
                 get(); node->is_background = true;
             } else break;
@@ -544,53 +594,4 @@ public:
     }
 };
 
-std::string capture_cmd_output(const std::string& cmd, ShellContext& ctx) {
-    HANDLE hReadRaw, hWriteRaw;
-    SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
-    if (!CreatePipe(&hReadRaw, &hWriteRaw, &sa, 0)) return "";
-    SetHandleInformation(hReadRaw, HANDLE_FLAG_INHERIT, 0);
-
-    std::string output;
-    std::thread reader([hReadRaw, &output]() {
-        char buffer[2048]; DWORD bytesRead = 0;
-        while (ReadFile(hReadRaw, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-            if (output.size() < MAX_COMMAND_SUBSTITUTION_BYTES) {
-                size_t remaining = MAX_COMMAND_SUBSTITUTION_BYTES - output.size();
-                output.append(buffer, (std::min)(remaining, static_cast<size_t>(bytesRead)));
-            }
-        }
-        CloseHandle(hReadRaw);
-    });
-
-    ShellContext sub_ctx(false);
-    {
-        std::lock_guard<std::mutex> lock(ctx.ctx_mutex);
-        sub_ctx.variables = ctx.variables;
-        sub_ctx.last_return_code = ctx.last_return_code;
-        sub_ctx.timeout_ms = ctx.timeout_ms;
-        sub_ctx.audit_logging_enabled = ctx.audit_logging_enabled;
-    }
-
-    ScopedWorkingDirectory cwd_guard;
-    Parser parser(tokenize(cmd));
-    auto ast = parser.parse_chain();
-    int command_status = 0;
-    if (ast) {
-        try {
-            command_status = ast->execute(sub_ctx, NULL, hWriteRaw);
-        } catch (const ShellExitSignal& signal) {
-            command_status = signal.code();
-        }
-    }
-
-    restore_nested_environment(ctx, sub_ctx);
-    
-    CloseHandle(hWriteRaw);
-    if (reader.joinable()) reader.join();
-
-    while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) output.pop_back();
-    ctx.last_return_code = command_status;
-    return output;
-}
-
-// ============================================================================
+std::string capture_cmd_output(const std::string& cmd, ShellContext& ctx);

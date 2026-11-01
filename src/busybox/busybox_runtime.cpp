@@ -1,22 +1,52 @@
+// Runtime utilities: UTF conversion, path/arg helpers, shell context,
+// tokenization, and glob expansion.
+
+#include "busybox.h"
+#include "busybox_runtime.h"
+
 // ============================================================================
 // UNICODE (UTF-8 <-> UTF-16) TRANSLATION LAYER
 // ============================================================================
 
 std::wstring utf8_to_utf16(const std::string& str) {
     if (str.empty()) return L"";
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), NULL, 0);
-    if (size_needed <= 0) return L"";
+    if (str.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        std::cerr << "busybox: string too large to convert\n";
+        return L"";
+    }
+    // MB_ERR_INVALID_CHARS makes invalid UTF-8 fail instead of silently
+    // producing replacement characters.
+    int size_needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.c_str(), static_cast<int>(str.size()), NULL, 0);
+    if (size_needed <= 0) {
+        std::cerr << "busybox: invalid UTF-8 input\n";
+        return L"";
+    }
     std::wstring wstrTo(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), &wstrTo[0], size_needed);
+    int written = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.c_str(), static_cast<int>(str.size()), &wstrTo[0], size_needed);
+    if (written <= 0) {
+        std::cerr << "busybox: UTF-8 conversion failed\n";
+        return L"";
+    }
     return wstrTo;
 }
 
 std::string utf16_to_utf8(const std::wstring& wstr) {
     if (wstr.empty()) return "";
+    if (wstr.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        std::cerr << "busybox: string too large to convert\n";
+        return "";
+    }
     int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), NULL, 0, NULL, NULL);
-    if (size_needed <= 0) return "";
+    if (size_needed <= 0) {
+        std::cerr << "busybox: invalid UTF-16 input\n";
+        return "";
+    }
     std::string strTo(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &strTo[0], size_needed, NULL, NULL);
+    int written = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &strTo[0], size_needed, NULL, NULL);
+    if (written <= 0) {
+        std::cerr << "busybox: UTF-16 conversion failed\n";
+        return "";
+    }
     return strTo;
 }
 
@@ -92,6 +122,61 @@ std::string escape_cmd_metachars(const std::string& arg) {
     return out;
 }
 
+// Shell-style wildcard match (* ? [..]) of `value` against `pattern`.
+// Iterative with backtracking; no regex, so no regex-injection concerns.
+bool wildcard_match(const std::string& value, const std::string& pattern) {
+    size_t v = 0, p = 0;
+    size_t star_p = std::string::npos, star_v = 0;
+
+    while (v < value.size()) {
+        if (p < pattern.size()) {
+            char pc = pattern[p];
+            if (pc == '*') {
+                star_p = p++;
+                star_v = v;
+                continue;
+            }
+            if (pc == '?') {
+                if (value[v] != '/' && value[v] != '\\') { ++p; ++v; continue; }
+            } else if (pc == '[') {
+                // Character class: [abc], [!abc], [a-z]
+                size_t j = p + 1;
+                bool negate = (j < pattern.size() && (pattern[j] == '!' || pattern[j] == '^'));
+                if (negate) ++j;
+                bool matched = false;
+                char first = 0;
+                bool has_first = false;
+                while (j < pattern.size() && pattern[j] != ']') {
+                    if (j + 2 < pattern.size() && pattern[j + 1] == '-' && pattern[j + 2] != ']') {
+                        char lo = pattern[j], hi = pattern[j + 2];
+                        if (value[v] >= lo && value[v] <= hi) matched = true;
+                        j += 3;
+                    } else {
+                        if (value[v] == pattern[j]) matched = true;
+                        ++j;
+                    }
+                }
+                if (j < pattern.size() && pattern[j] == ']') {
+                    if (matched != negate) { ++v; p = j + 1; continue; }
+                }
+                // Malformed class: treat '[' literally.
+                if (value[v] == '[') { ++v; ++p; continue; }
+            } else if (pc == value[v]) {
+                ++p; ++v; continue;
+            }
+        }
+        // Mismatch: backtrack to the last '*'.
+        if (star_p != std::string::npos && star_v < value.size()) {
+            p = star_p + 1;
+            v = ++star_v;
+            continue;
+        }
+        return false;
+    }
+    while (p < pattern.size() && pattern[p] == '*') ++p;
+    return p == pattern.size();
+}
+
 std::string resolve_executable_path(const std::string& cmd) {
     std::error_code ec;
     fs::path p(utf8_to_utf16(normalize_path(cmd)));
@@ -145,148 +230,6 @@ std::string resolve_executable_path(const std::string& cmd) {
     return "";
 }
 
-// ============================================================================
-// THREAD-SAFE SHELL CONTEXT
-// ============================================================================
-
-struct JobInfo {
-    int id;
-    DWORD pid;
-    HANDLE hProcess;
-    std::string command;
-    bool is_running;
-};
-
-struct ShellContext {
-    std::map<std::string, std::string> variables;
-    std::set<std::string> environment_touched;
-    bool pipeline_stage = false;
-    int last_return_code = 0;
-    DWORD timeout_ms = 60000;
-    std::mutex ctx_mutex;
-    bool audit_logging_enabled = false;
-    std::vector<std::string> history;
-    std::vector<JobInfo> jobs;
-
-    std::wstring get_history_file_path() {
-        wchar_t profile[32767];
-        DWORD len = GetEnvironmentVariableW(L"USERPROFILE", profile, 32767);
-        if (len > 0) {
-            return std::wstring(profile, len) + L"\\.busybox_history";
-        }
-        return L".busybox_history";
-    }
-
-    void load_history() {
-        std::lock_guard<std::mutex> lock(ctx_mutex);
-        std::ifstream file(get_history_file_path());
-        if (!file) return;
-
-        file.seekg(0, std::ios::end);
-        std::streamoff file_size = file.tellg();
-        if (file_size < 0 || static_cast<size_t>(file_size) > MAX_HISTORY_FILE_BYTES) {
-            return;
-        }
-        file.seekg(0, std::ios::beg);
-
-        std::string line;
-        while (std::getline(file, line)) {
-            if (line.size() > MAX_HISTORY_LINE_BYTES) {
-                continue;
-            }
-            if (!line.empty()) {
-                history.push_back(line);
-                if (history.size() > MAX_HISTORY_ENTRIES) {
-                    history.erase(history.begin());
-                }
-            }
-        }
-    }
-
-    void save_history() {
-        std::lock_guard<std::mutex> lock(ctx_mutex);
-        std::ofstream file(get_history_file_path(), std::ios::trunc);
-        if (!file) return;
-        for (const auto& h : history) {
-            file << h << "\n";
-        }
-    }
-
-    void add_history(const std::string& cmd) {
-        if (cmd.empty()) return;
-        std::lock_guard<std::mutex> lock(ctx_mutex);
-        if (history.empty() || history.back() != cmd) {
-            history.push_back(cmd);
-            bool rewrite = false;
-            if (history.size() > MAX_HISTORY_ENTRIES) {
-                history.erase(history.begin());
-                rewrite = true;
-            }
-            if (rewrite) {
-                std::ofstream file(get_history_file_path(), std::ios::trunc);
-                if (file) {
-                    for (const auto& entry : history) file << entry << "\n";
-                }
-            } else {
-                std::ofstream file(get_history_file_path(), std::ios::app);
-                if (file) file << cmd << "\n";
-            }
-        }
-    }
-
-    explicit ShellContext(bool load_history_file = true) {
-        LPWCH env_strings = GetEnvironmentStringsW();
-        if (env_strings) {
-            LPWCH var = env_strings;
-            while (*var) {
-                std::wstring wentry(var);
-                std::string entry = utf16_to_utf8(wentry);
-                size_t eq = entry.find('=');
-                if (eq != std::string::npos && eq > 0) {
-                    variables[entry.substr(0, eq)] = entry.substr(eq + 1);
-                }
-                var += wentry.length() + 1;
-            }
-            FreeEnvironmentStringsW(env_strings);
-        }
-        variables["KSH_VERSION"] = "@(#)MIRBSD KSH 2026/07/24";
-        variables["SH_VERSION"] = "BusyBox v17.0-PROD";
-        if (load_history_file) {
-            load_history();
-        }
-    }
-
-    void set_var(const std::string& name, const std::string& val) {
-        std::lock_guard<std::mutex> lock(ctx_mutex);
-        variables[name] = val;
-        environment_touched.insert(name);
-        SetEnvironmentVariableW(utf8_to_utf16(name).c_str(), utf8_to_utf16(val).c_str());
-    }
-
-    void unset_var(const std::string& name) {
-        std::lock_guard<std::mutex> lock(ctx_mutex);
-        variables.erase(name);
-        environment_touched.insert(name);
-        SetEnvironmentVariableW(utf8_to_utf16(name).c_str(), NULL);
-    }
-
-    std::string get_var(const std::string& name) {
-        std::lock_guard<std::mutex> lock(ctx_mutex);
-        auto it = variables.find(name);
-        return (it != variables.end()) ? it->second : "";
-    }
-
-    void audit_log(const std::string& action, const std::string& detail) {
-        if (!audit_logging_enabled) return;
-        std::lock_guard<std::mutex> lock(ctx_mutex);
-        auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-        std::tm tm_buf;
-        localtime_s(&tm_buf, &now);
-        std::clog << "[AUDIT " << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S") 
-                  << " PID:" << GetCurrentProcessId() << "] " 
-                  << action << ": " << detail << "\n";
-    }
-};
 
 bool is_valid_assignment_name(const std::string& name) {
     if (name.empty() || !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_')) {
@@ -314,53 +257,28 @@ void restore_nested_environment(const ShellContext& parent, ShellContext& nested
     }
 }
 
-class ScopedWorkingDirectory {
-public:
-    ScopedWorkingDirectory() {
-        std::error_code ec;
-        original_ = fs::current_path(ec);
-        active_ = !ec;
-    }
-
-    ~ScopedWorkingDirectory() {
-        if (active_) {
-            std::error_code ec;
-            fs::current_path(original_, ec);
+// Revert the process-level environment variables that `nested` touched back to
+// the values held in `parent`. This restores the parent's pre-nested process
+// environment WITHOUT merging the nested context's shell variables back into
+// the parent's `variables` map (preserving subshell/pipeline isolation). The
+// parent's map is only read, and the nested context's touched set is cleared.
+void restore_process_environment(const ShellContext& parent, ShellContext& nested) {
+    std::lock_guard<std::mutex> lock(nested.ctx_mutex);
+    for (const std::string& name : nested.environment_touched) {
+        auto parent_value = parent.variables.find(name);
+        if (parent_value != parent.variables.end()) {
+            SetEnvironmentVariableW(utf8_to_utf16(name).c_str(), utf8_to_utf16(parent_value->second).c_str());
+        } else {
+            SetEnvironmentVariableW(utf8_to_utf16(name).c_str(), nullptr);
         }
     }
+    nested.environment_touched.clear();
+}
 
-private:
-    fs::path original_;
-    bool active_ = false;
-};
 
-// ============================================================================
-// RAII HANDLE WRAPPER, JOB OBJECT & SIGNAL MANAGEMENT
-// ============================================================================
-
-class ScopedHandle {
-    HANDLE h_ = INVALID_HANDLE_VALUE;
-public:
-    explicit ScopedHandle(HANDLE h = INVALID_HANDLE_VALUE) : h_(h) {}
-    ~ScopedHandle() { close(); }
-    ScopedHandle(const ScopedHandle&) = delete;
-    ScopedHandle& operator=(const ScopedHandle&) = delete;
-    ScopedHandle(ScopedHandle&& other) noexcept : h_(other.h_) { other.h_ = INVALID_HANDLE_VALUE; }
-    ScopedHandle& operator=(ScopedHandle&& other) noexcept {
-        if (this != &other) { close(); h_ = other.h_; other.h_ = INVALID_HANDLE_VALUE; }
-        return *this;
-    }
-    [[nodiscard]] HANDLE get() const { return h_; }
-    HANDLE release() { HANDLE tmp = h_; h_ = INVALID_HANDLE_VALUE; return tmp; }
-    void close() {
-        if (h_ != INVALID_HANDLE_VALUE && h_ != NULL) { CloseHandle(h_); h_ = INVALID_HANDLE_VALUE; }
-    }
-    [[nodiscard]] bool is_valid() const { return h_ != INVALID_HANDLE_VALUE && h_ != NULL; }
-};
-
-static HANDLE g_hJobObject = NULL;
-static std::mutex g_proc_mutex;
-static std::set<HANDLE> g_active_processes;
+HANDLE g_hJobObject = NULL;
+std::mutex g_proc_mutex;
+std::set<HANDLE> g_active_processes;
 
 void register_active_process(HANDLE h) {
     std::lock_guard<std::mutex> lock(g_proc_mutex);
@@ -397,9 +315,30 @@ void init_vt100_and_binary_mode() {
 
 BOOL WINAPI console_signal_handler(DWORD dwCtrlType) {
     if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT) {
-        std::lock_guard<std::mutex> lock(g_proc_mutex);
-        for (HANDLE h : g_active_processes) {
-            TerminateProcess(h, 130);
+        std::vector<HANDLE> procs;
+        {
+            std::lock_guard<std::mutex> lock(g_proc_mutex);
+            procs.assign(g_active_processes.begin(), g_active_processes.end());
+        }
+
+        // Graceful first: ask each active console process to handle Ctrl+C
+        // itself (GenerateConsoleCtrlEvent), giving it a brief chance to clean
+        // up. Only forcibly terminate processes that are still alive after the
+        // grace period.
+        for (HANDLE h : procs) {
+            DWORD pid = GetProcessId(h);
+            if (pid != 0) {
+                // 0 = send to the process group sharing this console.
+                GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
+            }
+        }
+        Sleep(150);
+
+        for (HANDLE h : procs) {
+            DWORD code = 0;
+            if (GetExitCodeProcess(h, &code) && code == STILL_ACTIVE) {
+                TerminateProcess(h, 130);
+            }
         }
         std::cout << "\n";
         return TRUE;
@@ -407,19 +346,6 @@ BOOL WINAPI console_signal_handler(DWORD dwCtrlType) {
     return FALSE;
 }
 
-using AppletFunc = std::function<int(const std::vector<std::string>&, ShellContext&)>;
-extern std::map<std::string, AppletFunc> applets;
-
-// ============================================================================
-// LEXER, TOKENIZER & CHARACTER-LEVEL GLOB EXPANSION ENGINE
-// ============================================================================
-
-enum class LexTokenType { Word, Pipe, And, Or, Semi, Ampersand, RedirectIn, RedirectOut, RedirectAppend, LParen, RParen, Newline };
-
-struct Token {
-    LexTokenType type;
-    std::string value;
-};
 
 std::vector<Token> tokenize(const std::string& line) {
     std::vector<Token> tokens;
@@ -473,17 +399,37 @@ std::vector<Token> tokenize(const std::string& line) {
         bool inside_sub = (in_single || in_double || cmd_sub_depth > 0 || in_backtick || brace_depth > 0);
 
         if (!inside_sub) {
-            if (i + 1 < line.length()) {
-                std::string op2 = line.substr(i, 2);
-                if (op2 == "&&" || op2 == "||" || op2 == ">>") {
-                    if (!current.empty()) { tokens.push_back({LexTokenType::Word, current}); current.clear(); }
-                    if (op2 == "&&") tokens.push_back({LexTokenType::And, "&&"});
-                    else if (op2 == "||") tokens.push_back({LexTokenType::Or, "||"});
-                    else tokens.push_back({LexTokenType::RedirectAppend, ">>"});
+            // stderr redirection operators: 2> and 2>&1
+            if (c == '2' && i + 1 < line.length() && line[i + 1] == '>' &&
+                (current.empty() || current.back() == ' ' || current.empty())) {
+                // Only treat as an operator when '2' is not part of a word.
+                if (current.empty()) {
+                    if (i + 3 < line.length() && line.substr(i, 4) == "2>&1") {
+                        tokens.push_back({LexTokenType::RedirectErrToOut, "2>&1"});
+                        i += 3; continue;
+                    }
+                    tokens.push_back({LexTokenType::RedirectErr, "2>"});
                     i++; continue;
                 }
             }
-            if (c == '|' || c == '>' || c == '<' || c == ';' || c == '&' || c == '(' || c == ')' || c == '\n') {
+            // Here-string: <<< (check before << so the longer operator wins)
+            if (i + 2 < line.length() && line.substr(i, 3) == "<<<") {
+                if (!current.empty()) { tokens.push_back({LexTokenType::Word, current}); current.clear(); }
+                tokens.push_back({LexTokenType::RedirectHerestring, "<<<"});
+                i += 2; continue;
+            }
+            if (i + 1 < line.length()) {
+                std::string op2 = line.substr(i, 2);
+                if (op2 == "&&" || op2 == "||" || op2 == ">>" || op2 == "<<") {
+                    if (!current.empty()) { tokens.push_back({LexTokenType::Word, current}); current.clear(); }
+                    if (op2 == "&&") tokens.push_back({LexTokenType::And, "&&"});
+                    else if (op2 == "||") tokens.push_back({LexTokenType::Or, "||"});
+                    else if (op2 == ">>") tokens.push_back({LexTokenType::RedirectAppend, ">>"});
+                    else tokens.push_back({LexTokenType::RedirectHeredoc, "<<"});
+                    i++; continue;
+                }
+            }
+            if (c == '|' || c == '>' || c == '<' || c == ';' || c == '&' || c == '(' || c == ')' || c == '{' || c == '}' || c == '\n') {
                 if (!current.empty()) { tokens.push_back({LexTokenType::Word, current}); current.clear(); }
                 if (c == '|') tokens.push_back({LexTokenType::Pipe, "|"});
                 else if (c == '>') tokens.push_back({LexTokenType::RedirectOut, ">"});
@@ -492,6 +438,8 @@ std::vector<Token> tokenize(const std::string& line) {
                 else if (c == '&') tokens.push_back({LexTokenType::Ampersand, "&"});
                 else if (c == '(') tokens.push_back({LexTokenType::LParen, "("});
                 else if (c == ')') tokens.push_back({LexTokenType::RParen, ")"});
+                else if (c == '{') tokens.push_back({LexTokenType::LBrace, "{"});
+                else if (c == '}') tokens.push_back({LexTokenType::RBrace, "}"});
                 else if (c == '\n') tokens.push_back({LexTokenType::Newline, "\n"});
                 continue;
             }
@@ -506,14 +454,9 @@ std::vector<Token> tokenize(const std::string& line) {
     return tokens;
 }
 
+
 std::string capture_cmd_output(const std::string& cmd, ShellContext& ctx);
 
-struct ArgChar {
-    char c;
-    bool is_quoted;
-};
-
-using ArgString = std::vector<ArgChar>;
 
 std::string strip_pattern(const std::string& val, std::string pattern, bool is_prefix, bool longest) {
     if (pattern.empty()) return val;
@@ -818,13 +761,29 @@ std::vector<std::string> expand_globs(const std::vector<ArgString>& args) {
             }
         }
 
+        // Cache compiled glob regexes: the same patterns recur across a script.
+        static std::mutex s_regexCacheMutex;
+        static std::map<std::string, std::regex> s_regexCache;
         std::regex re;
-        try {
-            re = std::regex(regex_pattern, std::regex_constants::ECMAScript | std::regex_constants::icase | std::regex_constants::optimize);
-        } catch (const std::regex_error& e) {
-            std::cerr << "busybox: glob regex error: " << e.what() << " for pattern: " << regex_pattern << "\n";
-            result.push_back(raw_path);
-            continue;
+        bool regex_ok = false;
+        {
+            std::lock_guard<std::mutex> lock(s_regexCacheMutex);
+            auto it = s_regexCache.find(regex_pattern);
+            if (it != s_regexCache.end()) {
+                re = it->second;
+                regex_ok = true;
+            }
+        }
+        if (!regex_ok) {
+            try {
+                re = std::regex(regex_pattern, std::regex_constants::ECMAScript | std::regex_constants::icase | std::regex_constants::optimize);
+                std::lock_guard<std::mutex> lock(s_regexCacheMutex);
+                if (s_regexCache.size() < 256) s_regexCache[regex_pattern] = re; // bound the cache
+            } catch (const std::regex_error& e) {
+                std::cerr << "busybox: glob regex error: " << e.what() << " for pattern: " << regex_pattern << "\n";
+                result.push_back(raw_path);
+                continue;
+            }
         }
 
         std::error_code ec;

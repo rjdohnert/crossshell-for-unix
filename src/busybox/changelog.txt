@@ -1,0 +1,142 @@
+================================================================================
+BusyBox for CrossShell - Change Log
+================================================================================
+
+This file tracks changes to busybox, the CrossShell for UNIX multi-call binary.
+busybox combines a POSIX-style shell (pipelines, subshells, control flow,
+functions, command substitution, globbing) with ~69 applet implementations
+(ls, cp, mv, rm, grep, sed, awk, find, sort, and many more) in a single
+Windows executable.
+
+--------------------------------------------------------------------------------
+v8.2 -- 2026-10-31
+--------------------------------------------------------------------------------
+
+This is a major hardening and feature release. It fixes critical safety and
+concurrency bugs, closes several crash/correctness holes, modularizes the
+codebase, and adds significant POSIX shell and applet functionality.
+
+CRITICAL SAFETY FIXES
+---------------------
+* rm: recursive deletion now refuses to remove the filesystem root
+  (--preserve-root is the default; --no-preserve-root overrides), prompts for
+  confirmation before recursive deletion in interactive mode (unless -f), and
+  supports -i. Recursive deletes no longer follow symlinks/junctions, so a
+  junction cannot cause deletion outside the intended tree.
+
+* cp / mv: no longer silently overwrite existing files. -n skips existing
+  targets, -i prompts, -f forces. cp -a (archive) preserves timestamps and
+  implies -r. mv gained a cross-volume copy+remove fallback.
+
+* Recursive copy/delete/find/du/grep no longer follow directory symlinks or
+  junctions, preventing operations from escaping the target tree.
+
+SHELL CONCURRENCY & CORRECTNESS FIXES
+-------------------------------------
+* Pipelines: stages no longer race to merge environment changes into shared
+  shell state. Each stage's process-environment changes are reverted to the
+  parent's values, eliminating nondeterministic last-writer-wins behavior.
+
+* Subshells: variable changes inside a subshell are no longer merged back into
+  the parent shell (proper isolation); only process-environment changes are
+  reverted. Current-directory changes are correctly scoped.
+
+* Background jobs: finished jobs are now reaped (handles closed, stale entries
+  removed) before each new background launch, preventing handle leaks and job-ID
+  collisions across many launches.
+
+* stderr redirection: added 2>file and 2>&1, working for both external
+  processes and in-process applets.
+
+ROBUSTNESS FIXES
+----------------
+* grep: an invalid regex no longer accidentally matches via a default-constructed
+  regex; the pattern is marked as never-matching and an error is reported.
+
+* sed: substitution regex construction is now exception-guarded (malformed
+  expressions report an error instead of crashing).
+
+* sort: -n (numeric) no longer throws on non-numeric input; input is capped at
+  1,000,000 lines to bound memory.
+
+* tail: -f no longer spins forever at EOF on a closed/broken stream.
+
+* JSON output: ls --json and find --json now escape filenames/paths (quotes,
+  backslashes, control characters), producing valid JSON.
+
+* UTF-8/UTF-16 conversion now uses MB_ERR_INVALID_CHARS, checks conversion
+  results, guards against oversized strings, and reports errors to stderr
+  instead of silently returning empty strings.
+
+NEW SHELL FEATURES
+------------------
+* case statement: case WORD in pattern [| pattern ...] ) body ;; ... esac,
+  with shell wildcard matching (* ? [..]) and pattern alternation.
+
+* Shell functions: name() { body; } definitions, called by name with arguments
+  bound to $1..$N. local VAR[=value] declares function-local variables that are
+  restored when the function returns.
+
+* Here-documents (<<DELIM ... DELIM) and here-strings (<<<word) feed inline
+  content to a command's standard input.
+
+* trap: register a command to run on a condition (trap 'cmd' EXIT, INT).
+  'trap - COND' clears a trap; bare 'trap' lists registered traps. The EXIT
+  trap runs on all shell exit paths (interactive, -c, and script).
+
+* set -o pipefail / set +o pipefail: when enabled, a pipeline returns the
+  rightmost non-zero stage status instead of always the last stage's status.
+
+NEW & IMPROVED APPLETS
+----------------------
+* printf: formatted output (%s %d %i %f %x %X %o %c %% and \n \t \r \\ escapes).
+
+* read: added -t timeout (console-input polling) alongside the existing -p prompt.
+
+* grep: added -m N (stop after N matches) and -o (print only matched portions),
+  plus -A/-B/-C context lines (after/before/both).
+
+* ls: added -t (sort by modification time), -S (sort by size), -r (reverse),
+  and -A (almost-all, skip . and ..).
+
+* awk: added /regex/ { action } pattern filtering, fixed print-keyword handling,
+  brace-matched BEGIN/END block parsing, and guarded numeric field references.
+
+* sed: added y/// character transliteration.
+
+* set / local / trap: new shell-builtin applets.
+
+USABILITY & TOOLING
+-------------------
+* Interactive shell now supports Tab completion for applet names and file/
+  directory paths (common-prefix completion with candidate listing), plus
+  up/down-arrow command history recall. Falls back to plain line input when
+  stdin is piped or redirected.
+
+* Ctrl+C now gives child processes a brief grace period to handle the interrupt
+  (GenerateConsoleCtrlEvent) before forcibly terminating only those still alive.
+
+* --version now prints the full version, copyright, and applet count.
+
+* Help coverage extended to the new applets (printf, set, local, trap); all
+  applets route --help to the help system.
+
+CODE HEALTH
+-----------
+* Modularized the codebase: the four .inc include-fragments are now proper
+  header/translation-unit modules (busybox_runtime, busybox_shell,
+  busybox_applets, busybox_cli) plus a shared busybox.h umbrella header. Each
+  module compiles independently with zero warnings.
+
+* Glob-pattern regex compilation is now cached (bounded, thread-safe), avoiding
+  repeated recompilation of the same patterns in a script.
+
+* The 12-test self-test suite (busybox --self-test) passes in full.
+
+================================================================================
+Notes
+================================================================================
+* All changes are backward compatible with existing scripts and usage.
+* For usage, run: busybox --help   (or 'help' at the shell prompt)
+* Run the self-test suite with: busybox --self-test
+================================================================================
