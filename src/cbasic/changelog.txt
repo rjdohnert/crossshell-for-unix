@@ -1,0 +1,104 @@
+================================================================================
+CrossBASIC Interpreter & Virtual Machine - Change Log
+================================================================================
+
+This file tracks changes to cbasic, the CrossShell for UNIX BASIC interpreter.
+cbasic compiles BASIC source to bytecode and executes it in a sandboxed VM,
+with an interactive REPL for program entry, editing, and debugging.
+
+--------------------------------------------------------------------------------
+v3.8 -- 2026-10-31
+--------------------------------------------------------------------------------
+
+SECURITY & CORRECTNESS FIXES
+----------------------------
+* Stack underflow now raises a runtime error ("Internal stack underflow")
+  instead of silently returning 0.0, which previously masked malformed
+  bytecode or parser bugs as incorrect results.
+
+* Added a GOSUB/CALL nesting depth limit (10,000). Recursive BASIC programs
+  now fail with a clean "stack overflow" runtime error instead of exhausting
+  memory and crashing the interpreter.
+
+* Line numbers and jump targets (GOTO, GOSUB, ON...GOTO/GOSUB, ON ERROR GOTO,
+  RESUME n, IF...THEN n / ELSE n, OPTION BASE) are now validated at compile
+  time. Out-of-range or non-integer targets produce a compile error instead of
+  silently wrapping to a wrong address.
+
+* Fixed integer overflow in multi-dimensional array index flattening and in
+  MID$ string slicing. Both now use 64-bit arithmetic with overflow checks, so
+  large arrays and long strings are handled correctly.
+
+* Fixed undefined behavior from passing signed char to toupper()/isdigit().
+  All character-classification now uses unsigned-char-safe wrappers, so source
+  files containing high-byte characters no longer risk UB.
+
+* The REPL line-number parser no longer crashes on malformed or out-of-range
+  input; such lines are treated as unnumbered instead.
+
+NEW LANGUAGE FEATURES
+---------------------
+* INKEY$ is now fully implemented as a non-blocking keyboard read (previously
+  a stub that always returned ""). Extended keys (arrows, function keys) are
+  returned as a two-character sequence. Interactive programs and games now work.
+
+* New math functions: SIN, COS, TAN, ATN, LOG (domain-checked), EXP
+  (overflow-checked), SGN.
+
+* New string functions: INSTR (2- and 3-argument forms), UCASE$, LCASE$,
+  LTRIM$, RTRIM$, STRING$ (numeric or string fill), SPACE$, SPC.
+
+* New system/time functions: TIMER (seconds since midnight, centisecond
+  precision), DATE$ (MM-DD-YYYY), TIME$ (HH:MM:SS).
+
+* New error-handling: the ERROR statement raises a user-defined, trappable
+  error (ERROR n), and ERR$ returns the last error message string. These
+  complement the existing ERR and ERL functions.
+
+* PRINT USING is now supported for formatted output. The format string
+  supports '#' digit placeholders, '.' decimal point, '+' leading/trailing
+  sign, ',' thousands separators, '!' (first character of a string), and '&'
+  (whole string).
+
+IMPROVED RUNTIME BEHAVIOR
+-------------------------
+* RND now uses a Mersenne Twister (std::mt19937) generator instead of rand(),
+  giving a much better distribution. GW-BASIC semantics are preserved:
+  RND(-n) reseeds, RND(0) repeats the last value, RND(1)/RND returns the next.
+
+REPL & TOOLING
+--------------
+* RENUM [newStart][,[oldStart][,step]] renumbers the program in memory and
+  rewrites all GOTO/GOSUB/ON/THEN/ELSE/RESUME jump targets to match.
+
+* AUTO [start][,step] enters automatic line-numbering entry mode.
+
+* The REPL now supports up/down-arrow command history (capped at 100 entries).
+  When stdin is piped or redirected (non-interactive), input falls back to a
+  plain line reader so scripts and automated tests work without hanging.
+
+* New --trace command-line flag prints each source line as it begins
+  executing (e.g. "cbasic program.bas --trace"), useful for debugging.
+
+CODE HEALTH
+-----------
+* Extracted the multi-dimensional array subsystem into its own module
+  (cbasic_array.hpp / cbasic_array.cpp) with bounds- and overflow-checked
+  allocation and indexing.
+
+* Deduplicated source normalization (line-number parsing, auto-numbering, and
+  sorting) into a single shared routine used by both file execution and the
+  REPL LOAD command, so both paths behave identically.
+
+* Replaced magic virtual-memory addresses with a named VirtualMemoryRegion
+  enumeration for PEEK/POKE.
+
+* Added the new module to the build (build.bat).
+
+================================================================================
+Notes
+================================================================================
+* All changes are backward compatible with existing BASIC programs.
+* File access remains confined to the current-working-directory sandbox.
+* For usage, run: cbasic --help   (or HELP at the BASIC> prompt)
+================================================================================

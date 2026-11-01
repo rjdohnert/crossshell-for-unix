@@ -1,42 +1,53 @@
 # fsctl
 
-## What it does
-`fsctl` is an interactive file manager shell for local and remote paths.
+## Overview
+`fsctl` (File System Control) is a high-performance, full-screen interactive Terminal User Interface (TUI) file manager for Windows, inspired by Norton Commander, Midnight Commander, and `ranger`.
 
-It can browse directories, inspect files, create/remove files and folders, copy/move files, run recursive search/tree listings, and work with remote FTP/SSH paths.
+It provides rapid navigation across local and network storage volumes with vim-style controls, interactive filtering, clipboard copy/cut/paste, sorting, safe Recycle Bin deletion, file property inspection, and seamless file launching.
 
-## Interactive commands
-- `drive`: list available drives with storage information
-- `shares` / `net`: list available network shares
-- `ls` / `dir [path] [-t|--tree]`: list directory contents, optionally in tree mode
-- `tree [path]`: recursively print directory tree
-- `cd <directory-or-remote-uri>`: change current path
-- `pwd`: print current path
-- `mkdir <name>`: create directory (creates parent directories as needed)
-- `rmdir <name>`: remove an empty directory (confirmation controlled by `confirm`)
-- `trash [-f|--force] <path> [path2 ...]`: move file/folder(s) to recycle bin (`-f` skips confirmation prompts)
-- `rm [-r|--recursive] [-f|--force] <path>`: remove files, or directories when `-r` is used (`-f` skips confirmations)
-- `touch [-c|--no-create] <file> [file2 ...]`: create file(s) if missing, or update modified timestamp(s); with `-c`, only update existing files
-- `copy <src> <dst>`: copy a file
-- `move <src> <dst>`: move/rename a file
-- `cat` / `type <file>`: print file content
-- `stat <path>`: show path metadata
-- `find <pattern>`: recursively search for matching names
-- `diff <file1> <file2>`: compare two local text files line by line
-- `history [clear]`: show command history, or clear it
-- `confirm [on|off|status]`: toggle confirmation prompts for destructive actions
-- `exit` / `quit`: close fsctl shell
+---
 
-## Options
-- In-shell `help`: show command list and examples
+## Command Line Qualifiers
+```
+fsctl [QUALIFIERS]
+```
 
-## Remote protocol support
-- `ftp://host/path`: browse/list/read via FTP
-- `ssh://user@host/path`: browse/list/read via SSH (requires `ssh.exe` or `plink.exe`)
+- `-p, --path <DIR>`: Specify the initial working directory (default: `.`)
+- `-a, --all`: Display hidden and system files
+- `-s, --sort <MODE>`: Set sort mode (`name`, `size`, or `date`) [Default: `name`]
+- `-r, --reverse`: Reverse the listing order
+- `-R, --readonly`: Enable read-only mode (prevents file deletions)
+- `-h, --help`: Display usage summary and keybindings
+- `-v, --version`: Display version information
 
-## Output redirection
-- `>` overwrite command output file
-- `>>` append command output file
+---
 
-## UNIX origin
-A compatibility-style utility rather than a core command from a single historical Unix release.
+## Interactive Keybindings
+
+### Navigation
+- `Up` / `k`: Move cursor up
+- `Down` / `j`: Move cursor down
+- `Enter` / `l`: Open selected directory or launch file in default Windows application
+- `Backspace` / `h`: Navigate up to parent directory
+- `Home` / `End`: Jump to first / last item in directory
+
+### Filter & Clipboard (v6.5.0+)
+- `/`: Interactive substring search and live filter (Press `Esc` to clear)
+- `y`: Copy (Yank) selected file or folder to clipboard buffer
+- `x`: Cut selected file or folder to clipboard buffer
+- `p`: Paste copied/cut file or folder into current directory
+
+### Display & Sorting
+- `a`: Toggle hidden and system files
+- `s`: Cycle sort field (`Name`, `Size`, `Date`)
+- `r`: Invert sort order direction (Ascending / Descending)
+
+### Actions & Management
+- `d`: Delete selected file or folder (Safely prompted; sent to Windows Recycle Bin)
+- `R`: Rename selected file or directory
+- `i` (or `p`): Show detailed file properties dialog (Size, timestamps, Win32 attributes)
+- `v`: Drive selection menu (Volume selector with free/total storage)
+- `n`: List mapped network drives (`WNetGetConnectionW`)
+- `S`: Launch SSH terminal window in current directory
+- `?` or `F1`: Open help overlay modal
+- `q` or `Esc`: Exit fsctl and restore terminal buffer

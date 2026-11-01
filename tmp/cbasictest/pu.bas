@@ -1,0 +1,4 @@
+10 PRINT USING "##.##"; 3.14159
+20 PRINT USING "+###"; 42
+30 PRINT USING "###,###"; 1234567
+40 PRINT USING "! &"; "BASIC", "rules"

@@ -29,34 +29,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <string_view>
-#include <vector>
-#include <memory>
-#include <cstdint>
-#include <iomanip>
-#include <sstream>
-#include <algorithm>
-#include <optional>
+#include "comm_app.h"
 
-#ifdef _WIN32
-#include <io.h>
-#include <fcntl.h>
-#endif
-
-namespace CommUtil {
-
-    // Program Exit Codes
-#include "comm_module_01_exitcode.inc"
-#include "comm_module_02_options.inc"
-#include "comm_module_03_stringcomparator.inc"
-#include "comm_module_04_ilinestream.inc"
-#include "comm_module_05_linestream.inc"
-#include "comm_module_06_ordervalidator.inc"
-#include "comm_module_07_columnformatter.inc"
-#include "comm_module_08_commengine.inc"
-#include "comm_module_09_argparser.inc"
-#include "comm_module_10_helpsystem.inc"
-#include "comm_module_11_commapp.inc"
+int main(int argc, char* argv[]) {
+    return CommUtil::CommApp::run(argc, argv);
+}

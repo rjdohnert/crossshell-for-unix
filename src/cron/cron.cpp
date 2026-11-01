@@ -7,14 +7,14 @@
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- * 3. Neither the name of the project nor the names of its contributors may be
- *    used to endorse or promote products derived from this software without
- *    specific prior written permission.
+ * Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ * Neither the name of the project nor the names of its contributors may be
+ * used to endorse or promote products derived from this software without
+ * specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -29,46 +29,23 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/**
- * ============================================================================
- * SINGLE FILE INDEX: cron.cpp
- * ============================================================================
+/*
  * WinCron - Object-Oriented Cron Task Scheduler & Daemon for Windows
  * Specification: C++17 | Platform: Windows NT (x86_64 / ARM64)
  *
- * TABLE OF CONTENTS:
- * 1. [CRON JOB & SCHEDULE SPECIFICATION] ... CronJob, CronTimeMatcher classes
- * 2. [OPTIONS & CONFIGURATION] ............. CronOptions class (CLI parsing & flags)
- * 3. [STRUCTURED OUTPUT REPORTER] .......... CronReporter class (JSON/CSV/Table/Pipe)
- * 4. [CRONTAB PARSER & SCHEDULER ENGINE] ... CrontabParser, CronEngine classes
- * 5. [APPLICATION CONTROLLER] .............. CronApp class and main entry point
- * ============================================================================
+ * Modules:
+ *   cron_job.h ............ CronJob schedule specification
+ *   cron_time_matcher ..... five-field matching (wildcards, lists, ranges,
+ *                           steps, named months/days, DOM/DOW OR semantics)
+ *   cron_options .......... CLI parsing & flags
+ *   cron_reporter ......... JSON/CSV/Table/Pipe status output
+ *   crontab_parser ........ crontab line parsing, @macros, field validation
+ *   cron_engine ........... scheduler daemon loop, overlap-protected execution
+ *   cron_app .............. application controller
  */
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "cron_app.h"
 
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <thread>
-#include <ctime>
-#include <algorithm>
-#include <chrono>
-#include <atomic>
-#include <cstdio>
-#include <memory>
-
-// ============================================================================
-// 1. CRON JOB & SCHEDULE SPECIFICATION
-// ============================================================================
-
-#include "cron_module_01_cronjob.inc"
-#include "cron_module_02_crontimematcher.inc"
-#include "cron_module_03_cronoptions.inc"
-#include "cron_module_04_cronreporter.inc"
-#include "cron_module_05_crontabparser.inc"
-#include "cron_module_06_cronengine.inc"
-#include "cron_module_07_cronapp.inc"
+int main(int argc, char* argv[]) {
+    return CronApp::run(argc, argv);
+}

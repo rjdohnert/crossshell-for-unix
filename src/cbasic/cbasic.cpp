@@ -58,8 +58,41 @@ Standardized Section Index
 #include <filesystem>
 #include <system_error>
 #include <functional>
+#include <random>
+#include <conio.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include "cbasic_common.hpp"
 #include "cbasic_lexer.hpp"
+#include "cbasic_array.hpp"
+
+// Named virtual-memory regions for PEEK/POKE (replace magic addresses).
+enum VirtualMemoryRegion : int {
+    VMEM_LOW_START      = 0x00000000,
+    VMEM_LOW_END        = 0x0FFFFFFF,
+    VMEM_GRAPHICS_START = 0x10000000,
+    VMEM_GRAPHICS_END   = 0x1FFFFFFF,
+    VMEM_SYSTEM_START   = 0x20000000,
+    VMEM_SYSTEM_END     = 0x2FFFFFFF,
+    VMEM_EXTENDED_START = 0x30000001
+};
+
+// Safe ctype helpers: passing a signed char with a negative value to
+// std::toupper/std::isdigit/etc. is undefined behavior. These wrappers cast to
+// unsigned char first.
+namespace {
+    inline int safeToUpper(int c) { return std::toupper(static_cast<unsigned char>(c)); }
+    inline bool safeIsDigit(char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; }
+    // In-place uppercase of a string, UB-safe.
+    inline void upperInPlace(std::string& s) {
+        std::transform(s.begin(), s.end(), s.begin(), safeToUpper);
+    }
+}
 
 // ============================================================================
 // 1. DATA TYPES & HELPERS
@@ -78,12 +111,16 @@ enum class OpCode {
     ADD, SUB, MUL, DIV, INT_DIV, MODULO, POW, NEGATE,
     CMP_EQ, CMP_LT, CMP_GT, CMP_LE, CMP_GE, CMP_NE,
     LOGICAL_AND, LOGICAL_OR, LOGICAL_NOT,
-    PRINT_VAL, PRINT_TAB, PRINT_TAB_STOP, PRINT_NEWLINE, INPUT,
+    PRINT_VAL, PRINT_TAB, PRINT_TAB_STOP, PRINT_NEWLINE, PRINT_USING, INPUT,
     JUMP, JUMP_IF_FALSE, ON_GOTO, ON_GOSUB, CALL, RETURN,
     FOR_INIT, FOR_NEXT,
     READ_VAR, RESTORE_DATA, POKE_MEM,
     FN_SQRT, FN_ABS, FN_RND, FN_INT, FN_LEN, FN_POS, FN_PEEK, FN_USR, FN_INKEY, FN_ERR, FN_ERL, FN_EOF,
     FN_LEFT, FN_RIGHT, FN_MID, FN_CHR, FN_ASC, FN_VAL, FN_STR,
+    FN_SIN, FN_COS, FN_TAN, FN_ATN, FN_LOG, FN_EXP, FN_SGN,
+    FN_INSTR, FN_UCASE, FN_LCASE, FN_LTRIM, FN_RTRIM, FN_STRING, FN_SPACE, FN_SPC,
+    FN_TIMER, FN_DATE, FN_TIME, FN_ERRSTR,
+    RAISE_ERROR,
     SHOW_HELP, SHOW_VERSION, HALT
 };
 
@@ -185,6 +222,36 @@ class Compiler {
     void reportCompileError(const std::string& message, int line = -1) {
         if (line <= 0) line = currentSourceLine;
         compileErrors.push_back("Compilation Error (line " + std::to_string(line) + "): " + message);
+    }
+
+    // Checked double->int conversion for compile-time values (line numbers,
+    // jump targets, dimensions, addresses). Reports a compile error and returns
+    // `fallback` when the value is non-finite, non-integral, or out of range.
+    int checkedIntValue(double d, const char* what, int minValue, int maxValue, int fallback = 0) {
+        if (!std::isfinite(d)) {
+            reportCompileError(std::string(what) + " must be a finite number.");
+            return fallback;
+        }
+        double rounded = std::round(d);
+        if (std::fabs(d - rounded) > 1e-9) {
+            reportCompileError(std::string(what) + " must be an integer.");
+            return fallback;
+        }
+        if (rounded < static_cast<double>(minValue) || rounded > static_cast<double>(maxValue)) {
+            reportCompileError(std::string(what) + " is out of the supported range (" +
+                               std::to_string(minValue) + " to " + std::to_string(maxValue) + ").");
+            return fallback;
+        }
+        return static_cast<int>(rounded);
+    }
+
+    // Parse a line-number jump target from a NUMBER token. Returns the line
+    // number, or -1 if the token is not a valid non-negative line number.
+    // Reports a compile error on malformed input instead of silently wrapping.
+    int parseLineTarget() {
+        if (!check(SyntaxTokenType::NUMBER)) return -1;
+        double raw = std::get<double>(advance().value);
+        return checkedIntValue(raw, "Line number", 0, std::numeric_limits<int>::max(), -1);
     }
 
     void emitBinaryOp(OpCode op) {
@@ -408,6 +475,66 @@ class Compiler {
                 match(SyntaxTokenType::LEFT_PAREN); parseExpression(); match(SyntaxTokenType::RIGHT_PAREN);
                 emit(OpCode::FN_STR);
             }
+            // --- Extended math: single-argument functions ---
+            else if (id == "SIN" || id == "COS" || id == "TAN" || id == "ATN" ||
+                     id == "LOG" || id == "EXP" || id == "SGN") {
+                match(SyntaxTokenType::LEFT_PAREN); parseExpression(); match(SyntaxTokenType::RIGHT_PAREN);
+                if (id == "SIN") emit(OpCode::FN_SIN);
+                else if (id == "COS") emit(OpCode::FN_COS);
+                else if (id == "TAN") emit(OpCode::FN_TAN);
+                else if (id == "ATN") emit(OpCode::FN_ATN);
+                else if (id == "LOG") emit(OpCode::FN_LOG);
+                else if (id == "EXP") emit(OpCode::FN_EXP);
+                else emit(OpCode::FN_SGN);
+            }
+            // --- Extended string functions ---
+            else if (id == "INSTR") {
+                // INSTR([start,] haystack, needle). Operand records arg count.
+                match(SyntaxTokenType::LEFT_PAREN);
+                parseExpression();
+                if (match(SyntaxTokenType::COMMA)) {
+                    parseExpression();
+                    if (match(SyntaxTokenType::COMMA)) {
+                        // 3-arg form: start, haystack, needle. Stack order after
+                        // parsing is start, haystack, needle; VM pops needle,
+                        // haystack, then start. Emit with operand=3.
+                        parseExpression();
+                        match(SyntaxTokenType::RIGHT_PAREN);
+                        emit(OpCode::FN_INSTR, 3.0);
+                    } else {
+                        // 2-arg form: haystack, needle.
+                        match(SyntaxTokenType::RIGHT_PAREN);
+                        emit(OpCode::FN_INSTR, 2.0);
+                    }
+                } else {
+                    reportCompileError("INSTR requires at least two arguments.");
+                    match(SyntaxTokenType::RIGHT_PAREN);
+                }
+            }
+            else if (id == "UCASE$" || id == "LCASE$" || id == "LTRIM$" || id == "RTRIM$" ||
+                     id == "SPACE$" || id == "SPC") {
+                match(SyntaxTokenType::LEFT_PAREN); parseExpression(); match(SyntaxTokenType::RIGHT_PAREN);
+                if (id == "UCASE$") emit(OpCode::FN_UCASE);
+                else if (id == "LCASE$") emit(OpCode::FN_LCASE);
+                else if (id == "LTRIM$") emit(OpCode::FN_LTRIM);
+                else if (id == "RTRIM$") emit(OpCode::FN_RTRIM);
+                else if (id == "SPACE$") emit(OpCode::FN_SPACE);
+                else emit(OpCode::FN_SPC);
+            }
+            else if (id == "STRING$") {
+                match(SyntaxTokenType::LEFT_PAREN);
+                parseExpression(); match(SyntaxTokenType::COMMA); parseExpression();
+                match(SyntaxTokenType::RIGHT_PAREN);
+                emit(OpCode::FN_STRING);
+            }
+            // --- System / time / error functions (no arguments) ---
+            else if (id == "TIMER" || id == "DATE$" || id == "TIME$" || id == "ERR$") {
+                if (match(SyntaxTokenType::LEFT_PAREN)) match(SyntaxTokenType::RIGHT_PAREN);
+                if (id == "TIMER") emit(OpCode::FN_TIMER);
+                else if (id == "DATE$") emit(OpCode::FN_DATE);
+                else if (id == "TIME$") emit(OpCode::FN_TIME);
+                else emit(OpCode::FN_ERRSTR);
+            }
             else {
                 int dims = 0;
                 if (parseArraySubscripts(dims)) {
@@ -494,8 +621,11 @@ class Compiler {
 
     void parseStatement() {
         if (check(SyntaxTokenType::NUMBER)) {
-            int lineNum = static_cast<int>(std::get<double>(advance().value));
-            lineNumberToIpMap[lineNum] = code.size();
+            double rawLine = std::get<double>(advance().value);
+            int lineNum = checkedIntValue(rawLine, "Line number", 0, std::numeric_limits<int>::max(), -1);
+            if (lineNum >= 0) {
+                lineNumberToIpMap[lineNum] = code.size();
+            }
         }
 
         if (match(SyntaxTokenType::HELP)) emit(OpCode::SHOW_HELP);
@@ -552,7 +682,7 @@ class Compiler {
                 reportCompileError("OPTION BASE requires numeric value 0 or 1.");
                 return;
             }
-            int base = static_cast<int>(std::get<double>(advance().value));
+            int base = checkedIntValue(std::get<double>(advance().value), "OPTION BASE", 0, 1, -1);
             if (base != 0 && base != 1) {
                 reportCompileError("OPTION BASE only supports 0 or 1.");
                 return;
@@ -793,6 +923,25 @@ class Compiler {
             emit(OpCode::FILE_RANDOM_PUT, hasRecord ? 1.0 : 0.0);
         }
         else if (match(SyntaxTokenType::PRINT)) {
+            // PRINT USING "fmt"; expr [, expr ...]
+            if (check(SyntaxTokenType::IDENTIFIER) && peek().lexeme == "USING") {
+                advance(); // USING
+                if (!check(SyntaxTokenType::STRING)) {
+                    reportCompileError("PRINT USING requires a format string.");
+                    return;
+                }
+                parseExpression(); // the format string
+                int argCount = 0;
+                if (match(SyntaxTokenType::SEMICOLON) || match(SyntaxTokenType::COMMA)) {
+                    do {
+                        parseExpression();
+                        argCount++;
+                    } while (match(SyntaxTokenType::COMMA) || match(SyntaxTokenType::SEMICOLON));
+                }
+                emit(OpCode::PRINT_USING, static_cast<double>(argCount));
+                emit(OpCode::PRINT_NEWLINE);
+                return;
+            }
             bool trailingSeparator = false;
 
             auto parsePrintItem = [&]() {
@@ -860,6 +1009,11 @@ class Compiler {
             parseExpression();
             emit(OpCode::POKE_MEM);
         }
+        else if (check(SyntaxTokenType::IDENTIFIER) && peek().lexeme == "ERROR") {
+            advance(); // ERROR
+            parseExpression();
+            emit(OpCode::RAISE_ERROR);
+        }
         else if (match(SyntaxTokenType::LET) || check(SyntaxTokenType::IDENTIFIER)) {
             bool hadLet = false;
             if (check(SyntaxTokenType::LET)) {
@@ -925,16 +1079,20 @@ class Compiler {
         } 
         else if (match(SyntaxTokenType::GOTO)) {
             if (check(SyntaxTokenType::NUMBER)) {
-                int targetLine = static_cast<int>(std::get<double>(advance().value));
-                pendingJumps.push_back({code.size(), targetLine});
-                emit(OpCode::JUMP, 0.0, -1);
+                int targetLine = parseLineTarget();
+                if (targetLine >= 0) {
+                    pendingJumps.push_back({code.size(), targetLine});
+                    emit(OpCode::JUMP, 0.0, -1);
+                }
             }
-        } 
+        }
         else if (match(SyntaxTokenType::GOSUB)) {
             if (check(SyntaxTokenType::NUMBER)) {
-                int targetLine = static_cast<int>(std::get<double>(advance().value));
-                pendingJumps.push_back({code.size(), targetLine});
-                emit(OpCode::CALL, 0.0, -1);
+                int targetLine = parseLineTarget();
+                if (targetLine >= 0) {
+                    pendingJumps.push_back({code.size(), targetLine});
+                    emit(OpCode::CALL, 0.0, -1);
+                }
             }
         }
         else if (match(SyntaxTokenType::ON)) {
@@ -948,7 +1106,8 @@ class Compiler {
                     reportCompileError("ON ERROR GOTO requires a line number.");
                     return;
                 }
-                int targetLine = static_cast<int>(std::get<double>(advance().value));
+                int targetLine = parseLineTarget();
+                if (targetLine < 0) return;
                 if (targetLine == 0) {
                     emit(OpCode::SET_ON_ERROR, 0.0, -1);
                 } else {
@@ -966,7 +1125,8 @@ class Compiler {
             std::vector<int> targetLines;
             do {
                 if (check(SyntaxTokenType::NUMBER)) {
-                    targetLines.push_back(static_cast<int>(std::get<double>(advance().value)));
+                    int tl = parseLineTarget();
+                    if (tl >= 0) targetLines.push_back(tl);
                 }
             } while (match(SyntaxTokenType::COMMA));
 
@@ -982,9 +1142,11 @@ class Compiler {
             if (match(SyntaxTokenType::NEXT)) {
                 emit(OpCode::RESUME_ERROR, 1.0, -1);
             } else if (check(SyntaxTokenType::NUMBER)) {
-                int targetLine = static_cast<int>(std::get<double>(advance().value));
-                pendingJumps.push_back({code.size(), targetLine});
-                emit(OpCode::RESUME_ERROR, 2.0, -1);
+                int targetLine = parseLineTarget();
+                if (targetLine >= 0) {
+                    pendingJumps.push_back({code.size(), targetLine});
+                    emit(OpCode::RESUME_ERROR, 2.0, -1);
+                }
             } else {
                 emit(OpCode::RESUME_ERROR, 0.0, -1);
             }
@@ -1055,10 +1217,12 @@ class Compiler {
 
                 bool thenIsLineNumber = false;
                 if (check(SyntaxTokenType::NUMBER)) {
-                    thenIsLineNumber = true;
-                    int thenTargetLine = static_cast<int>(std::get<double>(advance().value));
-                    pendingJumps.push_back({code.size(), thenTargetLine});
-                    emit(OpCode::JUMP, 0.0, -1);
+                    int thenTargetLine = parseLineTarget();
+                    if (thenTargetLine >= 0) {
+                        thenIsLineNumber = true;
+                        pendingJumps.push_back({code.size(), thenTargetLine});
+                        emit(OpCode::JUMP, 0.0, -1);
+                    }
                 } else {
                     parseInlineBranch(true);
                 }
@@ -1068,9 +1232,11 @@ class Compiler {
                         code[jumpIfFalseIp].targetIp = static_cast<int>(code.size());
 
                         if (check(SyntaxTokenType::NUMBER)) {
-                            int elseTargetLine = static_cast<int>(std::get<double>(advance().value));
-                            pendingJumps.push_back({code.size(), elseTargetLine});
-                            emit(OpCode::JUMP, 0.0, -1);
+                            int elseTargetLine = parseLineTarget();
+                            if (elseTargetLine >= 0) {
+                                pendingJumps.push_back({code.size(), elseTargetLine});
+                                emit(OpCode::JUMP, 0.0, -1);
+                            }
                         } else {
                             parseInlineBranch(false);
                         }
@@ -1080,9 +1246,11 @@ class Compiler {
 
                         code[jumpIfFalseIp].targetIp = static_cast<int>(code.size());
                         if (check(SyntaxTokenType::NUMBER)) {
-                            int elseTargetLine = static_cast<int>(std::get<double>(advance().value));
-                            pendingJumps.push_back({code.size(), elseTargetLine});
-                            emit(OpCode::JUMP, 0.0, -1);
+                            int elseTargetLine = parseLineTarget();
+                            if (elseTargetLine >= 0) {
+                                pendingJumps.push_back({code.size(), elseTargetLine});
+                                emit(OpCode::JUMP, 0.0, -1);
+                            }
                         } else {
                             parseInlineBranch(false);
                         }
@@ -1212,6 +1380,7 @@ void dumpBytecode(const std::vector<Instruction>& code, const std::vector<Value>
             case OpCode::PRINT_TAB: std::cout << "PRINT_TAB"; break;
             case OpCode::PRINT_TAB_STOP: std::cout << "PRINT_TAB_STOP"; break;
             case OpCode::PRINT_NEWLINE: std::cout << "PRINT_NEWLINE"; break;
+            case OpCode::PRINT_USING: std::cout << "PRINT_USING argc=" << asDouble(inst.operand); break;
             case OpCode::INPUT: std::cout << "INPUT vars=" << inst.targetIp << " mode=" << asDouble(inst.operand); break;
             case OpCode::JUMP: std::cout << "JUMP -> " << inst.targetIp; break;
             case OpCode::JUMP_IF_FALSE: std::cout << "JUMP_IF_FALSE -> " << inst.targetIp; break;
@@ -1253,6 +1422,26 @@ void dumpBytecode(const std::vector<Instruction>& code, const std::vector<Value>
             case OpCode::FN_ASC: std::cout << "FN_ASC"; break;
             case OpCode::FN_VAL: std::cout << "FN_VAL"; break;
             case OpCode::FN_STR: std::cout << "FN_STR"; break;
+            case OpCode::FN_SIN: std::cout << "FN_SIN"; break;
+            case OpCode::FN_COS: std::cout << "FN_COS"; break;
+            case OpCode::FN_TAN: std::cout << "FN_TAN"; break;
+            case OpCode::FN_ATN: std::cout << "FN_ATN"; break;
+            case OpCode::FN_LOG: std::cout << "FN_LOG"; break;
+            case OpCode::FN_EXP: std::cout << "FN_EXP"; break;
+            case OpCode::FN_SGN: std::cout << "FN_SGN"; break;
+            case OpCode::FN_INSTR: std::cout << "FN_INSTR argc=" << asDouble(inst.operand); break;
+            case OpCode::FN_UCASE: std::cout << "FN_UCASE"; break;
+            case OpCode::FN_LCASE: std::cout << "FN_LCASE"; break;
+            case OpCode::FN_LTRIM: std::cout << "FN_LTRIM"; break;
+            case OpCode::FN_RTRIM: std::cout << "FN_RTRIM"; break;
+            case OpCode::FN_STRING: std::cout << "FN_STRING"; break;
+            case OpCode::FN_SPACE: std::cout << "FN_SPACE"; break;
+            case OpCode::FN_SPC: std::cout << "FN_SPC"; break;
+            case OpCode::FN_TIMER: std::cout << "FN_TIMER"; break;
+            case OpCode::FN_DATE: std::cout << "FN_DATE"; break;
+            case OpCode::FN_TIME: std::cout << "FN_TIME"; break;
+            case OpCode::FN_ERRSTR: std::cout << "FN_ERRSTR"; break;
+            case OpCode::RAISE_ERROR: std::cout << "RAISE_ERROR"; break;
             case OpCode::SHOW_HELP: std::cout << "SHOW_HELP"; break;
             case OpCode::SHOW_VERSION: std::cout << "SHOW_VERSION"; break;
             case OpCode::HALT: std::cout << "HALT"; break;
@@ -1284,11 +1473,6 @@ struct VMForLoop {
     double step;
     int startIp;
     int endIpExclusive;
-};
-
-struct ArrayData {
-    std::vector<int> extents;
-    std::vector<Value> data;
 };
 
 struct BasicFileHandle {
@@ -1341,6 +1525,7 @@ class VirtualMachine {
     int errorResumeNextIp = -1;
     int lastErrorCode = 0;
     int lastErrorLine = 0;
+    std::string lastErrorMessage;
     
     std::vector<Value> stack;
     std::vector<size_t> callStack;
@@ -1348,12 +1533,116 @@ class VirtualMachine {
     size_t ip = 0;
     int printColumn = 0;
     double lastRndValue = 0.0;
+    // Mersenne Twister PRNG: better distribution than rand(). Seeded in run().
+    std::mt19937 rng;
+    std::uniform_real_distribution<double> rndDist{0.0, 1.0};
     size_t maxInstructionSteps = 1000000;
+    // Maximum GOSUB/CALL nesting depth. Prevents unbounded call-stack growth
+    // from recursive BASIC programs exhausting memory.
+    size_t maxCallStackDepth = 10000;
     std::function<bool(size_t, const Instruction&)> stepHook;
 
     void printSpaces(int count) {
         for (int i = 0; i < count; ++i) std::cout << ' ';
         printColumn += count;
+    }
+
+    // Minimal PRINT USING formatter. Supports:
+    //   #   digit placeholder (##.##, ###, etc.)
+    //   .   decimal point within a numeric field
+    //   +   leading/trailing sign
+    //   ,   thousands separator (when before the decimal point)
+    //   !   first character of a string
+    //   &   whole string
+    // Literal characters are copied through. Extra args are ignored; missing
+    // args render as empty/zero.
+    std::string formatPrintUsing(const std::string& fmt, const std::vector<Value>& args, int line) {
+        std::string out;
+        size_t argIdx = 0;
+
+        for (size_t i = 0; i < fmt.size();) {
+            char c = fmt[i];
+
+            // Numeric field: one or more '#' with optional '.', '+', ','.
+            if (c == '#' || (c == '+' && i + 1 < fmt.size() && fmt[i + 1] == '#')) {
+                bool leadingPlus = (c == '+');
+                size_t fieldStart = i;
+                if (leadingPlus) ++i;
+
+                // Count integer digits and detect thousands separator.
+                int intDigits = 0;
+                bool thousands = false;
+                while (i < fmt.size() && (fmt[i] == '#' || fmt[i] == ',')) {
+                    if (fmt[i] == '#') intDigits++;
+                    else thousands = true;
+                    ++i;
+                }
+                int fracDigits = 0;
+                if (i < fmt.size() && fmt[i] == '.') {
+                    ++i;
+                    while (i < fmt.size() && fmt[i] == '#') { fracDigits++; ++i; }
+                }
+                bool trailingPlus = (i < fmt.size() && fmt[i] == '+');
+                if (trailingPlus) ++i;
+
+                double val = (argIdx < args.size()) ? asDouble(args[argIdx++]) : 0.0;
+                bool neg = val < 0.0;
+                double absVal = std::fabs(val);
+
+                // Format the number with the requested precision.
+                std::ostringstream oss;
+                oss << std::fixed << std::setprecision(fracDigits) << absVal;
+                std::string num = oss.str();
+
+                // Split into integer/fraction parts.
+                size_t dot = num.find('.');
+                std::string intPart = (dot == std::string::npos) ? num : num.substr(0, dot);
+                std::string fracPart = (dot == std::string::npos) ? "" : num.substr(dot + 1);
+
+                // Thousands separators.
+                if (thousands) {
+                    std::string grouped;
+                    int cnt = 0;
+                    for (int k = static_cast<int>(intPart.size()) - 1; k >= 0; --k) {
+                        grouped.insert(grouped.begin(), intPart[k]);
+                        if (++cnt % 3 == 0 && k > 0) grouped.insert(grouped.begin(), ',');
+                    }
+                    intPart = grouped;
+                }
+
+                // Pad integer part to the field width.
+                int targetIntWidth = intDigits + (thousands ? (intDigits - 1) / 3 : 0);
+                if (static_cast<int>(intPart.size()) < targetIntWidth) {
+                    intPart.insert(intPart.begin(), targetIntWidth - intPart.size(), ' ');
+                }
+
+                std::string field = intPart;
+                if (fracDigits > 0) field += "." + fracPart;
+
+                // Sign handling.
+                if (leadingPlus) field = (neg ? "-" : "+") + field;
+                else if (neg) field = "-" + field;
+                if (trailingPlus) field += (neg ? "-" : "+");
+
+                out += field;
+                continue;
+            }
+
+            // String field: '!' (first char) or '&' (whole string).
+            if (c == '!' || c == '&') {
+                ++i;
+                std::string s = (argIdx < args.size()) ? valueToString(args[argIdx++]) : "";
+                if (c == '!') out += s.empty() ? " " : std::string(1, s[0]);
+                else out += s;
+                continue;
+            }
+
+            // Literal character.
+            out += c;
+            ++i;
+        }
+        (void)line;
+        return out;
     }
 
     void unwindForLoopsForJump(int targetIp) {
@@ -1368,7 +1657,11 @@ class VirtualMachine {
 
     void push(Value val) { stack.push_back(val); }
     Value pop() {
-        if (stack.empty()) return 0.0;
+        // Fail loudly on stack underflow instead of silently returning 0.0,
+        // which would mask malformed bytecode / parser bugs as wrong results.
+        if (stack.empty()) {
+            runtimeError("Internal stack underflow", 0);
+        }
         Value val = stack.back();
         stack.pop_back();
         return val;
@@ -1551,82 +1844,37 @@ class VirtualMachine {
         return bounds;
     }
 
+    // Array subsystem delegates to the extracted cbasic_array module, adapting
+    // its error-string results to runtimeError() signals.
     int flattenArrayIndex(const ArrayData& arr, const std::vector<int>& indices, int line, bool& ok) {
-        ok = true;
-        if (indices.size() != arr.extents.size()) {
-            runtimeError("Array dimension mismatch", line);
+        int linear = 0;
+        std::string err;
+        if (!flattenArrayIndexChecked(arr, indices, optionBase, linear, err)) {
+            runtimeError(err, line);
             ok = false;
             return 0;
         }
-
-        int linear = 0;
-        int stride = 1;
-        for (int i = static_cast<int>(arr.extents.size()) - 1; i >= 0; --i) {
-            int internalIdx = indices[i] - optionBase;
-            if (internalIdx < 0 || internalIdx >= arr.extents[i]) {
-                runtimeError("Array index out of bounds", line);
-                ok = false;
-                return 0;
-            }
-            linear += internalIdx * stride;
-            stride *= arr.extents[i];
-        }
+        ok = true;
         return linear;
     }
 
     ArrayData makeArrayFromUpperBounds(const std::vector<int>& upperBounds, int line, bool& ok) {
-        ok = true;
         ArrayData arr;
-        try {
-            arr.extents.reserve(upperBounds.size());
-
-            size_t total = 1;
-            for (int bound : upperBounds) {
-                if (bound < optionBase) {
-                    runtimeError("Array upper bound is below OPTION BASE", line);
-                    ok = false;
-                    return arr;
-                }
-                int extent = (bound - optionBase) + 1;
-                if (extent <= 0) {
-                    runtimeError("Array upper bound is invalid", line);
-                    ok = false;
-                    return arr;
-                }
-                if (total > (std::numeric_limits<size_t>::max() / static_cast<size_t>(extent))) {
-                    runtimeError("Array is too large", line);
-                    ok = false;
-                    return arr;
-                }
-                arr.extents.push_back(extent);
-                total *= static_cast<size_t>(extent);
-            }
-            arr.data.assign(total, 0.0);
-        } catch (const std::bad_alloc&) {
-            runtimeError("Out of memory while allocating array", line);
+        std::string err;
+        if (!makeArrayFromUpperBoundsChecked(upperBounds, optionBase, arr, err)) {
+            runtimeError(err, line);
             ok = false;
+            return arr;
         }
+        ok = true;
         return arr;
     }
 
     ArrayData makeImplicitArray(int dims, int line) {
-        int defaultUpper = 10;
-        int extent = (defaultUpper >= optionBase) ? ((defaultUpper - optionBase) + 1) : 1;
         ArrayData arr;
-        try {
-            arr.extents.assign(dims, extent);
-
-            size_t total = 1;
-            for (int i = 0; i < dims; ++i) {
-                if (total > (std::numeric_limits<size_t>::max() / static_cast<size_t>(extent))) {
-                    runtimeError("Array is too large", line);
-                    return arr;
-                }
-                total *= static_cast<size_t>(extent);
-            }
-            arr.data.assign(total, 0.0);
-        } catch (const std::bad_alloc&) {
-            runtimeError("Out of memory while allocating array", line);
+        std::string err;
+        if (!makeImplicitArrayChecked(dims, optionBase, arr, err)) {
+            runtimeError(err, line);
         }
         return arr;
     }
@@ -1783,6 +2031,9 @@ public:
         lastErrorCode = 0;
         lastErrorLine = 0;
         printColumn = 0;
+        // Seed the PRNG once per run from the system clock.
+        rng.seed(static_cast<unsigned int>(std::time(nullptr)) ^
+                 static_cast<unsigned int>(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
         size_t stepCount = 0;
 
         while (ip < code.size()) {
@@ -2318,6 +2569,17 @@ public:
                     break;
                 }
                 case OpCode::PRINT_NEWLINE: std::cout << "\n"; printColumn = 0; break;
+                case OpCode::PRINT_USING: {
+                    int argCount = static_cast<int>(asDouble(instr.operand));
+                    // Pop args (in reverse) then the format string.
+                    std::vector<Value> args(argCount);
+                    for (int i = argCount - 1; i >= 0; --i) args[i] = pop();
+                    std::string fmt = valueToString(pop());
+                    std::string out = formatPrintUsing(fmt, args, instr.line);
+                    std::cout << out;
+                    printColumn += static_cast<int>(out.size());
+                    break;
+                }
                 case OpCode::INPUT: {
                     int mode = static_cast<int>(std::lround(asDouble(instr.operand)));
                     int varCount = instr.targetIp;
@@ -2421,6 +2683,9 @@ public:
                 case OpCode::ON_GOSUB: {
                     int idx = static_cast<int>(asDouble(pop())) - 1;
                     if (idx >= 0 && idx < static_cast<int>(instr.targets.size())) {
+                        if (callStack.size() >= maxCallStackDepth) {
+                            runtimeError("GOSUB/CALL nesting too deep (stack overflow)", instr.line);
+                        }
                         unwindForLoopsForJump(instr.targets[idx]);
                         callStack.push_back(ip + 1);
                         ip = instr.targets[idx];
@@ -2429,6 +2694,9 @@ public:
                     break;
                 }
                 case OpCode::CALL:
+                    if (callStack.size() >= maxCallStackDepth) {
+                        runtimeError("GOSUB/CALL nesting too deep (stack overflow)", instr.line);
+                    }
                     callStack.push_back(ip + 1);
                     if (instr.targetIp >= 0) {
                         unwindForLoopsForJump(instr.targetIp);
@@ -2450,11 +2718,13 @@ public:
                 case OpCode::FN_RND: {
                     double n = asDouble(pop());
                     if (n < 0.0) {
-                        std::srand(static_cast<unsigned int>(std::llabs(static_cast<long long>(std::llround(n)))));
-                        lastRndValue = static_cast<double>(rand()) / RAND_MAX;
+                        // RND(-n) reseeds the generator (GW-BASIC semantics).
+                        rng.seed(static_cast<unsigned int>(std::llabs(static_cast<long long>(std::llround(n)))));
+                        lastRndValue = rndDist(rng);
                     } else if (n > 0.0) {
-                        lastRndValue = static_cast<double>(rand()) / RAND_MAX;
+                        lastRndValue = rndDist(rng);
                     }
+                    // n == 0 returns the last generated value (lastRndValue).
                     push(lastRndValue);
                     break;
                 }
@@ -2484,7 +2754,24 @@ public:
                     break;
                 }
                 case OpCode::FN_INKEY: {
-                    push(std::string(""));
+                    // Non-blocking keyboard read: returns the pressed key as a
+                    // one-character string, or "" if no key is pending.
+                    if (_kbhit()) {
+                        int ch = _getch();
+                        if (ch == 0 || ch == 224) {
+                            // Extended key (arrows, function keys): consume the
+                            // second byte and report it as a two-char sequence.
+                            int ext = _getch();
+                            std::string s;
+                            s.push_back('\0');
+                            s.push_back(static_cast<char>(ext));
+                            push(s);
+                        } else {
+                            push(std::string(1, static_cast<char>(ch)));
+                        }
+                    } else {
+                        push(std::string(""));
+                    }
                     break;
                 }
                 case OpCode::FN_ERR: {
@@ -2537,13 +2824,15 @@ public:
                     break;
                 }
                 case OpCode::FN_MID: {
-                    int len = static_cast<int>(asDouble(pop()));
-                    int start = static_cast<int>(asDouble(pop())) - 1;
+                    // Use 64-bit math to avoid int overflow in start+len.
+                    int64_t len = static_cast<int64_t>(std::llround(asDouble(pop())));
+                    int64_t start = static_cast<int64_t>(std::llround(asDouble(pop()))) - 1;
                     std::string str = valueToString(pop());
+                    int64_t slen = static_cast<int64_t>(str.length());
                     if (start < 0) start = 0;
-                    if (start >= static_cast<int>(str.length())) { push(""); break; }
-                    if (len < 0 || start + len > static_cast<int>(str.length())) push(str.substr(start));
-                    else push(str.substr(start, len));
+                    if (start >= slen) { push(""); break; }
+                    if (len < 0 || start + len > slen) push(str.substr(static_cast<size_t>(start)));
+                    else push(str.substr(static_cast<size_t>(start), static_cast<size_t>(len)));
                     break;
                 }
                 case OpCode::FN_CHR: {
@@ -2564,6 +2853,140 @@ public:
                     push(valueToString(pop()));
                     break;
                 }
+                // --- Extended math functions ---
+                case OpCode::FN_SIN: push(std::sin(asDouble(pop()))); break;
+                case OpCode::FN_COS: push(std::cos(asDouble(pop()))); break;
+                case OpCode::FN_TAN: push(std::tan(asDouble(pop()))); break;
+                case OpCode::FN_ATN: push(std::atan(asDouble(pop()))); break;
+                case OpCode::FN_LOG: {
+                    double v = asDouble(pop());
+                    if (v <= 0.0) { runtimeError("LOG of non-positive number", instr.line); push(0.0); }
+                    else push(std::log(v));
+                    break;
+                }
+                case OpCode::FN_EXP: {
+                    double v = asDouble(pop());
+                    if (v > 709.0) { runtimeError("EXP overflow", instr.line); push(0.0); }
+                    else push(std::exp(v));
+                    break;
+                }
+                case OpCode::FN_SGN: {
+                    double v = asDouble(pop());
+                    push((v > 0.0) ? 1.0 : (v < 0.0) ? -1.0 : 0.0);
+                    break;
+                }
+                // --- Extended string functions ---
+                case OpCode::FN_INSTR: {
+                    // INSTR([start,] haystack, needle) -> 1-based position or 0
+                    std::string needle = valueToString(pop());
+                    std::string hay = valueToString(pop());
+                    int64_t start = 1;
+                    // start is optional; the compiler pushes it as the first arg.
+                    // We detect arg count via the operand: 2 = no start, 3 = start.
+                    if (static_cast<int>(asDouble(instr.operand)) == 3) {
+                        start = static_cast<int64_t>(std::llround(asDouble(pop())));
+                        if (start < 1) start = 1;
+                    }
+                    if (needle.empty() || start > static_cast<int64_t>(hay.length())) { push(0.0); break; }
+                    size_t found = hay.find(needle, static_cast<size_t>(start - 1));
+                    push(found == std::string::npos ? 0.0 : static_cast<double>(found + 1));
+                    break;
+                }
+                case OpCode::FN_UCASE: {
+                    std::string s = valueToString(pop());
+                    upperInPlace(s);
+                    push(s);
+                    break;
+                }
+                case OpCode::FN_LCASE: {
+                    std::string s = valueToString(pop());
+                    std::transform(s.begin(), s.end(), s.begin(),
+                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    push(s);
+                    break;
+                }
+                case OpCode::FN_LTRIM: {
+                    std::string s = valueToString(pop());
+                    size_t p = s.find_first_not_of(" \t");
+                    push(p == std::string::npos ? std::string("") : s.substr(p));
+                    break;
+                }
+                case OpCode::FN_RTRIM: {
+                    std::string s = valueToString(pop());
+                    size_t p = s.find_last_not_of(" \t");
+                    push(p == std::string::npos ? std::string("") : s.substr(0, p + 1));
+                    break;
+                }
+                case OpCode::FN_STRING: {
+                    // STRING$(count, charOrString) -> repeated character string.
+                    // Stack order: count pushed first, fill second, so fill is on top.
+                    Value fill = pop();
+                    int64_t count = static_cast<int64_t>(std::llround(asDouble(pop())));
+                    if (count <= 0) { push(std::string("")); break; }
+                    if (count > 65535) { runtimeError("STRING$ count too large", instr.line); push(std::string("")); break; }
+                    char fillChar;
+                    if (std::holds_alternative<std::string>(fill)) {
+                        std::string fs = std::get<std::string>(fill);
+                        fillChar = fs.empty() ? ' ' : fs[0];
+                    } else {
+                        fillChar = static_cast<char>(static_cast<int>(asDouble(fill)) & 0xFF);
+                    }
+                    push(std::string(static_cast<size_t>(count), fillChar));
+                    break;
+                }
+                case OpCode::FN_SPACE: {
+                    int64_t count = static_cast<int64_t>(std::llround(asDouble(pop())));
+                    if (count < 0) count = 0;
+                    if (count > 65535) { runtimeError("SPACE$ count too large", instr.line); count = 0; }
+                    push(std::string(static_cast<size_t>(count), ' '));
+                    break;
+                }
+                case OpCode::FN_SPC: {
+                    int64_t count = static_cast<int64_t>(std::llround(asDouble(pop())));
+                    if (count < 0) count = 0;
+                    printSpaces(static_cast<int>(count));
+                    push(std::string(""));
+                    break;
+                }
+                // --- System / time functions ---
+                case OpCode::FN_TIMER: {
+                    // Seconds since midnight, with centisecond precision.
+                    auto now = std::chrono::system_clock::now();
+                    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+                    std::tm lt{};
+                    localtime_s(&lt, &tt);
+                    double secs = lt.tm_hour * 3600.0 + lt.tm_min * 60.0 + lt.tm_sec;
+                    auto frac = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+                    push(secs + frac / 1000.0);
+                    break;
+                }
+                case OpCode::FN_DATE: {
+                    std::time_t tt = std::time(nullptr);
+                    std::tm lt{};
+                    localtime_s(&lt, &tt);
+                    char buf[16];
+                    std::snprintf(buf, sizeof(buf), "%02d-%02d-%04d", lt.tm_mon + 1, lt.tm_mday, lt.tm_year + 1900);
+                    push(std::string(buf));
+                    break;
+                }
+                case OpCode::FN_TIME: {
+                    std::time_t tt = std::time(nullptr);
+                    std::tm lt{};
+                    localtime_s(&lt, &tt);
+                    char buf[16];
+                    std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", lt.tm_hour, lt.tm_min, lt.tm_sec);
+                    push(std::string(buf));
+                    break;
+                }
+                case OpCode::FN_ERRSTR: {
+                    push(lastErrorMessage);
+                    break;
+                }
+                case OpCode::RAISE_ERROR: {
+                    int code = asCheckedInt(pop(), instr.line, "ERROR code", 0, 255);
+                    runtimeError("User-defined error " + std::to_string(code), instr.line);
+                    break;
+                }
                 case OpCode::SHOW_HELP: printHelp(); break;
                 case OpCode::SHOW_VERSION: printVersion(); break;
                 case OpCode::HALT: return;
@@ -2572,6 +2995,7 @@ public:
                 int line = err.line > 0 ? err.line : instr.line;
                 lastErrorCode = classifyErrorCode(err.message);
                 lastErrorLine = line;
+                lastErrorMessage = err.message;
 
                 if (onErrorEnabled && onErrorTargetIp >= 0 && !errorActive) {
                     errorActive = true;
@@ -2596,25 +3020,38 @@ public:
 // ============================================================================
 // 5. CLI HANDLER & REPL ENVIRONMENT
 // ============================================================================
-void executeSource(const std::string& source, bool dump = false) {
+
+// Normalize BASIC source into line-numbered, sorted form. Lines that begin with
+// a valid line number keep it; unnumbered lines are auto-assigned numbers
+// (stepping by 10) after the highest existing line. Malformed line numbers are
+// treated as unnumbered rather than crashing. Shared by executeSource and the
+// REPL LOAD path so both normalize identically.
+static std::string normalizeBasicSource(const std::string& source) {
     std::stringstream ss(source);
     std::map<int, std::string> lineMap;
     std::string line;
-
-    struct PendingUnnumberedLine {
-        std::string text;
-    };
-    std::vector<PendingUnnumberedLine> unnumberedLines;
+    std::vector<std::string> unnumberedLines;
 
     while (std::getline(ss, line)) {
         size_t first = line.find_first_not_of(" \t\r\n");
         if (first == std::string::npos) continue;
         std::string trimmed = line.substr(first);
-        if (std::isdigit(trimmed[0])) {
-            int lineNum = std::stoi(trimmed);
-            lineMap[lineNum] = trimmed;
+        if (!trimmed.empty() && safeIsDigit(trimmed[0])) {
+            // Guard against malformed / out-of-range line numbers so a bad
+            // source line cannot terminate the process.
+            try {
+                size_t numEnd = 0;
+                long long parsed = std::stoll(trimmed, &numEnd);
+                if (numEnd > 0 && parsed >= 0 && parsed <= std::numeric_limits<int>::max()) {
+                    lineMap[static_cast<int>(parsed)] = trimmed;
+                } else {
+                    unnumberedLines.push_back(trimmed);
+                }
+            } catch (...) {
+                unnumberedLines.push_back(trimmed);
+            }
         } else {
-            unnumberedLines.push_back({trimmed});
+            unnumberedLines.push_back(trimmed);
         }
     }
 
@@ -2623,14 +3060,17 @@ void executeSource(const std::string& source, bool dump = false) {
         while (lineMap.count(autoLine) != 0) {
             autoLine += 10;
         }
-        lineMap[autoLine] = std::to_string(autoLine) + " " + pending.text;
+        lineMap[autoLine] = std::to_string(autoLine) + " " + pending;
         autoLine += 10;
     }
 
     std::stringstream sortedSource;
     for (const auto& entry : lineMap) sortedSource << entry.second << "\n";
+    return sortedSource.str();
+}
 
-    auto tokens = tokenizeSource(sortedSource.str());
+void executeSource(const std::string& source, bool dump = false, bool trace = false) {
+    auto tokens = tokenizeSource(normalizeBasicSource(source));
 
     Compiler compiler(tokens);
     auto [bytecode, dataValues, symbolTable] = compiler.compile();
@@ -2638,33 +3078,122 @@ void executeSource(const std::string& source, bool dump = false) {
     if (dump) dumpBytecode(bytecode, dataValues, symbolTable);
 
     VirtualMachine vm;
+    if (trace) {
+        // Print each source line as it begins executing (deduped per line).
+        int lastTracedLine = -1;
+        vm.setStepHook([lastTracedLine](size_t, const Instruction& instr) mutable {
+            if (instr.line > 0 && instr.line != lastTracedLine) {
+                std::cout << "[TRACE] line " << instr.line << "\n";
+                lastTracedLine = instr.line;
+            }
+            return true;
+        });
+    }
     vm.run(bytecode, dataValues, symbolTable);
 }
 
+// Read a REPL input line with up/down-arrow command history recall. Returns
+// false on EOF (Ctrl+Z / stream close). Printable characters echo; Backspace
+// edits; Up/Down walk the history; Enter accepts.
+static bool readReplLine(std::string& outLine, std::vector<std::string>& history) {
+    outLine.clear();
+
+    // When stdin is not an interactive console (piped/redirected), _kbhit blocks
+    // forever. Fall back to a plain getline so scripts and pipes work.
+    static const bool isConsole = []() {
+        HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        return hIn != INVALID_HANDLE_VALUE && GetConsoleMode(hIn, &mode);
+    }();
+    if (!isConsole) {
+        if (std::getline(std::cin, outLine)) {
+            std::cout << outLine << "\n"; // echo so piped input is visible
+            return true;
+        }
+        return false;
+    }
+
+    int histIdx = static_cast<int>(history.size()); // one past the newest
+
+    while (true) {
+        if (!_kbhit()) {
+            // Avoid a busy spin; brief sleep then re-check for input.
+            Sleep(1);
+            continue;
+        }
+        int c = _getch();
+
+        if (c == '\r' || c == '\n') {
+            std::cout << "\n";
+            return true;
+        }
+        if (c == 8) { // Backspace
+            if (!outLine.empty()) {
+                outLine.pop_back();
+                std::cout << "\b \b";
+            }
+            continue;
+        }
+        if (c == 0 || c == 224) { // extended key
+            int ext = _getch();
+            if (ext == 72) { // Up
+                if (histIdx > 0) {
+                    histIdx--;
+                    // Clear current line on screen.
+                    for (size_t k = 0; k < outLine.size(); ++k) std::cout << "\b \b";
+                    outLine = history[histIdx];
+                    std::cout << outLine;
+                }
+            } else if (ext == 80) { // Down
+                if (histIdx < static_cast<int>(history.size())) {
+                    histIdx++;
+                    for (size_t k = 0; k < outLine.size(); ++k) std::cout << "\b \b";
+                    outLine = (histIdx < static_cast<int>(history.size())) ? history[histIdx] : "";
+                    std::cout << outLine;
+                }
+            }
+            continue;
+        }
+        if (c >= 32 && c < 127) {
+            outLine.push_back(static_cast<char>(c));
+            std::cout << static_cast<char>(c);
+        }
+    }
+}
+
 void runRepl() {
-    std::cout << "CrossBASIC Interpreter & Virtual Machine v3.0\n";
+    std::cout << "CrossBASIC Interpreter & Virtual Machine v3.8\n";
     std::cout << "Type BASIC statements, 'VERSION', 'SAVE', 'LOAD', 'HELP', or 'EXIT' to quit.\n\n";
 
     VirtualMachine vm;
     std::map<int, std::string> programMemory;
 
+    // Command history for up-arrow recall.
+    std::vector<std::string> history;
+
     std::string line;
     while (true) {
         std::cout << "BASIC> ";
-        if (!std::getline(std::cin, line)) break;
+        if (!readReplLine(line, history)) break;
 
         size_t first = line.find_first_not_of(" \t\r\n");
         if (first == std::string::npos) continue;
         size_t last = line.find_last_not_of(" \t\r\n");
         std::string trimmed = line.substr(first, (last - first + 1));
 
+        // Record non-empty commands in history (most recent last, capped at 100).
+        if (history.empty() || history.back() != trimmed) {
+            history.push_back(trimmed);
+            if (history.size() > 100) history.erase(history.begin());
+        }
+
         std::string upperLine = trimmed;
-        std::transform(upperLine.begin(), upperLine.end(), upperLine.begin(), ::toupper);
+        upperInPlace(upperLine);
 
         if (upperLine == "EXIT") break;
 
         // Line number entry
-        if (std::isdigit(trimmed[0])) {
+        if (!trimmed.empty() && safeIsDigit(trimmed[0])) {
             std::stringstream lss(trimmed);
             int lineNum;
             lss >> lineNum;
@@ -2687,7 +3216,7 @@ void runRepl() {
         std::string cmd;
         css >> cmd;
         std::string upperCmd = cmd;
-        std::transform(upperCmd.begin(), upperCmd.end(), upperCmd.begin(), ::toupper);
+        upperInPlace(upperCmd);
 
         if (upperCmd == "VERSION") { printVersion(); continue; }
         else if (upperCmd == "RUN") {
@@ -2710,6 +3239,133 @@ void runRepl() {
             programMemory.clear();
             vm = VirtualMachine();
             std::cout << "Program memory cleared.\n";
+            continue;
+        }
+        else if (upperCmd == "RENUM") {
+            // RENUM [newStart][,[oldStart][,step]] -- renumber program lines and
+            // rewrite GOTO/GOSUB/ON/THEN/ELSE/RESUME targets.
+            std::string arg;
+            std::getline(css, arg);
+            int newStart = 10, oldStart = 0, step = 10;
+            // Parse up to three comma-separated integers.
+            std::vector<int> parts;
+            std::stringstream ass(arg);
+            std::string tok;
+            while (std::getline(ass, tok, ',')) {
+                size_t tp = tok.find_first_not_of(" \t");
+                if (tp != std::string::npos) {
+                    try { parts.push_back(std::stoi(tok.substr(tp))); } catch (...) {}
+                }
+            }
+            if (!parts.empty()) newStart = parts[0];
+            if (parts.size() > 1) oldStart = parts[1];
+            if (parts.size() > 2) step = parts[2];
+            if (step <= 0) step = 10;
+
+            // Build old->new line number map.
+            std::map<int, int> renumMap;
+            int nextNum = newStart;
+            for (const auto& pair : programMemory) {
+                if (pair.first >= oldStart) {
+                    renumMap[pair.first] = nextNum;
+                    nextNum += step;
+                } else {
+                    renumMap[pair.first] = pair.first; // keep lines below oldStart
+                }
+            }
+
+            // Rewrite each line: new number + remapped jump targets.
+            std::map<int, std::string> newMem;
+            for (const auto& pair : programMemory) {
+                std::string body = pair.second;
+                // Strip the leading line number.
+                size_t np = body.find_first_not_of(" \t");
+                size_t numEnd = 0;
+                while (np + numEnd < body.size() && safeIsDigit(body[np + numEnd])) numEnd++;
+                std::string rest = body.substr(np + numEnd);
+
+                // Remap line references after GOTO/GOSUB/THEN/ELSE/RESUME/ON.
+                std::string rewritten;
+                std::stringstream rss(rest);
+                std::string word;
+                bool expectLineRef = false;
+                char ch;
+                std::string token;
+                // Simple token-wise remap: split on spaces, remap numeric tokens
+                // that follow a jump keyword.
+                std::vector<std::string> words;
+                std::string w;
+                std::stringstream wss(rest);
+                while (wss >> w) words.push_back(w);
+                for (size_t wi = 0; wi < words.size(); ++wi) {
+                    std::string uw = words[wi];
+                    upperInPlace(uw);
+                    bool isJumpKw = (uw == "GOTO" || uw == "GOSUB" || uw == "THEN" ||
+                                     uw == "ELSE" || uw == "RESUME");
+                    if (isJumpKw && wi + 1 < words.size()) {
+                        rewritten += words[wi] + " ";
+                        // Remap the following numeric token (possibly comma list for ON).
+                        std::string& target = words[wi + 1];
+                        std::stringstream tss(target);
+                        std::string tpart;
+                        std::string remapped;
+                        while (std::getline(tss, tpart, ',')) {
+                            try {
+                                int oldLn = std::stoi(tpart);
+                                auto it = renumMap.find(oldLn);
+                                remapped += (it != renumMap.end() ? std::to_string(it->second) : tpart);
+                            } catch (...) {
+                                remapped += tpart;
+                            }
+                            remapped += ",";
+                        }
+                        if (!remapped.empty()) remapped.pop_back();
+                        rewritten += remapped + " ";
+                        ++wi;
+                    } else {
+                        rewritten += words[wi] + " ";
+                    }
+                }
+                if (!rewritten.empty()) rewritten.pop_back();
+
+                int newLn = renumMap[pair.first];
+                newMem[newLn] = std::to_string(newLn) + " " + rewritten;
+            }
+            programMemory = std::move(newMem);
+            std::cout << "Program renumbered.\n";
+            continue;
+        }
+        else if (upperCmd == "AUTO") {
+            // AUTO [start][,step] -- auto line-number entry mode.
+            std::string arg;
+            std::getline(css, arg);
+            int autoNum = 10, autoStep = 10;
+            std::vector<int> parts;
+            std::stringstream ass(arg);
+            std::string tok;
+            while (std::getline(ass, tok, ',')) {
+                size_t tp = tok.find_first_not_of(" \t");
+                if (tp != std::string::npos) {
+                    try { parts.push_back(std::stoi(tok.substr(tp))); } catch (...) {}
+                }
+            }
+            if (!parts.empty()) autoNum = parts[0];
+            if (parts.size() > 1) autoStep = parts[1];
+            if (autoStep <= 0) autoStep = 10;
+            if (!programMemory.empty() && parts.empty()) {
+                autoNum = programMemory.rbegin()->first + 10;
+            }
+
+            std::cout << "(AUTO mode -- enter line text, empty line to stop)\n";
+            std::string autoLine;
+            while (true) {
+                std::cout << autoNum << " ";
+                if (!std::getline(std::cin, autoLine)) break;
+                size_t af = autoLine.find_first_not_of(" \t\r\n");
+                if (af == std::string::npos) break; // empty line ends AUTO
+                programMemory[autoNum] = std::to_string(autoNum) + " " + autoLine.substr(af);
+                autoNum += autoStep;
+            }
             continue;
         }
         else if (upperCmd == "SAVE") {
@@ -2747,33 +3403,28 @@ void runRepl() {
 
             std::ifstream inFile(sandboxedPath);
             if (!inFile.is_open()) { printErrorLine("Error: Could not open file " + sandboxedPath); continue; }
+
+            // Read the whole file, normalize it with the shared helper (same
+            // line-numbering/sorting as executeSource), then rebuild memory.
+            std::stringstream fileContents;
+            fileContents << inFile.rdbuf();
+            inFile.close();
+
+            std::string normalized = normalizeBasicSource(fileContents.str());
             programMemory.clear();
-            std::string fileLine;
-            int lineCount = 0, autoLineNum = 10;
-            std::vector<std::string> unnumberedLoadedLines;
-
-            while (std::getline(inFile, fileLine)) {
-                size_t fFirst = fileLine.find_first_not_of(" \t\r\n");
-                if (fFirst == std::string::npos) continue;
-                std::string fTrimmed = fileLine.substr(fFirst);
-
-                if (std::isdigit(fTrimmed[0])) {
-                    std::stringstream lss(fTrimmed);
-                    int lNum; lss >> lNum;
-                    programMemory[lNum] = fTrimmed;
-                } else {
-                    unnumberedLoadedLines.push_back(fTrimmed);
+            int lineCount = 0;
+            std::stringstream nss(normalized);
+            std::string nline;
+            while (std::getline(nss, nline)) {
+                size_t nFirst = nline.find_first_not_of(" \t\r\n");
+                if (nFirst == std::string::npos) continue;
+                std::stringstream lss(nline.substr(nFirst));
+                long long lNum = 0;
+                lss >> lNum;
+                if (!lss.fail() && lNum >= 0 && lNum <= std::numeric_limits<int>::max()) {
+                    programMemory[static_cast<int>(lNum)] = nline.substr(nFirst);
+                    lineCount++;
                 }
-                lineCount++;
-            }
-
-            autoLineNum = programMemory.empty() ? 10 : (programMemory.rbegin()->first + 10);
-            for (const auto& pending : unnumberedLoadedLines) {
-                while (programMemory.count(autoLineNum) != 0) {
-                    autoLineNum += 10;
-                }
-                programMemory[autoLineNum] = std::to_string(autoLineNum) + " " + pending;
-                autoLineNum += 10;
             }
 
             inFile.close();
@@ -2805,7 +3456,12 @@ int main(int argc, char* argv[]) {
         if (arg1 == "--version" || arg1 == "-v") { printVersion(); return 0; }
 
         bool dump = false;
-        if (argc > 2 && std::string(argv[2]) == "--dump") dump = true;
+        bool trace = false;
+        for (int i = 2; i < argc; ++i) {
+            std::string opt = argv[i];
+            if (opt == "--dump") dump = true;
+            else if (opt == "--trace") trace = true;
+        }
 
         std::string filename = ensureExtension(arg1);
         std::string sandboxedPath;
@@ -2822,7 +3478,7 @@ int main(int argc, char* argv[]) {
         }
         std::stringstream buffer;
         buffer << file.rdbuf();
-        executeSource(buffer.str(), dump);
+        executeSource(buffer.str(), dump, trace);
     } else {
         runRepl();
     }

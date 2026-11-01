@@ -2,7 +2,7 @@
 #include <iostream>
 
 void printVersion() {
-    std::cout << "CrossBASIC Interpreter & Virtual Machine v3.7\n";
+    std::cout << "CrossBASIC Interpreter & Virtual Machine v3.8\n";
     std::cout << "Copyright (C) 2026, Roberto J. Dohnert\n";
     std::cout << "Inspired by Microsoft BASIC by Bill Gates and Paul Allen\n\n";
 }
@@ -14,7 +14,7 @@ void printHelp() {
         cbasic - Run Microsoft BASIC-compatible programs and statements.
 
     SYNOPSIS
-        cbasic [FILE [--dump]]
+        cbasic [FILE [--dump] [--trace]]
         cbasic [--help | --version]
 
     DESCRIPTION
@@ -28,6 +28,9 @@ void printHelp() {
         --dump
             Print the bytecode disassembly, symbol table, and static data
             buffer before executing FILE.
+
+        --trace
+            Print each source line as it begins executing (execution trace).
 
         -h, --help
             Display this reference manual.
@@ -44,6 +47,12 @@ void printHelp() {
 
         NEW
             Clear the program in memory.
+
+        RENUM [new][,[old][,step]]
+            Renumber the program in memory and rewrite jump targets.
+
+        AUTO [start][,step]
+            Enter automatic line-numbering entry mode.
 
         SAVE FILE
             Save the program in memory within the current directory sandbox.

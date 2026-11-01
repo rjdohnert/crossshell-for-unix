@@ -1,39 +1,36 @@
+[CmdletBinding()]
 param(
-    [string]$Action = "build"
+    [ValidateSet('auto', 'clang', 'cl', 'gcc')]
+    [string]$Compiler = 'auto',
+    [switch]$Clean,
+    [switch]$NoInstall
 )
-
-$ErrorActionPreference = "Stop"
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Push-Location $scriptDir
-
+$ErrorActionPreference = 'Stop'
+$ToolName = 'fsctl'
+$SourceFiles = @("main.c", "cli.c", "console.c", "dirlist.c", "drives.c", "fileops.c", "filter.c", "format.c", "input.c", "render.c", "ssh.c")
+Push-Location $PSScriptRoot
 try {
-    if ($Action -eq "clean") {
-        Remove-Item -Force -ErrorAction SilentlyContinue fsctl.exe, *.obj, *.o, *.pdb, *.ilk
-        Write-Host "[fsctl] Clean complete."
+    if ($Clean) {
+        Remove-Item *.obj, *.o, "$ToolName.exe", *.pdb, *.ilk -Force -ErrorAction SilentlyContinue
         return
     }
-
-    if (-not (Get-Command clang++ -ErrorAction SilentlyContinue)) {
-        Write-Error "[fsctl] Error: clang++ not found in PATH."
-        exit 1
+    if ($Compiler -eq 'auto') {
+        if (Get-Command clang -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
+        elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) { $Compiler = 'cl' }
+        elseif (Get-Command gcc -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
+        else { throw 'No suitable C compiler found (clang, cl, or gcc required).' }
     }
-
-    Write-Host "[fsctl] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 fsctl.cpp -lmpr -lwininet -lshell32 -ladvapi32 -Wl,/subsystem:console -o fsctl.exe
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "[fsctl] Build failed."
-        exit $LASTEXITCODE
+    switch ($Compiler) {
+        'clang' { & clang -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -o "$ToolName.exe" @SourceFiles -l shell32 -l mpr  }
+        'cl' { & cl.exe /nologo /std:c17 /O2 /DWIN32_LEAN_AND_MEAN /DNOMINMAX "/Fe:$ToolName.exe" @SourceFiles shell32.lib mpr.lib  }
+        'gcc' { & gcc -std=c99 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX   -o "$ToolName.exe" @SourceFiles -lshell32 -lmpr  }
     }
-
-    Write-Host "[fsctl] Build successful: fsctl.exe"
-
-    if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force fsctl.exe "..\..\bin\fsctl.exe"
-            Write-Host "[fsctl] Installed to ..\..\bin\fsctl.exe"
-        }
+    if ($LASTEXITCODE -ne 0) { throw "Build failed for $ToolName (exit $LASTEXITCODE)." }
+    Write-Host "[$ToolName] Build successful: $ToolName.exe"
+    if (-not $NoInstall) {
+        $BinDir = Join-Path $PSScriptRoot '../../bin'
+        New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+        Copy-Item "$ToolName.exe" $BinDir -Force
+        Write-Host "[$ToolName] Installed to $BinDir\$ToolName.exe"
     }
-}
-finally {
-    Pop-Location
-}
+} finally { Pop-Location }

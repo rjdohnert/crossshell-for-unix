@@ -1,0 +1,4 @@
+10 X = 1
+20 X = X + 1
+30 IF X < 4 THEN GOTO 20
+40 PRINT X

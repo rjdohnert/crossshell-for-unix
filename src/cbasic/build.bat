@@ -14,7 +14,7 @@ if errorlevel 1 (
 )
 
 echo [cbasic] Compiling with clang++...
-clang++ -std=c++17 -O2 cbasic.cpp cbasic_helpers.cpp cbasic_lexer.cpp cbasic_cli.cpp "-Wl,/subsystem:console" -o cbasic.exe
+clang++ -std=c++17 -O2 cbasic.cpp cbasic_helpers.cpp cbasic_lexer.cpp cbasic_cli.cpp cbasic_array.cpp "-Wl,/subsystem:console" -o cbasic.exe
 if errorlevel 1 (
     echo [cbasic] Build failed.
     popd

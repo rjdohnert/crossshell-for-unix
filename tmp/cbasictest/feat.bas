@@ -1,0 +1,19 @@
+10 PRINT SIN(0)
+20 PRINT INT(COS(0))
+30 PRINT SGN(-5)
+40 PRINT SGN(0)
+50 PRINT SGN(9)
+60 PRINT UCASE$("hello")
+70 PRINT LCASE$("WORLD")
+68 PRINT LTRIM$("   pad")
+69 PRINT RTRIM$("pad   ") + "|"
+80 PRINT INSTR("hello world", "world")
+81 PRINT INSTR(6, "hello world hello", "hello")
+82 PRINT STRING$(5, "*")
+83 PRINT SPACE$(3) + "x"
+84 PRINT LEN(DATE$)
+85 PRINT TIMER >= 0
+86 ON ERROR GOTO 100
+87 ERROR 42
+100 PRINT "caught err"; ERR; "line"; ERL
+110 PRINT ERR$
