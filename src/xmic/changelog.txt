@@ -1,0 +1,35 @@
+================================================================================
+xmic - Change Log
+================================================================================
+
+--------------------------------------------------------------------------------
+2026-11-01
+--------------------------------------------------------------------------------
+
+BUG FIXES
+---------
+* Child Process Capture:
+  - Added a bounded timeout, explicit inherited-handle allowlist, and checks for
+    pipe-read, wait, and process-exit-code failures.
+  - SSH key passphrases are now delivered through a per-run named pipe instead
+    of an environment variable.
+
+* Interactive Shell and Command Validation:
+  - Saved passwords are no longer forwarded on child-process command lines.
+  - Interactive settings reject missing values and support explicit boolean
+    values and resetting configuration.
+  - Custom WMI path verbs reject unexpected trailing arguments.
+
+* WSL Detection:
+  - Probe failures retain their specific status instead of being reported as no
+    distributions found; WSL CLI failures are classified accurately.
+  - Self-tests now cover exact status behavior and failure classification.
+
+* WMI Data and Parameters:
+  - JSON output represents non-finite floating-point values as null and makes
+    unsupported array element types explicit instead of silently discarding
+    them.
+  - Zero-byte values are formatted as zero, and RAM size conversions detect
+    overflow.
+  - Registry method inputs and WMI method-call string allocations now report
+    allocation and parameter-setting failures.

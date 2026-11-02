@@ -4,6 +4,8 @@
 #include "jobs.hpp"
 #include "scripting.hpp"
 
+using namespace std;
+
 bool g_login_shell = false;
 vector<FunctionLocalScope> g_function_local_scopes;
 

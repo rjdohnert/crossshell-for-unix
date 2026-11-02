@@ -2,6 +2,8 @@
 #include "engine.hpp"
 #include "scripting.hpp"
 
+using namespace std;
+
 wstring system_cmd_exe_path() {
     wchar_t system_directory[MAX_PATH] = {};
     UINT length = GetSystemDirectoryW(system_directory, MAX_PATH);

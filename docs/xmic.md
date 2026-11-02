@@ -37,7 +37,7 @@ xmic query "<WQL_QUERY>" <PROP1> [PROP2 ...]
 - `--console-encoding utf16|utf8`: choose console encoding.
 - `--timing`, `--benchmark-runs N`, `--benchmark-quiet`: report timing or repeat a command.
 - `--script FILE`, `--script-stop-on-error`, `--script-no-echo`: execute command scripts.
-- `help`, `shell`, `selftest`: show help, open the interactive shell, or run WSL detection checks.
+- `help`, `shell`, `selftest`: show help, open the interactive shell, or run WSL detection and CLI validation checks.
 
 ## Examples
 

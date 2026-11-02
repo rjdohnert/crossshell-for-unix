@@ -6,6 +6,8 @@
 #include "builtins.hpp"
 #include "terminal.hpp"
 
+using namespace std;
+
 bool g_script_returning  = false;
 int  g_script_return_code = 0;
 bool g_in_try_block       = false;
@@ -232,7 +234,11 @@ int execute_for_loop(const string& block) {
         items_trimmed == "\"$*\"" || items_trimmed == "${@}") {
         items = g_env.positional_args;
     } else {
-        items = tokenize_words(g_env.expand_vars(items_str));
+        vector<string> words = tokenize_words(g_env.expand_vars(items_str));
+        for (const auto& w : words) {
+            vector<string> brace_expanded = expand_brace_word(w);
+            items.insert(items.end(), brace_expanded.begin(), brace_expanded.end());
+        }
         items = expand_globs(items);
     }
 
@@ -305,7 +311,7 @@ int execute_cstyle_for_loop(const string& block) {
     string body = trim_copy(s.substr(do_pos + 2, done_pos - (do_pos + 2)));
 
     for (const auto& expr : split_on_top_level_commas(parts[0])) {
-        if (!expr.empty()) parse_and_execute("let " + expr);
+        if (!expr.empty()) eval_arithmetic_command(expr);
     }
 
     int last_rc = 0;
@@ -327,14 +333,14 @@ int execute_cstyle_for_loop(const string& block) {
             --g_loop_continuing;
             if (g_loop_continuing > 0) break;
             for (const auto& expr : split_on_top_level_commas(parts[2])) {
-                if (!expr.empty()) parse_and_execute("let " + expr);
+                if (!expr.empty()) eval_arithmetic_command(expr);
             }
             continue;
         }
         if (g_script_returning || g_subshell_exiting) break;
 
         for (const auto& expr : split_on_top_level_commas(parts[2])) {
-            if (!expr.empty()) parse_and_execute("let " + expr);
+            if (!expr.empty()) eval_arithmetic_command(expr);
         }
 
         if (++guard > 1000000) {
@@ -434,7 +440,9 @@ int execute_case_block(const string& block) {
         size_t rp = string::npos;
         bool pattern_sq = false, pattern_dq = false;
         int pattern_depth = 0;
-        for (size_t i = 0; i < cl.size(); ++i) {
+        // POSIX allows an optional '(' before the pattern list: (pat) action
+        size_t pat_start = (!cl.empty() && cl[0] == '(') ? 1 : 0;
+        for (size_t i = pat_start; i < cl.size(); ++i) {
             char ch = cl[i];
             if (ch == '"' && !pattern_sq) { pattern_dq = !pattern_dq; continue; }
             if (ch == '\'' && !pattern_dq) { pattern_sq = !pattern_sq; continue; }
@@ -446,7 +454,7 @@ int execute_case_block(const string& block) {
             }
         }
         if (rp == string::npos) continue;
-        string pat_expr = trim_copy(cl.substr(0, rp));
+        string pat_expr = trim_copy(cl.substr(pat_start, rp - pat_start));
         string action = trim_copy(cl.substr(rp + 1));
 
         bool matched = force_next_action;
@@ -1059,8 +1067,10 @@ int execute_mixed_pipeline(const Pipeline& pipeline) {
     }
     vector<string> state_paths;
 
-    for (auto& command : concurrent.cmds) {
-        if (!is_shell_pipeline_stage(command)) continue;
+    for (size_t ci = 0; ci < concurrent.cmds.size(); ++ci) {
+        auto& command = concurrent.cmds[ci];
+        bool is_compound = ci < pipeline.compound_sources.size() && !pipeline.compound_sources[ci].empty();
+        if (!is_compound && !is_shell_pipeline_stage(command)) continue;
         string state_path = create_temp_process_subst_path();
         if (state_path.empty() || !save_pipeline_shell_state(state_path)) {
             cerr << "zsh: unable to save pipeline shell state\n";
@@ -1072,7 +1082,12 @@ int execute_mixed_pipeline(const Pipeline& pipeline) {
         }
         state_paths.push_back(state_path);
         vector<string> child_args{shell_executable, "--pipeline-stage", state_path};
-        child_args.insert(child_args.end(), command.args.begin(), command.args.end());
+        if (is_compound) {
+            child_args.push_back("--compound");
+            child_args.push_back(pipeline.compound_sources[ci]);
+        } else {
+            child_args.insert(child_args.end(), command.args.begin(), command.args.end());
+        }
         command.args = std::move(child_args);
     }
 
@@ -1580,8 +1595,9 @@ int execute_statement_block_aware(const string& statement) {
         return execute_compound_with_redirection(compound_part, redir_part);
     }
     if (stmt.size() >= 4 && stmt.rfind("((", 0) == 0 && stmt.substr(stmt.size() - 2) == "))") {
-        string expr = trim_copy(stmt.substr(2, stmt.size() - 4));
-        return parse_and_execute("let " + expr);
+        // Evaluate directly: re-parsing through "let" would split on spaces and
+        // misinterpret arithmetic '<'/'>' operators as shell redirections.
+        return eval_arithmetic_command(stmt.substr(2, stmt.size() - 4));
     }
     if (starts_with_word_trimmed(stmt, "try") || (stmt.front() == '{' && find_top_level_word(stmt, "always") != string::npos))
         return execute_always_block(stmt);
@@ -1597,6 +1613,41 @@ int execute_statement_block_aware(const string& statement) {
     if (starts_with_word_trimmed(stmt, "until")) return execute_condition_loop(stmt, true);
     if (starts_with_word_trimmed(stmt, "repeat")) return execute_repeat_loop(stmt);
     if (starts_with_word_trimmed(stmt, "select")) return execute_select_loop(stmt);
+
+    // A pipeline whose stages include a compound construct (while/case/if/
+    // subshell/brace-group) must go through parse_pipeline's compound fast
+    // path, not the compound-statement handlers above (which would treat the
+    // whole line as one construct and choke on the '|').
+    {
+        bool q_sq = false, q_dq = false, esc = false;
+        int p_depth = 0, b_depth = 0, db_depth = 0;
+        bool has_top_pipe = false;
+        for (size_t i = 0; i < stmt.size(); ++i) {
+            char c = stmt[i];
+            if (esc) { esc = false; continue; }
+            if (c == '\\' && !q_sq) { esc = true; continue; }
+            if (c == '"' && !q_sq) { q_dq = !q_dq; continue; }
+            if (c == '\'' && !q_dq) { q_sq = !q_sq; continue; }
+            if (q_sq || q_dq) continue;
+            if (c == '[' && i + 1 < stmt.size() && stmt[i + 1] == '[') { ++db_depth; ++i; continue; }
+            if (c == ']' && i + 1 < stmt.size() && stmt[i + 1] == ']' && db_depth > 0) { --db_depth; ++i; continue; }
+            if (db_depth > 0) continue;
+            if (c == '(') { ++p_depth; continue; }
+            if (c == ')' && p_depth > 0) { --p_depth; continue; }
+            if (c == '{') { ++b_depth; continue; }
+            if (c == '}' && b_depth > 0) { --b_depth; continue; }
+            if (c == '|' && p_depth == 0 && b_depth == 0 &&
+                (i + 1 >= stmt.size() || stmt[i + 1] != '|') &&
+                (i == 0 || stmt[i - 1] != '|')) { has_top_pipe = true; break; }
+        }
+        if (has_top_pipe) {
+            int rc = execute_single_command(stmt);
+            g_env.vars["pipestatus"] = to_string(rc);
+            g_env.indexed_arrays["pipestatus"] = { to_string(rc) };
+            return rc;
+        }
+    }
+
     int rc = execute_single_command(stmt);
     g_env.vars["pipestatus"] = to_string(rc);
     g_env.indexed_arrays["pipestatus"] = { to_string(rc) };
@@ -1641,7 +1692,9 @@ int execute_single_command(const string& line) {
     };
 
     int rc;
-    bool has_shell_stage = any_of(pl.cmds.begin(), pl.cmds.end(), is_shell_pipeline_stage);
+    bool has_shell_stage = any_of(pl.cmds.begin(), pl.cmds.end(), is_shell_pipeline_stage) ||
+                           any_of(pl.compound_sources.begin(), pl.compound_sources.end(),
+                                  [](const string& s) { return !s.empty(); });
     bool scoped_extra_descriptors = pl.cmds.size() == 1 && is_shell_pipeline_stage(pl.cmds[0]) &&
                                     (!pl.cmds[0].extra_input_files.empty() || !pl.cmds[0].extra_output_files.empty() ||
                                      !pl.cmds[0].extra_fd_duplications.empty() || !pl.cmds[0].extra_closed_fds.empty());

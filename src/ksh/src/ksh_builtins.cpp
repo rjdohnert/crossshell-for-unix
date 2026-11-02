@@ -1597,7 +1597,13 @@ bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstri
                 std::wstring width_str;
                 if (i < format.size() && format[i] == L'*') {
                     if (arg_idx < tokens.size()) {
-                        width_str = tokens[arg_idx++];
+                        long width_val = 0;
+                        try {
+                            width_val = std::stol(tokens[arg_idx++]);
+                        } catch (...) {
+                            width_val = 0;
+                        }
+                        width_str = std::to_wstring(width_val);
                     }
                     i++;
                 } else {
@@ -1614,7 +1620,17 @@ bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstri
                     i++;
                     if (i < format.size() && format[i] == L'*') {
                         if (arg_idx < tokens.size()) {
-                            prec_str = tokens[arg_idx++];
+                            long prec_val = 0;
+                            try {
+                                prec_val = std::stol(tokens[arg_idx++]);
+                            } catch (...) {
+                                prec_val = 0;
+                            }
+                            if (prec_val >= 0) {
+                                prec_str = std::to_wstring(prec_val);
+                            } else {
+                                has_prec = false;
+                            }
                         }
                         i++;
                     } else {
@@ -1646,9 +1662,77 @@ bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstri
                 buf[0] = 0;
                 
                 if (type_char == L's') {
-                    fmt_spec += L"s";
-                    _snwprintf_s(buf, _countof(buf), _TRUNCATE, fmt_spec.c_str(), cur_arg.c_str());
-                    output_str += buf;
+                    std::wstring formatted_s = cur_arg;
+                    if (has_prec && !prec_str.empty()) {
+                        try {
+                            size_t p = static_cast<size_t>(std::stoul(prec_str));
+                            if (formatted_s.size() > p) {
+                                formatted_s = formatted_s.substr(0, p);
+                            }
+                        } catch (...) {}
+                    }
+                    size_t w = 0;
+                    if (!width_str.empty()) {
+                        try {
+                            w = static_cast<size_t>(std::stoul(width_str));
+                        } catch (...) {}
+                    }
+                    if (formatted_s.size() < w) {
+                        size_t pad = w - formatted_s.size();
+                        bool left_align = (flags.find(L'-') != std::wstring::npos);
+                        if (left_align) {
+                            output_str += formatted_s;
+                            output_str.append(pad, L' ');
+                        } else {
+                            output_str.append(pad, L' ');
+                            output_str += formatted_s;
+                        }
+                    } else {
+                        output_str += formatted_s;
+                    }
+                } else if (type_char == L'b') {
+                    for (size_t k = 0; k < cur_arg.size(); ++k) {
+                        if (cur_arg[k] == L'\\' && k + 1 < cur_arg.size()) {
+                            wchar_t next = cur_arg[k + 1];
+                            if (next == L'c') {
+                                if (has_var) {
+                                    std::wstring assign_err;
+                                    if (!assign_parameter_value(varname, output_str, false, false, assign_err)) {
+                                        error_msg = L"ksh: printf: variable assignment failed: " + assign_err;
+                                        return false;
+                                    }
+                                    output_str.clear();
+                                }
+                                return true;
+                            } else if (next == L'n') { output_str += L'\n'; k++; }
+                            else if (next == L't') { output_str += L'\t'; k++; }
+                            else if (next == L'r') { output_str += L'\r'; k++; }
+                            else if (next == L'a') { output_str += L'\a'; k++; }
+                            else if (next == L'b') { output_str += L'\b'; k++; }
+                            else if (next == L'f') { output_str += L'\f'; k++; }
+                            else if (next == L'v') { output_str += L'\v'; k++; }
+                            else if (next == L'\\') { output_str += L'\\'; k++; }
+                            else if (next == L'0') {
+                                size_t oct_end = k + 2;
+                                while (oct_end < cur_arg.size() && oct_end < k + 5 && cur_arg[oct_end] >= L'0' && cur_arg[oct_end] <= L'7') {
+                                    oct_end++;
+                                }
+                                if (oct_end > k + 2) {
+                                    long val = std::wcstol(cur_arg.substr(k + 2, oct_end - (k + 2)).c_str(), nullptr, 8);
+                                    output_str += static_cast<wchar_t>(val);
+                                    k = oct_end - 1;
+                                } else {
+                                    output_str += L'\0';
+                                    k++;
+                                }
+                            } else {
+                                output_str += next;
+                                k++;
+                            }
+                        } else {
+                            output_str += cur_arg[k];
+                        }
+                    }
                 } else if (type_char == L'q') {
                     std::wstring escaped = escape_for_double_quotes(cur_arg);
                     output_str += escaped;

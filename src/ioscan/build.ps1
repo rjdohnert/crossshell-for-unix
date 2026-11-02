@@ -1,39 +1,37 @@
+[CmdletBinding()]
 param(
-    [string]$Action = "build"
+    [ValidateSet('auto', 'clang', 'cl', 'gcc')]
+    [string]$Compiler = 'auto',
+    [switch]$Clean,
+    [switch]$NoInstall
 )
-
-$ErrorActionPreference = "Stop"
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Push-Location $scriptDir
-
+$ErrorActionPreference = 'Stop'
+$ToolName = 'ioscan'
+$SourceFiles = @("ioscan.c")
+$ClangLibs = @("-lsetupapi", "-lcfgmgr32")
+Push-Location $PSScriptRoot
 try {
-    if ($Action -eq "clean") {
-        Remove-Item -Force -ErrorAction SilentlyContinue ioscan.exe, *.obj, *.o, *.pdb, *.ilk
-        Write-Host "[ioscan] Clean complete."
+    if ($Clean) {
+        Remove-Item *.obj, *.o, "$ToolName.exe", *.pdb, *.ilk -Force -ErrorAction SilentlyContinue
         return
     }
-
-    if (-not (Get-Command clang++ -ErrorAction SilentlyContinue)) {
-        Write-Error "[ioscan] Error: clang++ not found in PATH."
-        exit 1
+    if ($Compiler -eq 'auto') {
+        if (Get-Command clang -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
+        elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) { $Compiler = 'cl' }
+        elseif (Get-Command gcc -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
+        else { throw 'No suitable C compiler found (clang, cl, or gcc required).' }
     }
-
-    Write-Host "[ioscan] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 ioscan.cpp -lsetupapi -lcfgmgr32 '-Wl,/subsystem:console' -o ioscan.exe
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "[ioscan] Build failed."
-        exit $LASTEXITCODE
+    switch ($Compiler) {
+        'clang' { & clang -std=c99 -O2 -o "$ToolName.exe" @SourceFiles @ClangLibs }
+        'cl'    { & cl.exe /nologo /std:c17 /O2 "/Fe:$ToolName.exe" @SourceFiles setupapi.lib cfgmgr32.lib }
+        'gcc'   { & gcc -std=c99 -O2 -o "$ToolName.exe" @SourceFiles @ClangLibs }
     }
-
-    Write-Host "[ioscan] Build successful: ioscan.exe"
-
-    if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force ioscan.exe "..\..\bin\ioscan.exe"
-            Write-Host "[ioscan] Installed to ..\..\bin\ioscan.exe"
-        }
+    if ($LASTEXITCODE -ne 0) { throw "Build failed for $ToolName (exit $LASTEXITCODE)." }
+    Write-Host "[$ToolName] Build successful: $ToolName.exe"
+    if (-not $NoInstall) {
+        $BinDir = Join-Path $PSScriptRoot '../../bin'
+        New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+        Copy-Item "$ToolName.exe" $BinDir -Force
+        Write-Host "[$ToolName] Installed to $BinDir\$ToolName.exe"
     }
-}
-finally {
-    Pop-Location
-}
+} finally { Pop-Location }

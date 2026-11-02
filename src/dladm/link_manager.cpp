@@ -56,7 +56,10 @@ std::vector<DataLinkInfo> LinkManager::DiscoverDataLinks() {
 
     if (GetAdaptersAddresses(family, flags, nullptr, pAddresses, &bufSize) == NO_ERROR) {
         PIP_ADAPTER_ADDRESSES pCurr = pAddresses;
-        int netIndex = 0;
+        int netIndex = 0;   // physical links: net0, net1, ...
+        int vnicIndex = 0;  // virtual NICs: vnic0, vnic1, ...
+        int aggrIndex = 0;  // aggregations: aggr0, aggr1, ...
+        int vlanIndex = 0;  // VLANs: vlan0, vlan1, ...
 
         while (pCurr) {
             std::wstring wsFriendly(pCurr->FriendlyName);
@@ -66,7 +69,7 @@ std::vector<DataLinkInfo> LinkManager::DiscoverDataLinks() {
             if (!IsSyntheticWindowsInterface(adapterName, adapterName, pCurr->IfType)) {
                 DataLinkInfo info;
                 std::ostringstream linkNameOss;
-                
+
                 info.adapterName = adapterName;
 
                 if (pCurr->IfType == IF_TYPE_IEEE80211) {
@@ -76,13 +79,11 @@ std::vector<DataLinkInfo> LinkManager::DiscoverDataLinks() {
                 } else if (adapterName.find("vEthernet") != std::string::npos || adapterName.find("Hyper-V") != std::string::npos) {
                     info.media = "Ethernet";
                     info.linkClass = LinkClass::Vnic;
-                    info.overLink = "net0";
-                    linkNameOss << "vnic" << (netIndex % 10);
+                    linkNameOss << "vnic" << vnicIndex++;
                 } else if (adapterName.find("Multiplexor") != std::string::npos || adapterName.find("Team") != std::string::npos) {
                     info.media = "Ethernet";
                     info.linkClass = LinkClass::Aggr;
-                    info.overLink = "net0 net1";
-                    linkNameOss << "aggr0";
+                    linkNameOss << "aggr" << aggrIndex++;
                 } else {
                     info.media = "Ethernet";
                     info.linkClass = LinkClass::Phys;
@@ -119,6 +120,26 @@ std::vector<DataLinkInfo> LinkManager::DiscoverDataLinks() {
     }
 
     if (pAddresses) free(pAddresses);
+
+    // Resolve overLink for VNICs/Aggr/VLANs to the first physical link's name.
+    // (Windows does not expose the exact parent adapter via the IP Helper API,
+    // so we bind to the first 'up' physical link, falling back to net0.)
+    std::string firstPhys = "";
+    for (const auto& l : links) {
+        if (l.linkClass == LinkClass::Phys && l.state == "up") { firstPhys = l.linkName; break; }
+    }
+    if (firstPhys.empty()) {
+        for (const auto& l : links) {
+            if (l.linkClass == LinkClass::Phys) { firstPhys = l.linkName; break; }
+        }
+    }
+    for (auto& l : links) {
+        if ((l.linkClass == LinkClass::Vnic || l.linkClass == LinkClass::Aggr || l.linkClass == LinkClass::Vlan) &&
+            (l.overLink.empty() || l.overLink == "--")) {
+            l.overLink = firstPhys.empty() ? "--" : firstPhys;
+        }
+    }
+
     return links;
 }
 

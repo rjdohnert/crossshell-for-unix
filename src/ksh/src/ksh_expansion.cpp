@@ -392,7 +392,11 @@ private:
                 if (!has_float_operands && std::floor(value) == value && std::floor(right) == right) {
                     long long i_val = to_safe_int64(value);
                     long long i_right = to_safe_int64(right);
-                    value = static_cast<double>(i_val / i_right);
+                    if (i_val == LLONG_MIN && i_right == -1) {
+                        value = static_cast<double>(LLONG_MAX);
+                    } else {
+                        value = static_cast<double>(i_val / i_right);
+                    }
                 } else {
                     has_float_operands = true;
                     value /= right;

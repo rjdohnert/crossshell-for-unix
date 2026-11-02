@@ -45,6 +45,11 @@ public:
                 continue;
             }
 
+            // Set 3 second connect/recv timeout so offline targets fail fast without hanging
+            DWORD timeoutMs = 3000;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+
             if (connect(sock, ptr->ai_addr, static_cast<int>(ptr->ai_addrlen)) == 0) {
                 connectedOnce = true;
                 break;
@@ -85,7 +90,7 @@ public:
 
     bool Receive(std::string& data) override {
         if (!connected) return false;
-        char buf[2048];
+        char buf[4096];
         int bytes = recv(sock, buf, sizeof(buf) - 1, 0);
         if (bytes <= 0) return false;
         buf[bytes] = '\0';
@@ -104,17 +109,20 @@ private:
     bool connected = false;
 
 public:
-    explicit HyperVPipeTransport(std::string name) : pipeName(std::move(name)) {}
+    HyperVPipeTransport(std::string name) : pipeName(std::move(name)) {}
 
-    ~HyperVPipeTransport() override { Close(); }
+    ~HyperVPipeTransport() override {
+        Close();
+    }
 
     bool Open() override {
         Close();
-        std::string fullPipePath = "\\\\.\\pipe\\" + pipeName;
-        hPipe = CreateFileA(fullPipePath.c_str(), GENERIC_READ | GENERIC_WRITE, 
+        std::string fullPath = "\\\\.\\pipe\\" + pipeName;
+        hPipe = CreateFileA(fullPath.c_str(), GENERIC_READ | GENERIC_WRITE,
                             0, NULL, OPEN_EXISTING, 0, NULL);
-
-        if (hPipe == INVALID_HANDLE_VALUE) return false;
+        if (hPipe == INVALID_HANDLE_VALUE) {
+            return false;
+        }
         connected = true;
         return true;
     }
@@ -139,7 +147,7 @@ public:
 
     bool Receive(std::string& data) override {
         if (!connected) return false;
-        char buf[2048];
+        char buf[4096];
         DWORD bytesRead;
         if (ReadFile(hPipe, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
             buf[bytesRead] = '\0';
@@ -167,6 +175,69 @@ public:
     static std::string FormatPacket(const std::string& payload) {
         return "$" + payload + "#" + ComputeChecksum(payload);
     }
+
+    static uint64_t ParseHex64LittleEndian(const std::string& hex) {
+        if (hex.size() < 16) return 0;
+        uint64_t val = 0;
+        for (int i = 7; i >= 0; --i) {
+            std::string byteStr = hex.substr(i * 2, 2);
+            try {
+                uint8_t b = static_cast<uint8_t>(std::stoul(byteStr, nullptr, 16));
+                val = (val << 8) | b;
+            } catch (...) {
+                return 0;
+            }
+        }
+        return val;
+    }
+
+    // Parse GDB x86_64 'g' register response packet
+    static bool ParseGRegisters(const std::string& reply, CpuContext64& ctx) {
+        size_t start = reply.find('$');
+        size_t end = reply.find('#');
+        if (start == std::string::npos || end == std::string::npos || end <= start + 1) {
+            return false;
+        }
+        std::string payload = reply.substr(start + 1, end - start - 1);
+        // Minimum payload size: 17 registers * 16 hex characters = 272 characters (covers rax through rip).
+        if (payload.empty() || payload[0] == 'E' || payload.size() < 17 * 16) {
+            return false;
+        }
+
+        // GDB x86_64 register layout:
+        // 0: rax, 1: rbx, 2: rcx, 3: rdx, 4: rsi, 5: rdi, 6: rbp, 7: rsp
+        // 8: r8, 9: r9, 10: r10, 11: r11, 12: r12, 13: r13, 14: r14, 15: r15
+        // 16: rip, 17: rflags
+        ctx.rax = ParseHex64LittleEndian(payload.substr(0 * 16, 16));
+        ctx.rbx = ParseHex64LittleEndian(payload.substr(1 * 16, 16));
+        ctx.rcx = ParseHex64LittleEndian(payload.substr(2 * 16, 16));
+        ctx.rdx = ParseHex64LittleEndian(payload.substr(3 * 16, 16));
+        ctx.rsi = ParseHex64LittleEndian(payload.substr(4 * 16, 16));
+        ctx.rdi = ParseHex64LittleEndian(payload.substr(5 * 16, 16));
+        ctx.rbp = ParseHex64LittleEndian(payload.substr(6 * 16, 16));
+        ctx.rsp = ParseHex64LittleEndian(payload.substr(7 * 16, 16));
+        ctx.r8  = ParseHex64LittleEndian(payload.substr(8 * 16, 16));
+        ctx.r9  = ParseHex64LittleEndian(payload.substr(9 * 16, 16));
+        ctx.r10 = ParseHex64LittleEndian(payload.substr(10 * 16, 16));
+        ctx.r11 = ParseHex64LittleEndian(payload.substr(11 * 16, 16));
+        ctx.r12 = ParseHex64LittleEndian(payload.substr(12 * 16, 16));
+        ctx.r13 = ParseHex64LittleEndian(payload.substr(13 * 16, 16));
+        ctx.r14 = ParseHex64LittleEndian(payload.substr(14 * 16, 16));
+        ctx.r15 = ParseHex64LittleEndian(payload.substr(15 * 16, 16));
+        ctx.rip = ParseHex64LittleEndian(payload.substr(16 * 16, 16));
+
+        // Register 17 (rflags) requires 18 * 16 = 288 hex chars. If a minimalist stub
+        // omits rflags (providing only 272 chars for rax-rip), rflags defaults to 0
+        // while the core execution context is still marked valid=true.
+        if (payload.size() >= 18 * 16) {
+            ctx.rflags = ParseHex64LittleEndian(payload.substr(17 * 16, 16));
+        } else {
+            ctx.rflags = 0;
+        }
+
+        ctx.valid = true;
+        return true;
+    }
 };
 
 // --- Console Helper ---
@@ -179,4 +250,3 @@ void EnableVTMode() {
         SetConsoleMode(hOut, dwMode);
     }
 }
-

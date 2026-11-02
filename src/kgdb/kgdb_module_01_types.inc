@@ -74,6 +74,30 @@ private:
     bool initialized = false;
 };
 
+#pragma comment(lib, "advapi32.lib")
+
+// Enable SeDebugPrivilege so we can query kernel module lists and system memory
+bool EnableDebugPrivilege() {
+    HANDLE hToken = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
+        return false;
+    }
+    TOKEN_PRIVILEGES tp{};
+    LUID luid{};
+    bool acquired = false;
+    if (LookupPrivilegeValueA(NULL, "SeDebugPrivilege", &luid)) {
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Luid = luid;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        SetLastError(ERROR_SUCCESS);
+        if (AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), NULL, NULL)) {
+            acquired = (GetLastError() == ERROR_SUCCESS);
+        }
+    }
+    CloseHandle(hToken);
+    return acquired;
+}
+
 // --- Windows Kernel Dump Structure ---
 #pragma pack(push, 1)
 struct DUMP_HEADER64 {
@@ -95,17 +119,112 @@ struct DUMP_HEADER64 {
     char     VersionUser[32];
     uint64_t KdDebuggerDataBlock;
 };
+
+// --- Windows Minidump Format Structures ---
+struct MINIDUMP_LOCATION_DESCRIPTOR_LITE {
+    uint32_t DataSize;
+    uint32_t Rva;
+};
+
+struct MINIDUMP_HEADER_LITE {
+    uint32_t Signature;            // 'MDMP' (0x504d444d)
+    uint32_t Version;
+    uint32_t NumberOfStreams;
+    uint32_t StreamDirectoryRva;
+    uint32_t CheckSum;
+    uint32_t TimeDateStamp;
+    uint64_t Flags;
+};
+
+struct MINIDUMP_DIRECTORY_LITE {
+    uint32_t StreamType;
+    MINIDUMP_LOCATION_DESCRIPTOR_LITE Location;
+};
+
+struct MINIDUMP_MODULE_LITE {
+    uint64_t BaseOfImage;
+    uint32_t SizeOfImage;
+    uint32_t CheckSum;
+    uint32_t TimeDateStamp;
+    uint32_t ModuleNameRva;
+    uint8_t  VersionInfo[52];
+    MINIDUMP_LOCATION_DESCRIPTOR_LITE CvRecord;
+    MINIDUMP_LOCATION_DESCRIPTOR_LITE MiscRecord;
+    uint64_t Reserved0;
+    uint64_t Reserved1;
+};
+
+struct MINIDUMP_EXCEPTION_STREAM_LITE {
+    uint32_t ThreadId;
+    uint32_t Alignment;
+    uint32_t ExceptionCode;
+    uint32_t ExceptionFlags;
+    uint64_t ExceptionRecord;
+    uint64_t ExceptionAddress;
+    uint32_t NumberParameters;
+    uint32_t UnusedAlignment;
+    uint64_t ExceptionInformation[15];
+    MINIDUMP_LOCATION_DESCRIPTOR_LITE ThreadContext;
+};
+
+struct MINIDUMP_SYSTEM_INFO_LITE {
+    uint16_t ProcessorArchitecture; // 9 = PROCESSOR_ARCHITECTURE_AMD64, 12 = ARM64, 0 = x86
+    uint16_t ProcessorLevel;
+    uint16_t ProcessorRevision;
+    uint8_t  NumberOfProcessors;
+    uint8_t  ProductType;
+    uint32_t MajorVersion;
+    uint32_t MinorVersion;
+    uint32_t BuildNumber;
+    uint32_t PlatformId;
+    uint32_t CsdVersionRva;
+    uint16_t SuiteMask;
+    uint16_t Reserved2;
+    uint8_t  CpuInformation[24];
+};
 #pragma pack(pop)
 
 struct CpuContext64 {
-    uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp;
-    uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
-    uint64_t rip, rflags;
+    uint64_t rax = 0, rbx = 0, rcx = 0, rdx = 0;
+    uint64_t rsi = 0, rdi = 0, rbp = 0, rsp = 0;
+    uint64_t r8  = 0, r9  = 0, r10 = 0, r11 = 0;
+    uint64_t r12 = 0, r13 = 0, r14 = 0, r15 = 0;
+    uint64_t rip = 0, rflags = 0;
+    uint16_t cs = 0, ss = 0, ds = 0, es = 0, fs = 0, gs = 0;
+    bool valid = false;
 };
 
 struct KernelModule {
     std::string name;
     uint64_t baseAddress;
     uint32_t size;
+    std::string path;
 };
 
+// --- Native NT Structure for Module Information ---
+typedef LONG NTSTATUS;
+
+typedef struct _RTL_PROCESS_MODULE_INFORMATION {
+    HANDLE Section;
+    PVOID MappedBase;
+    PVOID ImageBase;
+    ULONG ImageSize;
+    ULONG Flags;
+    USHORT LoadOrderIndex;
+    USHORT InitOrderIndex;
+    USHORT LoadCount;
+    USHORT OffsetToFileName;
+    UCHAR FullPathName[256];
+} RTL_PROCESS_MODULE_INFORMATION, *PRTL_PROCESS_MODULE_INFORMATION;
+
+typedef struct _RTL_PROCESS_MODULES {
+    ULONG NumberOfModules;
+    RTL_PROCESS_MODULE_INFORMATION Modules[1];
+} RTL_PROCESS_MODULES, *PRTL_PROCESS_MODULES;
+
+typedef NTSTATUS(NTAPI* pfnNtQuerySystemInformation)(
+    ULONG SystemInformationClass,
+    PVOID SystemInformation,
+    ULONG SystemInformationLength,
+    PULONG ReturnLength
+);

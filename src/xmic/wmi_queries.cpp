@@ -215,6 +215,31 @@ std::wstring ReadRegistryStringValue(IWbemServices* pSvc, IWbemClassObject* pReg
     const unsigned long HKEY_LOCAL_MACHINE_HIVE = 0x80000002;
     return ReadRegistryStringValueWithHive(pSvc, pRegClass, HKEY_LOCAL_MACHINE_HIVE, subKey, valueName);
 }
+namespace {
+bool PutRegistryDwordInput(IWbemClassObject* pInParams, const wchar_t* name, unsigned long value) {
+    VARIANT vt;
+    VariantInit(&vt);
+    V_VT(&vt) = VT_UI4;
+    V_UI4(&vt) = value;
+    HRESULT hr = pInParams->Put(name, 0, &vt, 0);
+    VariantClear(&vt);
+    return SUCCEEDED(hr);
+}
+bool PutRegistryStringInput(IWbemClassObject* pInParams, const wchar_t* name, const std::wstring& value) {
+    BSTR stringValue = SysAllocString(value.c_str());
+    if (stringValue == NULL) {
+        return false;
+    }
+
+    VARIANT vt;
+    VariantInit(&vt);
+    V_VT(&vt) = VT_BSTR;
+    V_BSTR(&vt) = stringValue;
+    HRESULT hr = pInParams->Put(name, 0, &vt, 0);
+    VariantClear(&vt);
+    return SUCCEEDED(hr);
+}
+}
 std::wstring ReadRegistryStringValueWithHive(IWbemServices* pSvc, IWbemClassObject* pRegClass, unsigned long hive, const std::wstring& subKey, const std::wstring& valueName) {
     IWbemClassObject* pInDef = NULL;
     HRESULT hr = pRegClass->GetMethod(L"GetStringValue", 0, &pInDef, NULL);
@@ -225,23 +250,12 @@ std::wstring ReadRegistryStringValueWithHive(IWbemServices* pSvc, IWbemClassObje
     pInDef->Release();
     if (FAILED(hr) || pInParams == NULL) return L"";
 
-    VARIANT vt;
-    VariantInit(&vt);
-
-    V_VT(&vt) = VT_UI4;
-    V_UI4(&vt) = hive;
-    pInParams->Put(L"hDefKey", 0, &vt, 0);
-    VariantClear(&vt);
-
-    V_VT(&vt) = VT_BSTR;
-    V_BSTR(&vt) = SysAllocString(subKey.c_str());
-    pInParams->Put(L"sSubKeyName", 0, &vt, 0);
-    VariantClear(&vt);
-
-    V_VT(&vt) = VT_BSTR;
-    V_BSTR(&vt) = SysAllocString(valueName.c_str());
-    pInParams->Put(L"sValueName", 0, &vt, 0);
-    VariantClear(&vt);
+    if (!PutRegistryDwordInput(pInParams, L"hDefKey", hive) ||
+        !PutRegistryStringInput(pInParams, L"sSubKeyName", subKey) ||
+        !PutRegistryStringInput(pInParams, L"sValueName", valueName)) {
+        pInParams->Release();
+        return L"";
+    }
 
     IWbemClassObject* pOutParams = NULL;
     hr = pSvc->ExecMethod(_bstr_t(L"StdRegProv"), _bstr_t(L"GetStringValue"), 0, NULL, pInParams, &pOutParams, NULL);
@@ -271,23 +285,12 @@ bool ReadRegistryDwordValueWithHive(IWbemServices* pSvc, IWbemClassObject* pRegC
     pInDef->Release();
     if (FAILED(hr) || pInParams == NULL) return false;
 
-    VARIANT vt;
-    VariantInit(&vt);
-
-    V_VT(&vt) = VT_UI4;
-    V_UI4(&vt) = hive;
-    pInParams->Put(L"hDefKey", 0, &vt, 0);
-    VariantClear(&vt);
-
-    V_VT(&vt) = VT_BSTR;
-    V_BSTR(&vt) = SysAllocString(subKey.c_str());
-    pInParams->Put(L"sSubKeyName", 0, &vt, 0);
-    VariantClear(&vt);
-
-    V_VT(&vt) = VT_BSTR;
-    V_BSTR(&vt) = SysAllocString(valueName.c_str());
-    pInParams->Put(L"sValueName", 0, &vt, 0);
-    VariantClear(&vt);
+    if (!PutRegistryDwordInput(pInParams, L"hDefKey", hive) ||
+        !PutRegistryStringInput(pInParams, L"sSubKeyName", subKey) ||
+        !PutRegistryStringInput(pInParams, L"sValueName", valueName)) {
+        pInParams->Release();
+        return false;
+    }
 
     IWbemClassObject* pOutParams = NULL;
     hr = pSvc->ExecMethod(_bstr_t(L"StdRegProv"), _bstr_t(L"GetDWORDValue"), 0, NULL, pInParams, &pOutParams, NULL);
@@ -318,18 +321,11 @@ bool EnumRegistrySubKeysWithHive(IWbemServices* pSvc, IWbemClassObject* pRegClas
     pInDef->Release();
     if (FAILED(hr) || pInParams == NULL) return false;
 
-    VARIANT vt;
-    VariantInit(&vt);
-
-    V_VT(&vt) = VT_UI4;
-    V_UI4(&vt) = hive;
-    pInParams->Put(L"hDefKey", 0, &vt, 0);
-    VariantClear(&vt);
-
-    V_VT(&vt) = VT_BSTR;
-    V_BSTR(&vt) = SysAllocString(subKey.c_str());
-    pInParams->Put(L"sSubKeyName", 0, &vt, 0);
-    VariantClear(&vt);
+    if (!PutRegistryDwordInput(pInParams, L"hDefKey", hive) ||
+        !PutRegistryStringInput(pInParams, L"sSubKeyName", subKey)) {
+        pInParams->Release();
+        return false;
+    }
 
     IWbemClassObject* pOutParams = NULL;
     hr = pSvc->ExecMethod(_bstr_t(L"StdRegProv"), _bstr_t(L"EnumKey"), 0, NULL, pInParams, &pOutParams, NULL);

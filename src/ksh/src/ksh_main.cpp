@@ -85,6 +85,11 @@ int wmain(int argc, wchar_t* argv[]) {
         return finalize_shell_exit(1);
     }
 
+    g_is_interactive_session = (first_positional_index >= argc) &&
+                               !startup_options.command_string_set &&
+                               !startup_options.script_test_set &&
+                               _isatty(_fileno(stdin));
+
     if (show_help) {
         print_help_text();
         return finalize_shell_exit(0);

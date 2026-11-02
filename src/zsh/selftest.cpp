@@ -8,6 +8,8 @@
 #include "scripting.hpp"
 #include "terminal.hpp"
 
+using namespace std;
+
 int run_internal_self_tests() {
     int passed = 0;
     int failed = 0;

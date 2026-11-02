@@ -2,7 +2,7 @@
 set -e
 
 TARGET="zsh.exe"
-SOURCES="engine.cpp parser.cpp expansion.cpp jobs.cpp terminal.cpp builtins.cpp scripting.cpp selftest.cpp zsh.cpp"
+SOURCES="engine.cpp parser.cpp expansion.cpp jobs.cpp terminal.cpp builtins.cpp builtins_help.cpp scripting.cpp selftest.cpp zsh.cpp"
 LIBS="-lshell32 -luser32 -ladvapi32 -Wl,/STACK:8388608"
 BIN_DIR="../../bin"
 

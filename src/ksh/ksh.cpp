@@ -80,6 +80,7 @@
 #include <ctime>
 #include <memory>
 #include <windows.h>
+#include <shlobj.h>
 #include <sddl.h>
 #include <winternl.h>
 #include <io.h>
@@ -1670,6 +1671,20 @@ std::wstring signal_spec_to_trap_event(const std::wstring& raw_signal) {
 }
 
 bool force_kill_process_by_pid(DWORD pid) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32First(snapshot, &pe)) {
+            do {
+                if (pe.th32ParentProcessID == pid && pe.th32ProcessID != 0 && pe.th32ProcessID != pid) {
+                    force_kill_process_by_pid(pe.th32ProcessID);
+                }
+            } while (Process32Next(snapshot, &pe));
+        }
+        CloseHandle(snapshot);
+    }
+
     HANDLE process_handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
     if (process_handle == nullptr) {
         return false;
@@ -1991,6 +2006,10 @@ bool read_registry_property(const std::wstring& property_path, std::wstring& val
         root = HKEY_LOCAL_MACHINE;
     } else if (root_name == L"HKCU" || root_name == L"HKEY_CURRENT_USER") {
         root = HKEY_CURRENT_USER;
+    } else if (root_name == L"HKCR" || root_name == L"HKEY_CLASSES_ROOT") {
+        root = HKEY_CLASSES_ROOT;
+    } else if (root_name == L"HKU" || root_name == L"HKEY_USERS") {
+        root = HKEY_USERS;
     } else {
         return false;
     }
@@ -2083,6 +2102,10 @@ bool write_registry_property(const std::wstring& property_path, const std::wstri
         root = HKEY_LOCAL_MACHINE;
     } else if (root_name == L"HKCU" || root_name == L"HKEY_CURRENT_USER") {
         root = HKEY_CURRENT_USER;
+    } else if (root_name == L"HKCR" || root_name == L"HKEY_CLASSES_ROOT") {
+        root = HKEY_CLASSES_ROOT;
+    } else if (root_name == L"HKU" || root_name == L"HKEY_USERS") {
+        root = HKEY_USERS;
     } else {
         return false;
     }
@@ -2147,7 +2170,7 @@ bool write_registry_property(const std::wstring& property_path, const std::wstri
 }
 
 static void register_registry_namespaces() {
-    for (const wchar_t* name : {L"HKLM", L"HKCU"}) {
+    for (const wchar_t* name : {L"HKLM", L"HKCU", L"HKCR", L"HKU"}) {
         CustomTypeDefinition& definition = g_custom_types[name];
         definition.name = name;
         definition.is_dynamic_namespace = true;
@@ -4231,7 +4254,6 @@ bool ensure_default_home_kshrc_exists(const std::wstring& profile_path) {
 
     std::ofstream profile_file(profile_path.c_str(), std::ios::binary);
     if (!profile_file.is_open()) {
-        std::wcerr << L"ksh: warning: could not create startup profile: " << profile_path << L"\n";
         return false;
     }
 
@@ -4247,7 +4269,6 @@ bool ensure_default_home_kshrc_exists(const std::wstring& profile_path) {
         "# alias ll='dir'\n";
     profile_file.write(default_profile, static_cast<std::streamsize>(std::strlen(default_profile)));
     if (!profile_file.good()) {
-        std::wcerr << L"ksh: warning: failed writing startup profile: " << profile_path << L"\n";
         return false;
     }
 
@@ -4259,7 +4280,10 @@ std::wstring get_default_startup_profile_path() {
     DWORD userprofile_len = GetEnvironmentVariableW(L"USERPROFILE", userprofile_path, MAX_PATH);
     if (userprofile_len > 0 && userprofile_len < MAX_PATH) {
         std::wstring candidate = std::wstring(userprofile_path) + L"\\.kshrc";
-        if (file_exists_regular(candidate) || ensure_default_home_kshrc_exists(candidate)) {
+        if (file_exists_regular(candidate)) {
+            return candidate;
+        }
+        if (g_is_interactive_session && ensure_default_home_kshrc_exists(candidate)) {
             return candidate;
         }
     }
@@ -5776,7 +5800,11 @@ private:
                 if (!has_float_operands && std::floor(value) == value && std::floor(right) == right) {
                     long long i_val = to_safe_int64(value);
                     long long i_right = to_safe_int64(right);
-                    value = static_cast<double>(i_val / i_right);
+                    if (i_val == LLONG_MIN && i_right == -1) {
+                        value = static_cast<double>(LLONG_MAX);
+                    } else {
+                        value = static_cast<double>(i_val / i_right);
+                    }
                 } else {
                     has_float_operands = true;
                     value /= right;
@@ -9794,6 +9822,30 @@ bool is_absolute_windows_path(const std::wstring& path) {
     return path.rfind(L"\\\\", 0) == 0;
 }
 
+std::wstring resolve_shell_link_target(const std::wstring& lnk_path) {
+    std::wstring result;
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    IShellLinkW* psl = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&psl)))) {
+        IPersistFile* ppf = nullptr;
+        if (SUCCEEDED(psl->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&ppf)))) {
+            if (SUCCEEDED(ppf->Load(lnk_path.c_str(), STGM_READ))) {
+                wchar_t target[MAX_PATH] = {};
+                WIN32_FIND_DATAW fd = {};
+                if (SUCCEEDED(psl->GetPath(target, MAX_PATH, &fd, SLGP_UNCPRIORITY)) && target[0] != L'\0') {
+                    result = target;
+                }
+            }
+            ppf->Release();
+        }
+        psl->Release();
+    }
+    if (SUCCEEDED(hr)) {
+        CoUninitialize();
+    }
+    return result;
+}
+
 std::wstring normalize_cd_path(const std::wstring& input_path) {
     if (input_path.empty()) {
         return input_path;
@@ -9802,7 +9854,31 @@ std::wstring normalize_cd_path(const std::wstring& input_path) {
     std::wstring path = input_path;
     std::replace(path.begin(), path.end(), L'/', L'\\');
 
+    // Resolve .lnk shortcut if path doesn't exist but path.lnk does
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        std::wstring lnk_candidate = path + L".lnk";
+        DWORD lnk_attr = GetFileAttributesW(lnk_candidate.c_str());
+        if (lnk_attr != INVALID_FILE_ATTRIBUTES && (lnk_attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            std::wstring resolved = resolve_shell_link_target(lnk_candidate);
+            if (!resolved.empty() && GetFileAttributesW(resolved.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                path = resolved;
+            }
+        }
+    }
+
+    // Drive-relative path: D:relative\path (preserve relative to drive D's current directory)
+    if (path.size() >= 2 && std::iswalpha(path[0]) && path[1] == L':' && (path.size() == 2 || path[2] != L'\\')) {
+        return path;
+    }
+
     if (is_absolute_windows_path(path)) {
+        // Extended-length path support (\\?\) for paths >= 248 chars
+        if (path.size() >= 248 && path.rfind(L"\\\\?\\", 0) != 0) {
+            if (path.rfind(L"\\\\", 0) == 0) {
+                return L"\\\\?\\UNC\\" + path.substr(2);
+            }
+            return L"\\\\?\\" + path;
+        }
         return path;
     }
 
@@ -9901,6 +9977,48 @@ ScriptInterpreterResolution build_script_interpreter_command(const std::vector<s
         }
         return ScriptInterpreterResolution::Resolved;
     } else {
+        if (file_exists_regular(script_path)) {
+            std::ifstream file(script_path.c_str(), std::ios::binary);
+            if (file.is_open()) {
+                char magic[3] = {};
+                file.read(magic, 2);
+                if (file.gcount() == 2 && magic[0] == '#' && magic[1] == '!') {
+                    std::string line;
+                    std::getline(file, line);
+                    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+                        line.pop_back();
+                    }
+                    size_t pos = 0;
+                    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
+                    std::string shebang_cmd = line.substr(pos);
+                    std::wstring wshebang(shebang_cmd.begin(), shebang_cmd.end());
+                    if (wshebang.find(L"/sh") != std::wstring::npos ||
+                        wshebang.find(L"/bash") != std::wstring::npos ||
+                        wshebang.find(L"/ksh") != std::wstring::npos) {
+                        const std::vector<std::wstring> script_args(tokens.begin() + 1, tokens.end());
+                        if (build_self_script_command(script_path, script_args, command_line)) {
+                            return ScriptInterpreterResolution::Resolved;
+                        }
+                    } else if (!wshebang.empty()) {
+                        std::wstring interp;
+                        if (wshebang.rfind(L"/usr/bin/env ", 0) == 0) {
+                            interp = trim_copy(wshebang.substr(13));
+                        } else {
+                            size_t last_slash = wshebang.find_last_of(L"/\\");
+                            interp = (last_slash != std::wstring::npos) ? wshebang.substr(last_slash + 1) : wshebang;
+                        }
+                        wchar_t buf[MAX_PATH] = {};
+                        if (SearchPathW(nullptr, interp.c_str(), L".exe", MAX_PATH, buf, nullptr) > 0) {
+                            command_line = quote_command_argument(buf);
+                            command_line += L" ";
+                            command_line += quote_command_argument(script_path);
+                            append_script_arguments();
+                            return ScriptInterpreterResolution::Resolved;
+                        }
+                    }
+                }
+            }
+        }
         return ScriptInterpreterResolution::NotScript;
     }
 }
@@ -9960,6 +10078,13 @@ void enable_ansi_support() {
         DWORD mode = 0;
         if (GetConsoleMode(hErr, &mode)) {
             SetConsoleMode(hErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    if (hIn != INVALID_HANDLE_VALUE && hIn != nullptr) {
+        DWORD mode = 0;
+        if (GetConsoleMode(hIn, &mode)) {
+            SetConsoleMode(hIn, mode | ENABLE_VIRTUAL_TERMINAL_INPUT);
         }
     }
 }
@@ -12772,7 +12897,13 @@ bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstri
                 std::wstring width_str;
                 if (i < format.size() && format[i] == L'*') {
                     if (arg_idx < tokens.size()) {
-                        width_str = tokens[arg_idx++];
+                        long width_val = 0;
+                        try {
+                            width_val = std::stol(tokens[arg_idx++]);
+                        } catch (...) {
+                            width_val = 0;
+                        }
+                        width_str = std::to_wstring(width_val);
                     }
                     i++;
                 } else {
@@ -12789,7 +12920,17 @@ bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstri
                     i++;
                     if (i < format.size() && format[i] == L'*') {
                         if (arg_idx < tokens.size()) {
-                            prec_str = tokens[arg_idx++];
+                            long prec_val = 0;
+                            try {
+                                prec_val = std::stol(tokens[arg_idx++]);
+                            } catch (...) {
+                                prec_val = 0;
+                            }
+                            if (prec_val >= 0) {
+                                prec_str = std::to_wstring(prec_val);
+                            } else {
+                                has_prec = false;
+                            }
                         }
                         i++;
                     } else {
@@ -12821,9 +12962,77 @@ bool evaluate_builtin_printf(const std::vector<std::wstring>& tokens, std::wstri
                 buf[0] = 0;
                 
                 if (type_char == L's') {
-                    fmt_spec += L"s";
-                    _snwprintf_s(buf, _countof(buf), _TRUNCATE, fmt_spec.c_str(), cur_arg.c_str());
-                    output_str += buf;
+                    std::wstring formatted_s = cur_arg;
+                    if (has_prec && !prec_str.empty()) {
+                        try {
+                            size_t p = static_cast<size_t>(std::stoul(prec_str));
+                            if (formatted_s.size() > p) {
+                                formatted_s = formatted_s.substr(0, p);
+                            }
+                        } catch (...) {}
+                    }
+                    size_t w = 0;
+                    if (!width_str.empty()) {
+                        try {
+                            w = static_cast<size_t>(std::stoul(width_str));
+                        } catch (...) {}
+                    }
+                    if (formatted_s.size() < w) {
+                        size_t pad = w - formatted_s.size();
+                        bool left_align = (flags.find(L'-') != std::wstring::npos);
+                        if (left_align) {
+                            output_str += formatted_s;
+                            output_str.append(pad, L' ');
+                        } else {
+                            output_str.append(pad, L' ');
+                            output_str += formatted_s;
+                        }
+                    } else {
+                        output_str += formatted_s;
+                    }
+                } else if (type_char == L'b') {
+                    for (size_t k = 0; k < cur_arg.size(); ++k) {
+                        if (cur_arg[k] == L'\\' && k + 1 < cur_arg.size()) {
+                            wchar_t next = cur_arg[k + 1];
+                            if (next == L'c') {
+                                if (has_var) {
+                                    std::wstring assign_err;
+                                    if (!assign_parameter_value(varname, output_str, false, false, assign_err)) {
+                                        error_msg = L"ksh: printf: variable assignment failed: " + assign_err;
+                                        return false;
+                                    }
+                                    output_str.clear();
+                                }
+                                return true;
+                            } else if (next == L'n') { output_str += L'\n'; k++; }
+                            else if (next == L't') { output_str += L'\t'; k++; }
+                            else if (next == L'r') { output_str += L'\r'; k++; }
+                            else if (next == L'a') { output_str += L'\a'; k++; }
+                            else if (next == L'b') { output_str += L'\b'; k++; }
+                            else if (next == L'f') { output_str += L'\f'; k++; }
+                            else if (next == L'v') { output_str += L'\v'; k++; }
+                            else if (next == L'\\') { output_str += L'\\'; k++; }
+                            else if (next == L'0') {
+                                size_t oct_end = k + 2;
+                                while (oct_end < cur_arg.size() && oct_end < k + 5 && cur_arg[oct_end] >= L'0' && cur_arg[oct_end] <= L'7') {
+                                    oct_end++;
+                                }
+                                if (oct_end > k + 2) {
+                                    long val = std::wcstol(cur_arg.substr(k + 2, oct_end - (k + 2)).c_str(), nullptr, 8);
+                                    output_str += static_cast<wchar_t>(val);
+                                    k = oct_end - 1;
+                                } else {
+                                    output_str += L'\0';
+                                    k++;
+                                }
+                            } else {
+                                output_str += next;
+                                k++;
+                            }
+                        } else {
+                            output_str += cur_arg[k];
+                        }
+                    }
                 } else if (type_char == L'q') {
                     std::wstring escaped = escape_for_double_quotes(cur_arg);
                     output_str += escaped;
@@ -21864,6 +22073,10 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                 std::wstring new_cwd_str = new_cwd;
                 ksh_env.variables[L"PWD"] = new_cwd_str;
                 SetEnvironmentVariableW(L"PWD", new_cwd_str.c_str());
+                if (g_is_interactive_session && _isatty(_fileno(stdout))) {
+                    std::wcout << L"\033]9;9;\"" << new_cwd_str << L"\"\033\\";
+                    std::wcout.flush();
+                }
                 if (print_after) {
                     write_builtin_output(new_cwd_str + L"\n");
                 }
@@ -22638,6 +22851,11 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!parse_startup_arguments(argc, argv, startup_options, first_positional_index, show_help, show_version)) {
         return finalize_shell_exit(1);
     }
+
+    g_is_interactive_session = (first_positional_index >= argc) &&
+                               !startup_options.command_string_set &&
+                               !startup_options.script_test_set &&
+                               _isatty(_fileno(stdin));
 
     if (show_help) {
         print_help_text();

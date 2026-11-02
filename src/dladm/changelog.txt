@@ -1,0 +1,53 @@
+================================================================================
+dladm - Change Log
+================================================================================
+
+This file tracks changes to dladm, the CrossShell for UNIX data-link
+administration tool. dladm emulates Solaris dladm on Windows, discovering and
+classifying network adapters (physical, Hyper-V VNIC, aggregation/teaming,
+VLAN) via the IP Helper API and presenting them in Solaris-style output.
+
+--------------------------------------------------------------------------------
+v1.1.0 -- 2026-11-01
+--------------------------------------------------------------------------------
+
+This release fixes misleading behavior, implements the documented structured
+output formats, and improves link naming and input validation.
+
+NEW FEATURES
+------------
+* Structured output: show-link and show-phys now support --json and --csv
+  (in addition to the default --table). Filenames and adapter names are
+  properly escaped for JSON and CSV. (These flags were previously documented
+  but silently ignored.)
+
+* --version / -V: prints the version string.
+
+BUG FIXES
+---------
+* set-linkprop no longer falsely reports success. It now honestly reports that
+  read-only properties (speed, duplex, mac-address) are not modifiable, and for
+  MTU it prints the exact elevated netsh command required instead of pretending
+  to apply it.
+
+* Link naming: VNICs, aggregations, and VLANs now get unique, collision-free
+  names (vnic0, vnic1, aggr0, ...) instead of sharing the physical-link counter
+  or a hardcoded name. The 'over' link for virtual/aggregated interfaces is now
+  resolved to the first active physical link instead of a hardcoded "net0".
+
+* Input validation: an unknown link name now produces "link '<name>' not found"
+  (exit 1) instead of an empty table, and an unknown -p property produces
+  "unknown link property" with the list of valid properties.
+
+* Synthetic-interface filtering no longer excludes legitimate Microsoft-branded
+  physical NICs (the "microsoft" substring filter was removed).
+
+* Speed formatting: a link with 0 bps (no link / unknown) now displays "--"
+  instead of "0".
+
+================================================================================
+Notes
+================================================================================
+* All changes are backward compatible with existing dladm usage.
+* For usage, run: dladm help   (or 'dladm --help')
+================================================================================

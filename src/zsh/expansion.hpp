@@ -23,9 +23,9 @@ struct GlobQualifiers {
 };
 
 struct DirEntryInfo {
-    string name;
+    std::string name;
     DWORD attributes = 0;
-    uintmax_t size = 0;
+    std::uintmax_t size = 0;
     FILETIME mtime = {0, 0};
     bool is_directory = false;
     bool is_symlink = false;
@@ -35,12 +35,13 @@ struct DirEntryInfo {
     double age_days = 0.0;
 };
 
-long long eval_math_expr(const string& expr);
-bool match_wildcard(const string& pattern, const string& str);
-vector<string> expand_globs(const vector<string>& args, const vector<bool>* glob_allowed = nullptr);
-vector<string> expand_brace_word(const string& word);
-vector<string> split_ifs_words(const string& value, const string& separators);
+long long eval_math_expr(const std::string& expr);
+int eval_arithmetic_command(const std::string& expr);
+bool match_wildcard(const std::string& pattern, const std::string& str);
+std::vector<std::string> expand_globs(const std::vector<std::string>& args, const std::vector<bool>* glob_allowed = nullptr);
+std::vector<std::string> expand_brace_word(const std::string& word);
+std::vector<std::string> split_ifs_words(const std::string& value, const std::string& separators);
 
-extern vector<string> g_process_subst_temp_files;
-extern vector<ProcessSubstSink> g_process_subst_sinks;
+extern std::vector<std::string> g_process_subst_temp_files;
+extern std::vector<ProcessSubstSink> g_process_subst_sinks;
 extern int g_process_subst_eval_depth;

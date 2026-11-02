@@ -1,4 +1,3 @@
-
 // --- Entry Point ---
 static int kgdb_main(int argc, char* argv[]) {
     _setmode(_fileno(stdin), _O_BINARY);
@@ -33,8 +32,8 @@ static int kgdb_main(int argc, char* argv[]) {
         if (arg == "-h" || arg == "--help") {
             KgdbShell::PrintCliHelp();
             return 0;
-        } else if (arg == "-v" || arg == "--version") {
-            std::cout << "kgdb v4.0.0\n";
+        } else if (arg == "-v" || arg == "--version" || arg == "-V") {
+            std::cout << "kgdb v4.6.0\n";
             return 0;
         } else if (arg == "--no-color") {
             DisableColor();
@@ -66,20 +65,19 @@ static int kgdb_main(int argc, char* argv[]) {
         }
     }
 
-    if (localFlag) shell.GetEngine().AttachLocal();
-    if (!remoteWinTarget.empty()) shell.GetEngine().AttachRemoteWin(remoteWinTarget);
-    if (!azureTarget.empty()) shell.GetEngine().AttachAzure(azureTarget);
-    if (!bsdTarget.empty()) shell.GetEngine().AttachBsd(bsdTarget);
-    if (wslFlag) shell.GetEngine().AttachWsl(wslDistro);
-    if (!hypervPipe.empty()) shell.GetEngine().AttachHyperV(hypervPipe);
-    if (!dumpFile.empty()) shell.GetEngine().LoadDumpFile(dumpFile);
+    if (localFlag && !shell.GetEngine().AttachLocal()) return 1;
+    if (!remoteWinTarget.empty() && !shell.GetEngine().AttachRemoteWin(remoteWinTarget)) return 1;
+    if (!azureTarget.empty() && !shell.GetEngine().AttachAzure(azureTarget)) return 1;
+    if (!bsdTarget.empty() && !shell.GetEngine().AttachBsd(bsdTarget)) return 1;
+    if (wslFlag && !shell.GetEngine().AttachWsl(wslDistro)) return 1;
+    if (!hypervPipe.empty() && !shell.GetEngine().AttachHyperV(hypervPipe)) return 1;
+    if (!dumpFile.empty() && !shell.GetEngine().LoadDumpFile(dumpFile)) return 1;
     if (!remoteTarget.empty()) {
         size_t colon = remoteTarget.find(':');
         if (colon != std::string::npos) {
-            std::string host;
+            std::string host = remoteTarget.substr(0, colon);
             int port = 0;
             if (!ParseHostPort(remoteTarget, host, port, 0) || !shell.GetEngine().AttachRemoteTcp(host, port)) {
-                std::cerr << RED << "[-] Invalid remote endpoint: " << remoteTarget << RESET << "\n";
                 return 1;
             }
         }

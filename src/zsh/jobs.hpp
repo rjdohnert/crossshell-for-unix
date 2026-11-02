@@ -17,12 +17,12 @@ extern unsigned long g_current_job_id;
 extern unsigned long g_previous_job_id;
 void select_current_job(unsigned long job_id);
 
-extern atomic<bool> g_sigtstp_pending;
-extern atomic<bool> g_sigint_pending;
-extern atomic<bool> g_sigwinch_pending;
+extern std::atomic<bool> g_sigtstp_pending;
+extern std::atomic<bool> g_sigint_pending;
+extern std::atomic<bool> g_sigwinch_pending;
 BOOL WINAPI console_ctrl_handler(DWORD dwCtrlType);
 
-void set_foreground_pids(const vector<DWORD>& pids);
+void set_foreground_pids(const std::vector<DWORD>& pids);
 void clear_foreground_pids();
 void init_signal_handlers();
 void process_pending_traps();
@@ -33,13 +33,13 @@ bool resume_win32_process(DWORD pid);
 void check_window_resize_event();
 
 bool create_process_with_handle_list(
-    const wstring& application_name,
-    wstring command_line,
+    const std::wstring& application_name,
+    std::wstring command_line,
     const STARTUPINFOW& startup,
     DWORD creation_flags,
     PROCESS_INFORMATION& process_info);
-wstring system_cmd_exe_path();
+std::wstring system_cmd_exe_path();
 
 int execute_pipeline_native(const Pipeline& pl);
-bool save_pipeline_shell_state(const string& path);
-bool load_pipeline_shell_state(const string& path);
+bool save_pipeline_shell_state(const std::string& path);
+bool load_pipeline_shell_state(const std::string& path);

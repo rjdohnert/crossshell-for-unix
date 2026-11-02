@@ -19,7 +19,7 @@ try {
     }
 
     Write-Host "[kgdb] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 kgdb.cpp -lws2_32 -lpsapi -Wl,/subsystem:console -o kgdb.exe
+    & clang++ -std=c++17 -O2 kgdb.cpp -lws2_32 -lpsapi -ladvapi32 "-Wl,/subsystem:console" -o kgdb.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[kgdb] Build failed."
         exit $LASTEXITCODE

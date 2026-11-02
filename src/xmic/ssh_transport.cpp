@@ -1,4 +1,5 @@
 #include "xmic_common.hpp"
+#include <thread>
 
 std::wstring BuildSshTarget(const WmiTargetConfig& target) {
     if (target.user.empty()) {
@@ -264,11 +265,13 @@ bool WriteUtf8TextFile(ScopedTempFile& tempFile, const std::wstring& content) {
     BOOL ok = WriteFile(tempFile.Handle(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, NULL);
     return ok && written == bytes.size() && FlushFileBuffers(tempFile.Handle()) && tempFile.SealForReading();
 }
-bool CreateSshAskPassHelper(ScopedTempFile& helperFile) {
+bool CreateSshAskPassHelper(ScopedTempFile& helperFile, const std::wstring& pipeName) {
     std::wstring powershellPath;
     if (!ResolveSystemExecutablePath(L"WindowsPowerShell\\v1.0\\powershell.exe", powershellPath)) return false;
     std::wstring helper = L"@echo off\r\n\"" + powershellPath +
-        L"\" -NoProfile -ExecutionPolicy Bypass -Command \"[Console]::Write($env:XMIC_SSH_PASSPHRASE)\"\r\n";
+        L"\" -NoProfile -ExecutionPolicy Bypass -Command \"$p=New-Object System.IO.Pipes.NamedPipeClientStream -ArgumentList '.', '" +
+        pipeName +
+        L"', ([System.IO.Pipes.PipeDirection]::In);$p.Connect(10000);$r=New-Object System.IO.StreamReader -ArgumentList $p, ([System.Text.Encoding]::UTF8);[Console]::Write($r.ReadToEnd());$r.Dispose()\"\r\n";
     int byteCount = WideCharToMultiByte(CP_ACP, 0, helper.c_str(), static_cast<int>(helper.size()), NULL, 0, NULL, NULL);
     if (byteCount <= 0) return false;
     std::vector<char> bytes(static_cast<size_t>(byteCount));
@@ -292,16 +295,186 @@ bool RunSshCommandCaptureWithOptionalPassphrase(const WmiTargetConfig& target, c
         return false;
     }
 
-    if (!CreateSshAskPassHelper(askPassFile)) {
+    if (target.sshKeyPassphrase.size() > static_cast<size_t>((std::numeric_limits<int>::max)())) {
+        exitCode = -1;
+        return false;
+    }
+    int passphraseByteCount = WideCharToMultiByte(
+        CP_UTF8,
+        WC_ERR_INVALID_CHARS,
+        target.sshKeyPassphrase.data(),
+        static_cast<int>(target.sshKeyPassphrase.size()),
+        NULL,
+        0,
+        NULL,
+        NULL
+    );
+    if (passphraseByteCount <= 0) {
         exitCode = -1;
         return false;
     }
 
-    ScopedEnvironmentVariable passphraseEnv(L"XMIC_SSH_PASSPHRASE", target.sshKeyPassphrase);
+    std::vector<char> passphraseBytes(static_cast<size_t>(passphraseByteCount));
+    if (WideCharToMultiByte(
+        CP_UTF8,
+        WC_ERR_INVALID_CHARS,
+        target.sshKeyPassphrase.data(),
+        static_cast<int>(target.sshKeyPassphrase.size()),
+        passphraseBytes.data(),
+        passphraseByteCount,
+        NULL,
+        NULL
+    ) != passphraseByteCount) {
+        exitCode = -1;
+        return false;
+    }
+
+    GUID pipeGuid = {};
+    if (CoCreateGuid(&pipeGuid) != S_OK) {
+        exitCode = -1;
+        return false;
+    }
+    wchar_t guidText[40] = {};
+    if (StringFromGUID2(pipeGuid, guidText, static_cast<int>(std::size(guidText))) == 0) {
+        exitCode = -1;
+        return false;
+    }
+    std::wstring pipeName = L"xmic-" + std::wstring(guidText + 1, guidText + std::wcslen(guidText) - 1);
+    std::wstring pipePath = L"\\\\.\\pipe\\" + pipeName;
+
+    if (!CreateSshAskPassHelper(askPassFile, pipeName)) {
+        exitCode = -1;
+        return false;
+    }
+
+    PSECURITY_DESCRIPTOR pipeSecurityDescriptor = NULL;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        L"D:P(A;;GA;;;OW)",
+        SDDL_REVISION_1,
+        &pipeSecurityDescriptor,
+        NULL
+    )) {
+        exitCode = -1;
+        return false;
+    }
+
+    SECURITY_ATTRIBUTES pipeSecurity = {};
+    pipeSecurity.nLength = sizeof(pipeSecurity);
+    pipeSecurity.lpSecurityDescriptor = pipeSecurityDescriptor;
+    HANDLE passphrasePipe = CreateNamedPipeW(
+        pipePath.c_str(),
+        PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
+        PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+        1,
+        4096,
+        0,
+        0,
+        &pipeSecurity
+    );
+    LocalFree(pipeSecurityDescriptor);
+    if (passphrasePipe == INVALID_HANDLE_VALUE) {
+        exitCode = -1;
+        return false;
+    }
+
+    HANDLE pipeIoEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    HANDLE stopServerEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (pipeIoEvent == NULL || stopServerEvent == NULL) {
+        if (pipeIoEvent != NULL) CloseHandle(pipeIoEvent);
+        if (stopServerEvent != NULL) CloseHandle(stopServerEvent);
+        CloseHandle(passphrasePipe);
+        exitCode = -1;
+        return false;
+    }
+
     ScopedEnvironmentVariable askPassEnv(L"SSH_ASKPASS", askPassFile.Path());
     ScopedEnvironmentVariable askPassRequireEnv(L"SSH_ASKPASS_REQUIRE", L"force");
     ScopedEnvironmentVariable displayEnv(L"DISPLAY", L"1");
-    return RunCommandCapture(sshCommand, output, exitCode);
+
+    std::thread passphraseServer;
+    try {
+        passphraseServer = std::thread([&]() {
+            auto waitForOperation = [&](OVERLAPPED& operation, DWORD& transferred) {
+                HANDLE waitHandles[] = { stopServerEvent, pipeIoEvent };
+                DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
+                if (waitResult != WAIT_OBJECT_0 + 1) {
+                    CancelIoEx(passphrasePipe, &operation);
+                    WaitForSingleObject(pipeIoEvent, INFINITE);
+                    return false;
+                }
+                return GetOverlappedResult(passphrasePipe, &operation, &transferred, FALSE) != FALSE;
+            };
+
+            while (WaitForSingleObject(stopServerEvent, 0) != WAIT_OBJECT_0) {
+                ResetEvent(pipeIoEvent);
+                OVERLAPPED connectOperation = {};
+                connectOperation.hEvent = pipeIoEvent;
+                BOOL connected = ConnectNamedPipe(passphrasePipe, &connectOperation);
+                if (!connected) {
+                    DWORD error = GetLastError();
+                    if (error == ERROR_PIPE_CONNECTED) {
+                        connected = TRUE;
+                    } else if (error == ERROR_IO_PENDING) {
+                        DWORD ignored = 0;
+                        connected = waitForOperation(connectOperation, ignored);
+                    }
+                }
+
+                if (!connected) {
+                    return;
+                }
+                if (WaitForSingleObject(stopServerEvent, 0) == WAIT_OBJECT_0) {
+                    DisconnectNamedPipe(passphrasePipe);
+                    return;
+                }
+
+                size_t offset = 0;
+                while (offset < passphraseBytes.size()) {
+                    DWORD chunkSize = static_cast<DWORD>((std::min)(passphraseBytes.size() - offset, static_cast<size_t>(1024)));
+                    OVERLAPPED writeOperation = {};
+                    writeOperation.hEvent = pipeIoEvent;
+                    ResetEvent(pipeIoEvent);
+                    DWORD written = 0;
+                    BOOL writeSucceeded = WriteFile(
+                        passphrasePipe,
+                        passphraseBytes.data() + offset,
+                        chunkSize,
+                        &written,
+                        &writeOperation
+                    );
+                    if (!writeSucceeded) {
+                        DWORD error = GetLastError();
+                        if (error != ERROR_IO_PENDING || !waitForOperation(writeOperation, written)) {
+                            break;
+                        }
+                    }
+                    if (written == 0) {
+                        break;
+                    }
+                    offset += written;
+                }
+
+                if (!DisconnectNamedPipe(passphrasePipe) &&
+                    GetLastError() != ERROR_PIPE_NOT_CONNECTED) {
+                    return;
+                }
+            }
+        });
+    } catch (...) {
+        CloseHandle(pipeIoEvent);
+        CloseHandle(stopServerEvent);
+        CloseHandle(passphrasePipe);
+        exitCode = -1;
+        return false;
+    }
+
+    bool captureSucceeded = RunCommandCapture(sshCommand, output, exitCode);
+    SetEvent(stopServerEvent);
+    passphraseServer.join();
+    CloseHandle(pipeIoEvent);
+    CloseHandle(stopServerEvent);
+    CloseHandle(passphrasePipe);
+    return captureSucceeded;
 }
 std::wstring NormalizePathForComparison(const std::wstring& path) {
     if (path.empty()) {

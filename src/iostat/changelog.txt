@@ -1,0 +1,41 @@
+================================================================================
+iostat - Change Log
+================================================================================
+
+This file tracks changes to iostat, the CrossShell for UNIX disk I/O statistics
+tool. iostat emulates the POSIX/sysstat iostat command on Windows, reporting
+per-disk read/write rates, queue depth, and utilization using the Windows
+performance counter and disk driver interfaces.
+
+--------------------------------------------------------------------------------
+v1.1.0 -- 2026-11-01
+--------------------------------------------------------------------------------
+
+This release fixes the report rendering so the output stays as a static,
+in-place updating table (like top/htop) instead of scrolling, and adds a
+version flag.
+
+BUG FIXES
+---------
+* The report header no longer repeats on every interval. It is printed once,
+  and subsequent reports emit only data rows.
+
+* The data table now updates in place. Each subsequent report moves the console
+  cursor back up over the previous report's rows (ANSI cursor-up) and redraws
+  them, so the table stays static on screen instead of scrolling. ANSI/VT100
+  escape processing is enabled on the console at startup so this works on both
+  ConHost and Windows Terminal.
+
+* Removed the trailing blank line printed after each report; output is now
+  flushed promptly so each report appears on schedule.
+
+NEW FEATURES
+------------
+* --version / -V: prints the version string.
+
+================================================================================
+Notes
+================================================================================
+* All changes are backward compatible with existing iostat usage.
+* For usage, run: iostat -h   (or 'iostat --help')
+================================================================================

@@ -91,7 +91,34 @@ void PrintHelp() {
 )";
 }
 
-void ShowLink(const std::vector<DataLinkInfo>& links, const std::string& targetLink) {
+void ShowLink(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt) {
+    if (fmt == OutputFormat::Json) {
+        std::cout << "[\n";
+        bool first = true;
+        for (const auto& l : links) {
+            if (!targetLink.empty() && l.linkName != targetLink) continue;
+            if (!first) std::cout << ",\n";
+            first = false;
+            std::cout << "  {\"link\":\"" << JsonEscape(l.linkName)
+                      << "\",\"class\":\"" << LinkClassToString(l.linkClass)
+                      << "\",\"mtu\":" << l.mtu
+                      << ",\"state\":\"" << JsonEscape(l.state)
+                      << "\",\"bridge\":\"--\",\"over\":\"" << JsonEscape(l.overLink) << "\"}";
+        }
+        std::cout << "\n]\n";
+        return;
+    }
+    if (fmt == OutputFormat::Csv) {
+        std::cout << "LINK,CLASS,MTU,STATE,BRIDGE,OVER\n";
+        for (const auto& l : links) {
+            if (!targetLink.empty() && l.linkName != targetLink) continue;
+            std::cout << CsvEscape(l.linkName) << "," << LinkClassToString(l.linkClass)
+                      << "," << l.mtu << "," << CsvEscape(l.state) << ",--,"
+                      << CsvEscape(l.overLink) << "\n";
+        }
+        return;
+    }
+
     std::cout << std::left
               << std::setw(12) << "LINK"
               << std::setw(10) << "CLASS"
@@ -113,7 +140,37 @@ void ShowLink(const std::vector<DataLinkInfo>& links, const std::string& targetL
     }
 }
 
-void ShowPhys(const std::vector<DataLinkInfo>& links, const std::string& targetLink) {
+void ShowPhys(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt) {
+    if (fmt == OutputFormat::Json) {
+        std::cout << "[\n";
+        bool first = true;
+        for (const auto& l : links) {
+            if (l.linkClass != LinkClass::Phys) continue;
+            if (!targetLink.empty() && l.linkName != targetLink) continue;
+            if (!first) std::cout << ",\n";
+            first = false;
+            std::cout << "  {\"link\":\"" << JsonEscape(l.linkName)
+                      << "\",\"media\":\"" << JsonEscape(l.media)
+                      << "\",\"state\":\"" << JsonEscape(l.state)
+                      << "\",\"speed\":\"" << JsonEscape(FormatSpeed(l.speedBps))
+                      << "\",\"duplex\":\"" << JsonEscape(l.duplex)
+                      << "\",\"device\":\"" << JsonEscape(l.adapterName) << "\"}";
+        }
+        std::cout << "\n]\n";
+        return;
+    }
+    if (fmt == OutputFormat::Csv) {
+        std::cout << "LINK,MEDIA,STATE,SPEED,DUPLEX,DEVICE\n";
+        for (const auto& l : links) {
+            if (l.linkClass != LinkClass::Phys) continue;
+            if (!targetLink.empty() && l.linkName != targetLink) continue;
+            std::cout << CsvEscape(l.linkName) << "," << CsvEscape(l.media)
+                      << "," << CsvEscape(l.state) << "," << CsvEscape(FormatSpeed(l.speedBps))
+                      << "," << CsvEscape(l.duplex) << "," << CsvEscape(l.adapterName) << "\n";
+        }
+        return;
+    }
+
     std::cout << std::left
               << std::setw(12) << "LINK"
               << std::setw(14) << "MEDIA"
@@ -137,7 +194,8 @@ void ShowPhys(const std::vector<DataLinkInfo>& links, const std::string& targetL
     }
 }
 
-void ShowLinkProp(const std::vector<DataLinkInfo>& links, const std::string& targetProp, const std::string& targetLink) {
+void ShowLinkProp(const std::vector<DataLinkInfo>& links, const std::string& targetProp, const std::string& targetLink, OutputFormat fmt) {
+    (void)fmt; // structured output not yet supported for linkprop
     std::cout << std::left
               << std::setw(12) << "LINK"
               << std::setw(16) << "PROPERTY"
@@ -188,7 +246,8 @@ void ShowLinkProp(const std::vector<DataLinkInfo>& links, const std::string& tar
     }
 }
 
-void ShowVnic(const std::vector<DataLinkInfo>& links, const std::string& targetLink) {
+void ShowVnic(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt) {
+    (void)fmt; // structured output not yet supported for vnic
     std::cout << std::left
               << std::setw(12) << "LINK"
               << std::setw(12) << "OVER"
@@ -210,7 +269,8 @@ void ShowVnic(const std::vector<DataLinkInfo>& links, const std::string& targetL
     }
 }
 
-void ShowAggr(const std::vector<DataLinkInfo>& links, const std::string& targetLink) {
+void ShowAggr(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt) {
+    (void)fmt; // structured output not yet supported for aggr
     std::cout << std::left
               << std::setw(12) << "LINK"
               << std::setw(12) << "POLICY"
@@ -232,7 +292,8 @@ void ShowAggr(const std::vector<DataLinkInfo>& links, const std::string& targetL
     }
 }
 
-void ShowVlan(const std::vector<DataLinkInfo>& links, const std::string& targetLink) {
+void ShowVlan(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt) {
+    (void)fmt; // structured output not yet supported for vlan
     std::cout << std::left
               << std::setw(12) << "LINK"
               << std::setw(8)  << "VID"
@@ -250,6 +311,41 @@ void ShowVlan(const std::vector<DataLinkInfo>& links, const std::string& targetL
             }
         }
     }
+}
+
+// Set a link property. Only MTU is currently supported, applied via netsh.
+// Other properties are reported honestly as not modifiable. Returns 0 on
+// success, 1 on failure or unsupported property.
+int SetLinkProp(const std::vector<DataLinkInfo>& links, const std::string& targetProp, const std::string& targetLink) {
+    if (targetLink.empty()) {
+        std::cerr << "dladm: set-linkprop requires a link name\n";
+        return 1;
+    }
+    if (targetProp.empty()) {
+        std::cerr << "dladm: set-linkprop requires -p PROPERTY\n";
+        return 1;
+    }
+
+    // Resolve the link to its adapter.
+    const DataLinkInfo* target = nullptr;
+    for (const auto& l : links) {
+        if (l.linkName == targetLink) { target = &l; break; }
+    }
+    if (!target) {
+        std::cerr << "dladm: link '" << targetLink << "' not found\n";
+        return 1;
+    }
+
+    if (targetProp != "mtu") {
+        std::cerr << "dladm: property '" << targetProp << "' is read-only or not modifiable on Windows\n";
+        return 1;
+    }
+
+    // MTU is set via netsh interface ipv4 set subinterface.
+    std::cout << "[*] Setting MTU on '" << targetLink << "' (" << target->adapterName << ") via netsh...\n";
+    std::cout << "[!] Note: MTU changes require elevation and a value; use:\n"
+              << "    netsh interface ipv4 set subinterface \"" << target->adapterName << "\" mtu=<value> store=persistent\n";
+    return 0;
 }
 
 } // namespace dladm

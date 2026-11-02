@@ -458,7 +458,6 @@ bool ensure_default_home_kshrc_exists(const std::wstring& profile_path) {
 
     std::ofstream profile_file(profile_path.c_str(), std::ios::binary);
     if (!profile_file.is_open()) {
-        std::wcerr << L"ksh: warning: could not create startup profile: " << profile_path << L"\n";
         return false;
     }
 
@@ -474,7 +473,6 @@ bool ensure_default_home_kshrc_exists(const std::wstring& profile_path) {
         "# alias ll='dir'\n";
     profile_file.write(default_profile, static_cast<std::streamsize>(std::strlen(default_profile)));
     if (!profile_file.good()) {
-        std::wcerr << L"ksh: warning: failed writing startup profile: " << profile_path << L"\n";
         return false;
     }
 
@@ -486,7 +484,10 @@ std::wstring get_default_startup_profile_path() {
     DWORD userprofile_len = GetEnvironmentVariableW(L"USERPROFILE", userprofile_path, MAX_PATH);
     if (userprofile_len > 0 && userprofile_len < MAX_PATH) {
         std::wstring candidate = std::wstring(userprofile_path) + L"\\.kshrc";
-        if (file_exists_regular(candidate) || ensure_default_home_kshrc_exists(candidate)) {
+        if (file_exists_regular(candidate)) {
+            return candidate;
+        }
+        if (g_is_interactive_session && ensure_default_home_kshrc_exists(candidate)) {
             return candidate;
         }
     }

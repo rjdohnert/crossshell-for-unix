@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 set TARGET=zsh.exe
-set SOURCES=engine.cpp parser.cpp expansion.cpp jobs.cpp terminal.cpp builtins.cpp scripting.cpp selftest.cpp zsh.cpp
+set SOURCES=engine.cpp parser.cpp expansion.cpp jobs.cpp terminal.cpp builtins.cpp builtins_help.cpp scripting.cpp selftest.cpp zsh.cpp
 set LIBS_MSVC=shell32.lib user32.lib advapi32.lib
 set LIBS_GCC=-lshell32 -luser32 -ladvapi32 -Wl,/STACK:8388608
 set BIN_DIR=..\..\bin

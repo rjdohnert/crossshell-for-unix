@@ -1,5 +1,109 @@
 #include "xmic_common.hpp"
 
+static void SecureClearShellString(std::wstring& value) {
+    if (!value.empty()) {
+        SecureZeroMemory(&value[0], value.size() * sizeof(wchar_t));
+        value.clear();
+    }
+}
+
+bool ParseInteractiveShellSetCommand(
+    const std::vector<std::wstring>& tokens,
+    std::wstring& keyOut,
+    std::wstring& valueOut,
+    bool& resetOut,
+    std::wstring& errorOut
+) {
+    keyOut.clear();
+    valueOut.clear();
+    resetOut = false;
+    errorOut.clear();
+
+    if (tokens.size() < 2) {
+        errorOut = L"Missing shell setting name.";
+        return false;
+    }
+    if (tokens.size() < 3 || tokens[2].empty()) {
+        errorOut = L"Missing value for shell setting. Use 'reset' to clear a setting.";
+        return false;
+    }
+    if (tokens.size() != 3) {
+        errorOut = L"Unexpected trailing values for shell setting.";
+        return false;
+    }
+
+    keyOut = tokens[1];
+    std::transform(keyOut.begin(), keyOut.end(), keyOut.begin(), towlower);
+    const std::vector<std::wstring> knownSettings = {
+        L"node", L"user", L"password", L"domain", L"namespace", L"transport",
+        L"winrm-backend", L"format", L"console-encoding", L"no-header"
+    };
+    if (std::find(knownSettings.begin(), knownSettings.end(), keyOut) == knownSettings.end()) {
+        errorOut = L"Unknown shell setting: " + keyOut;
+        return false;
+    }
+
+    valueOut = tokens[2];
+    std::wstring normalizedValue = valueOut;
+    std::transform(normalizedValue.begin(), normalizedValue.end(), normalizedValue.begin(), towlower);
+    if (normalizedValue == L"reset") {
+        resetOut = true;
+        valueOut.clear();
+        if (keyOut == L"password") SecureClearShellString(normalizedValue);
+        return true;
+    }
+    if (keyOut == L"no-header") {
+        if (normalizedValue == L"true" || normalizedValue == L"on" || normalizedValue == L"yes" || normalizedValue == L"1") {
+            valueOut = L"true";
+        } else if (normalizedValue == L"false" || normalizedValue == L"off" || normalizedValue == L"no" || normalizedValue == L"0") {
+            valueOut = L"false";
+        } else {
+            errorOut = L"Invalid value for no-header. Use true/false, on/off, yes/no, 1/0, or reset.";
+            return false;
+        }
+    }
+    if (keyOut == L"password") SecureClearShellString(normalizedValue);
+    return true;
+}
+
+class ScopedShellPasswordEnvironment {
+public:
+    explicit ScopedShellPasswordEnvironment(const std::wstring& password)
+        : name_(L"XMIC_INTERACTIVE_PASSWORD") {
+        DWORD required = GetEnvironmentVariableW(name_.c_str(), nullptr, 0);
+        if (required > 0) {
+            std::vector<wchar_t> previousBuffer(required);
+            DWORD copied = GetEnvironmentVariableW(name_.c_str(), previousBuffer.data(), required);
+            if (copied > 0 && copied < required) {
+                previousValue_.assign(previousBuffer.data(), copied);
+                hadPreviousValue_ = true;
+            } else if (copied >= required) {
+                SecureZeroMemory(previousBuffer.data(), previousBuffer.size() * sizeof(wchar_t));
+                return;
+            }
+            SecureZeroMemory(previousBuffer.data(), previousBuffer.size() * sizeof(wchar_t));
+        }
+        active_ = SetEnvironmentVariableW(name_.c_str(), password.c_str()) != FALSE;
+    }
+
+    ~ScopedShellPasswordEnvironment() {
+        if (active_) {
+            SetEnvironmentVariableW(name_.c_str(), hadPreviousValue_ ? previousValue_.c_str() : nullptr);
+        }
+        SecureClearShellString(previousValue_);
+    }
+
+    bool IsSet() const {
+        return active_;
+    }
+
+private:
+    std::wstring name_;
+    std::wstring previousValue_;
+    bool hadPreviousValue_ = false;
+    bool active_ = false;
+};
+
 int RunInteractiveShell(const std::wstring& executablePath) {
     std::wcout << L"\nXMIC interactive shell" << std::endl;
     std::wcout << L"Enter a normal xmic command, one per line." << std::endl;
@@ -16,6 +120,12 @@ int RunInteractiveShell(const std::wstring& executablePath) {
     std::wstring shellFormat;
     std::wstring shellConsoleEncoding;
     bool shellNoHeader = false;
+    struct PasswordScrubber {
+        std::wstring* value;
+        ~PasswordScrubber() {
+            if (value != nullptr) SecureClearShellString(*value);
+        }
+    } passwordScrubber{ &shellPassword };
 
     while (true) {
         std::wcout << L"xmic> ";
@@ -29,6 +139,7 @@ int RunInteractiveShell(const std::wstring& executablePath) {
         }
 
         std::vector<std::wstring> tokens = TokenizeShellInput(inputLine);
+        SecureClearShellString(inputLine);
         if (tokens.empty()) {
             continue;
         }
@@ -45,6 +156,7 @@ int RunInteractiveShell(const std::wstring& executablePath) {
             std::wcout << L"  help                      Show this help" << std::endl;
             std::wcout << L"  exit / quit               Leave the shell" << std::endl;
             std::wcout << L"  set <name> <value>        Set persistent shell options" << std::endl;
+            std::wcout << L"                            Use 'reset' to clear a setting; no-header accepts true/false, on/off, yes/no, or 1/0" << std::endl;
             std::wcout << L"  show                      Show current shell options" << std::endl;
             std::wcout << L"Command examples:" << std::endl;
             std::wcout << L"  os" << std::endl;
@@ -72,37 +184,46 @@ int RunInteractiveShell(const std::wstring& executablePath) {
             continue;
         }
 
-        if (command == L"set" && tokens.size() >= 2) {
-            std::wstring key = tokens[1];
-            std::transform(key.begin(), key.end(), key.begin(), towlower);
+        if (command == L"set") {
+            std::wstring key;
             std::wstring value;
-            if (tokens.size() >= 3) {
-                value = tokens[2];
+            std::wstring setError;
+            bool reset = false;
+            if (!ParseInteractiveShellSetCommand(tokens, key, value, reset, setError)) {
+                std::wcout << setError << std::endl;
+                if (tokens.size() >= 2) {
+                    std::wstring attemptedKey = tokens[1];
+                    std::transform(attemptedKey.begin(), attemptedKey.end(), attemptedKey.begin(), towlower);
+                    if (attemptedKey == L"password") {
+                        for (size_t i = 2; i < tokens.size(); ++i) SecureClearShellString(tokens[i]);
+                    }
+                }
+                continue;
             }
-
             if (key == L"node") {
-                shellNode = value;
+                shellNode = reset ? L"" : value;
             } else if (key == L"user") {
-                shellUser = value;
+                shellUser = reset ? L"" : value;
             } else if (key == L"password") {
-                shellPassword = value;
+                SecureClearShellString(shellPassword);
+                if (!reset) shellPassword = value;
             } else if (key == L"domain") {
-                shellDomain = value;
+                shellDomain = reset ? L"" : value;
             } else if (key == L"namespace") {
-                shellNamespace = value;
+                shellNamespace = reset ? L"" : value;
             } else if (key == L"transport") {
-                shellTransport = value;
+                shellTransport = reset ? L"" : value;
             } else if (key == L"winrm-backend") {
-                shellWinrmBackend = value;
+                shellWinrmBackend = reset ? L"" : value;
             } else if (key == L"format") {
-                shellFormat = value;
+                shellFormat = reset ? L"" : value;
             } else if (key == L"console-encoding") {
-                shellConsoleEncoding = value;
+                shellConsoleEncoding = reset ? L"" : value;
             } else if (key == L"no-header") {
-                shellNoHeader = true;
-            } else {
-                std::wcout << L"Unknown shell setting: " << key << std::endl;
+                shellNoHeader = !reset && value == L"true";
             }
+            SecureClearShellString(value);
+            if (key == L"password" && tokens.size() >= 3) SecureClearShellString(tokens[2]);
             continue;
         }
 
@@ -114,10 +235,6 @@ int RunInteractiveShell(const std::wstring& executablePath) {
         if (!shellUser.empty()) {
             childArgs.push_back(L"--user");
             childArgs.push_back(shellUser);
-        }
-        if (!shellPassword.empty()) {
-            childArgs.push_back(L"--password");
-            childArgs.push_back(shellPassword);
         }
         if (!shellDomain.empty()) {
             childArgs.push_back(L"--domain");
@@ -146,12 +263,26 @@ int RunInteractiveShell(const std::wstring& executablePath) {
         if (shellNoHeader) {
             childArgs.push_back(L"--no-header");
         }
+        if (!shellPassword.empty()) {
+            childArgs.push_back(L"--xmic-shell-password-env");
+        }
 
         childArgs.insert(childArgs.end(), tokens.begin(), tokens.end());
 
         int exitCode = EXIT_OK;
         std::wstring launchError;
-        if (!RunChildProcessAndWait(executablePath, childArgs, launchError, exitCode)) {
+        bool launched = false;
+        if (!shellPassword.empty()) {
+            ScopedShellPasswordEnvironment passwordEnvironment(shellPassword);
+            if (!passwordEnvironment.IsSet()) {
+                std::wcerr << L"[!] Failed to stage the interactive shell password for the child process." << std::endl;
+                return EXIT_WMI_FAILURE;
+            }
+            launched = RunChildProcessAndWait(executablePath, childArgs, launchError, exitCode);
+        } else {
+            launched = RunChildProcessAndWait(executablePath, childArgs, launchError, exitCode);
+        }
+        if (!launched) {
             std::wcerr << L"[!] " << launchError << std::endl;
             return EXIT_WMI_FAILURE;
         }

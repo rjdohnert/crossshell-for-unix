@@ -6,6 +6,8 @@
 #include "jobs.hpp"
 #include "selftest.hpp"
 
+using namespace std;
+
 int main(int argc, char* argv[]) {
     enable_ansi_support();
 
@@ -56,8 +58,18 @@ int main(int argc, char* argv[]) {
         }
         error_code remove_error;
         fs::remove(normalize_path_to_win(state_path), remove_error);
-        vector<string> stage_args(argv + 3, argv + argc);
-        int status = dispatch_command(stage_args);
+        int status;
+        if (argc >= 4 && string(argv[3]) == "--compound") {
+            string source;
+            for (int i = 4; i < argc; ++i) {
+                if (i > 4) source += ' ';
+                source += argv[i];
+            }
+            status = execute_command_line(source);
+        } else {
+            vector<string> stage_args(argv + 3, argv + argc);
+            status = dispatch_command(stage_args);
+        }
         cout.flush();
         cerr.flush();
         return status;

@@ -1,5 +1,28 @@
 #include "xmic_common.hpp"
 
+bool ValidatePathVerbArgumentCount(const std::wstring& verb, int argumentCount, std::wstring& errorOut) {
+    errorOut.clear();
+    if (verb == L"get" || verb == L"set") {
+        if (argumentCount == 0) {
+            errorOut = verb == L"get"
+                ? L"Missing property list for path get."
+                : L"Missing property assignment for path set. Expected <PropName>=<Value>.";
+            return false;
+        }
+        if (argumentCount != 1) {
+            errorOut = L"Unexpected trailing arguments for path " + verb + L".";
+            return false;
+        }
+        return true;
+    }
+
+    if (verb == L"delete" && argumentCount != 0) {
+        errorOut = L"Unexpected trailing arguments for path delete.";
+        return false;
+    }
+    return true;
+}
+
 int wmain(int argc, wchar_t* argv[]) {
     ConsoleEncoding consoleEncoding = ConsoleEncoding::Utf16;
     if (!ConfigureConsoleOutputMode(consoleEncoding)) {
@@ -437,6 +460,31 @@ int wmain(int argc, wchar_t* argv[]) {
                 targetConfig.password = option.substr(10);
                 argIndex += 1;
             }
+            continue;
+        }
+
+        if (option == L"--xmic-shell-password-env") {
+            constexpr wchar_t passwordEnvironmentVariable[] = L"XMIC_INTERACTIVE_PASSWORD";
+            DWORD required = GetEnvironmentVariableW(passwordEnvironmentVariable, nullptr, 0);
+            if (required == 0) {
+                SetEnvironmentVariableW(passwordEnvironmentVariable, nullptr);
+                std::wcerr << L"[!] Interactive shell password was not available to the child process." << std::endl;
+                if (coInitialized) CoUninitialize();
+                return EXIT_BAD_ARGS;
+            }
+
+            std::vector<wchar_t> passwordBuffer(required);
+            DWORD copied = GetEnvironmentVariableW(passwordEnvironmentVariable, passwordBuffer.data(), required);
+            SetEnvironmentVariableW(passwordEnvironmentVariable, nullptr);
+            if (copied == 0 || copied >= required) {
+                if (copied > 0) SecureZeroMemory(passwordBuffer.data(), passwordBuffer.size() * sizeof(wchar_t));
+                std::wcerr << L"[!] Failed to read the interactive shell password." << std::endl;
+                if (coInitialized) CoUninitialize();
+                return EXIT_BAD_ARGS;
+            }
+            targetConfig.password.assign(passwordBuffer.data(), copied);
+            SecureZeroMemory(passwordBuffer.data(), passwordBuffer.size() * sizeof(wchar_t));
+            argIndex += 1;
             continue;
         }
 
@@ -1486,6 +1534,12 @@ int wmain(int argc, wchar_t* argv[]) {
         if (nextIndex < argc) {
             std::wstring verb = argv[nextIndex];
             std::transform(verb.begin(), verb.end(), verb.begin(), towlower);
+            std::wstring pathArgumentError;
+            if (!ValidatePathVerbArgumentCount(verb, argc - nextIndex - 1, pathArgumentError)) {
+                std::wcerr << L"[!] " << pathArgumentError << std::endl;
+                if (coInitialized) CoUninitialize();
+                return EXIT_BAD_ARGS;
+            }
 
             if (verb == L"get" && nextIndex + 1 < argc) {
                 std::vector<std::wstring> props = SplitCommaTrimmed(argv[nextIndex + 1]);

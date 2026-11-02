@@ -19,7 +19,7 @@ try {
     }
 
     Write-Host "[ipadm] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 ipadm.cpp -liphlpapi -lws2_32 -Wl,/subsystem:console -o ipadm.exe
+    & clang++ -std=c++17 -O2 ipadm.cpp ipadm_models.cpp ipadm_helpers.cpp ipadm_engine.cpp ipadm_help.cpp ipadm_subcommands.cpp ipadm_app.cpp -liphlpapi -lws2_32 "-Wl,/subsystem:console" -o ipadm.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[ipadm] Build failed."
         exit $LASTEXITCODE

@@ -1,0 +1,128 @@
+================================================================================
+zsh - Change Log
+================================================================================
+
+This file tracks changes to CrossShellZSH, the native Windows implementation of
+the Z Shell runtime. CrossShellZSH provides zsh-compatible scripting, parameter
+expansion, globbing, programmable completion, and the ZLE line editor as a
+standalone Win32 executable with no POSIX emulation layer.
+
+--------------------------------------------------------------------------------
+v3.7.17 -- 2026-11-01
+--------------------------------------------------------------------------------
+
+This release fixes five parser/evaluator bugs in core shell syntax, resolves
+bare-variable arithmetic semantics, and cleans up header hygiene and source
+organization.
+
+BUG FIXES
+---------
+* Brace Expansion in for-Loop Lists:
+  - `for i in {1..3}` previously iterated once with the literal string "{1..3}".
+    execute_for_loop() now applies expand_brace_word() to each list word, so
+    numeric sequences ({1..10}), character sequences ({a..z}), and string
+    alternatives (file.{c,h}) expand correctly before globbing.
+
+* (( ... )) Arithmetic Commands as Loop Conditions:
+  - `while ((i<3))` / `until ((i>=2))` previously failed with
+    "zsh: cannot open input file: 3" because the (( ... )) handler re-parsed its
+    expression through the shell tokenizer via `let`, misinterpreting the
+    arithmetic '<'/'>' operators as redirections. The handler now evaluates the
+    expression directly through the new eval_arithmetic_command() entry point.
+
+* (( ... )) with Interior Whitespace:
+  - `(( x += 3 ))` (spaces around tokens) previously evaluated as three separate
+    let arguments ("x", "+=", "3"), silently assigning an empty variable name
+    and leaving x unchanged. Direct evaluation makes spaced arithmetic work.
+
+* Exponentiation Operator:
+  - eval_math_expr() now supports the right-associative `**` operator with
+    correct precedence (binds tighter than unary minus, matching zsh:
+    $((-2**2)) == 4) and overflow-checked binary exponentiation.
+    $((2**10)) == 1024, $((2**3**2)) == 512.
+
+* case Statements with Leading-Parenthesis Patterns:
+  - POSIX-style clauses `case x in (pat) action;; esac` were silently skipped
+    because the clause scanner counted the opening '(' as pattern depth and
+    never found the terminating ')'. The scanner now skips the optional leading
+    '(' before locating the pattern/action boundary. Both `(f*)` and `f*)`
+    forms work.
+
+IMPROVEMENTS
+-----------
+* Bare Variable Names in Arithmetic:
+  - eval_math_expr() now resolves bare identifiers against the shell variable
+    table with recursive value evaluation (depth-capped at 16), matching zsh
+    arithmetic semantics. $((x+1)) with x=5 now yields 6 instead of 0. This also
+    corrects C-style for-loop conditions: for ((i=0; i<3; i++)).
+  - Comparison expressions in (( ... )) / let (x==5, x<=3, x!=1) are now
+    evaluated as comparisons rather than misparsed as assignments.
+
+CODE QUALITY
+------------
+* Header Hygiene:
+  - Removed `using namespace std;` from the public zsh.hpp umbrella header; all
+    nine headers now use explicit std:: qualification. The using-directive lives
+    in each .cpp translation unit instead, ending namespace pollution for any
+    includer.
+
+* Source Split:
+  - Extracted the help subsystem (topic bodies, print_zsh_help_topic(),
+    print_comprehensive_help()) from builtins.cpp into the new
+    builtins_help.cpp translation unit (builtins.cpp: 3006 -> 2733 lines).
+  - build.ps1, build.bat, and build.sh updated to compile builtins_help.cpp.
+
+* Shared Arithmetic Command Evaluator:
+  - The `let` builtin and the (( ... )) command now share a single
+    implementation, eval_arithmetic_command() in expansion.cpp, eliminating the
+    duplicated assignment-operator parsing and the fragile re-tokenization path.
+
+NOTES
+-----
+* The global g_env environment object is retained by design: a shell is
+  inherently a single mutable environment, and the pipeline/subshell state
+  serialization model depends on it.
+* All 204 internal self-tests pass (zsh --self-test).
+
+--------------------------------------------------------------------------------
+v3.7.18 -- 2026-11-01
+--------------------------------------------------------------------------------
+
+This release adds compound commands as pipeline stages, fixes `read` from pipe
+stdin, and corrects `cd -` path style.
+
+NEW FEATURES
+------------
+* Compound Commands as Pipeline Stages:
+  - Pipelines can now end in (or contain) compound constructs:
+    `printf "a\nb\n" | while read l; do print $l; done`,
+    `... | if read a; then ...; fi`, `... | (read a; print $a)`,
+    `... | case ... esac`, and `{ ...; }` groups.
+  - parse_pipeline() gained a compound fast path: when any stage is a compound
+    construct, the line is split on top-level '|' and each compound stage's
+    source is preserved in Pipeline::compound_sources for re-execution.
+  - execute_mixed_pipeline() routes compound stages through the existing
+    `--pipeline-stage` state-serialization mechanism with a new `--compound`
+    flag that re-executes the source via execute_command_line() in the child.
+  - execute_statement_block_aware() detects top-level pipes before the
+    compound-statement handlers so a line like `cmd | while ...; done` reaches
+    the pipeline machinery instead of being misparsed as a lone loop.
+
+BUG FIXES
+---------
+* read from Pipe Stdin:
+  - The `read` builtin used std::cin, which is not reliably bound to an
+    inherited pipe handle in a --pipeline-stage child process, causing
+    immediate EOF (rc=1) on piped input. read now uses ReadFile() directly on
+    the Win32 stdin handle when GetFileType() reports FILE_TYPE_PIPE or
+    FILE_TYPE_DISK, falling back to std::cin only for console input.
+
+* cd - Path Style:
+  - `cd -` printed the raw Windows path (E:\dir) while $PWD/$OLDPWD use the
+    Unix-style form (E:/dir). It now prints normalize_path_to_unix(oldpwd) for
+    consistency.
+
+NOTES
+-----
+* All 204 internal self-tests pass (zsh --self-test).
+================================================================================

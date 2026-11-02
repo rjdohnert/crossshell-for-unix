@@ -1,8 +1,15 @@
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+
 #include "xmic_common.hpp"
 
 bool RunProcessDirectCapture(const std::wstring& applicationPath, const std::wstring& commandLine, std::wstring& output, int& exitCode) {
     output.clear();
     exitCode = -1;
+
+    constexpr ULONGLONG kProcessCaptureTimeoutMs = 5 * 60 * 1000;
+    constexpr DWORD kTerminationWaitMs = 5000;
 
     SECURITY_ATTRIBUTES saAttr = {};
     saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -21,29 +28,83 @@ bool RunProcessDirectCapture(const std::wstring& applicationPath, const std::wst
         return false;
     }
 
-    STARTUPINFOW si = {};
-    si.cb = sizeof(STARTUPINFOW);
-    si.hStdError = hChildStdOutWrite;
-    si.hStdOutput = hChildStdOutWrite;
-    si.dwFlags |= STARTF_USESTDHANDLES;
+    HANDLE childStdInput = NULL;
+    HANDLE parentProcess = GetCurrentProcess();
+    HANDLE currentStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    if (currentStdInput != NULL && currentStdInput != INVALID_HANDLE_VALUE) {
+        if (!DuplicateHandle(parentProcess, currentStdInput, parentProcess, &childStdInput, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+            CloseHandle(hChildStdOutRead);
+            CloseHandle(hChildStdOutWrite);
+            return false;
+        }
+    } else {
+        childStdInput = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &saAttr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (childStdInput == INVALID_HANDLE_VALUE) {
+            CloseHandle(hChildStdOutRead);
+            CloseHandle(hChildStdOutWrite);
+            return false;
+        }
+    }
+
+    SIZE_T attributeListSize = 0;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &attributeListSize);
+    if (attributeListSize == 0) {
+        CloseHandle(childStdInput);
+        CloseHandle(hChildStdOutRead);
+        CloseHandle(hChildStdOutWrite);
+        return false;
+    }
+
+    std::vector<unsigned char> attributeListStorage(attributeListSize);
+    LPPROC_THREAD_ATTRIBUTE_LIST attributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeListStorage.data());
+    if (!InitializeProcThreadAttributeList(attributeList, 1, 0, &attributeListSize)) {
+        CloseHandle(childStdInput);
+        CloseHandle(hChildStdOutRead);
+        CloseHandle(hChildStdOutWrite);
+        return false;
+    }
+
+    HANDLE inheritedHandles[] = { childStdInput, hChildStdOutWrite };
+    bool attributesConfigured = UpdateProcThreadAttribute(
+        attributeList,
+        0,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        inheritedHandles,
+        sizeof(inheritedHandles),
+        NULL,
+        NULL
+    ) != FALSE;
+
+    STARTUPINFOEXW si = {};
+    si.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+    si.StartupInfo.hStdInput = childStdInput;
+    si.StartupInfo.hStdError = hChildStdOutWrite;
+    si.StartupInfo.hStdOutput = hChildStdOutWrite;
+    si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+    si.lpAttributeList = attributeList;
 
     PROCESS_INFORMATION pi = {};
     std::vector<wchar_t> cmdBuffer(commandLine.begin(), commandLine.end());
     cmdBuffer.push_back(L'\0');
 
-    BOOL created = CreateProcessW(
-        applicationPath.empty() ? NULL : applicationPath.c_str(),
-        cmdBuffer.data(),
-        NULL,
-        NULL,
-        TRUE,
-        CREATE_NO_WINDOW,
-        NULL,
-        NULL,
-        &si,
-        &pi
-    );
+    BOOL created = FALSE;
+    if (attributesConfigured) {
+        created = CreateProcessW(
+            applicationPath.empty() ? NULL : applicationPath.c_str(),
+            cmdBuffer.data(),
+            NULL,
+            NULL,
+            TRUE,
+            CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+            NULL,
+            NULL,
+            &si.StartupInfo,
+            &pi
+        );
+    }
 
+    DeleteProcThreadAttributeList(attributeList);
+    CloseHandle(childStdInput);
     CloseHandle(hChildStdOutWrite);
 
     if (!created) {
@@ -57,28 +118,85 @@ bool RunProcessDirectCapture(const std::wstring& applicationPath, const std::wst
     char buffer[1024];
     DWORD bytesRead = 0;
     bool truncated = false;
-    while (ReadFile(hChildStdOutRead, buffer, sizeof(buffer), &bytesRead, NULL) && bytesRead > 0) {
-        if (byteOutput.size() < kMaxCapturedOutputChars) {
-            size_t room = kMaxCapturedOutputChars - byteOutput.size();
-            size_t toAppend = (std::min)(static_cast<size_t>(bytesRead), room);
-            byteOutput.append(buffer, toAppend);
-            if (toAppend < bytesRead) {
-                truncated = true;
+    bool pipeClosed = false;
+    bool processExited = false;
+    bool captureFailed = false;
+    ULONGLONG captureStartedAt = GetTickCount64();
+    while (!pipeClosed || !processExited) {
+        if (GetTickCount64() - captureStartedAt >= kProcessCaptureTimeoutMs) {
+            captureFailed = true;
+            break;
+        }
+
+        DWORD availableBytes = 0;
+        if (!PeekNamedPipe(hChildStdOutRead, NULL, 0, NULL, &availableBytes, NULL)) {
+            DWORD error = GetLastError();
+            if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED) {
+                pipeClosed = true;
+            } else {
+                captureFailed = true;
+                break;
             }
-        } else {
-            truncated = true;
+        } else if (availableBytes > 0) {
+            DWORD requestedBytes = (std::min)(availableBytes, static_cast<DWORD>(sizeof(buffer)));
+            if (!ReadFile(hChildStdOutRead, buffer, requestedBytes, &bytesRead, NULL)) {
+                DWORD error = GetLastError();
+                if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED) {
+                    pipeClosed = true;
+                } else {
+                    captureFailed = true;
+                    break;
+                }
+            } else if (bytesRead > 0) {
+                if (byteOutput.size() < kMaxCapturedOutputChars) {
+                    size_t room = kMaxCapturedOutputChars - byteOutput.size();
+                    size_t toAppend = (std::min)(static_cast<size_t>(bytesRead), room);
+                    byteOutput.append(buffer, toAppend);
+                    if (toAppend < bytesRead) {
+                        truncated = true;
+                    }
+                } else {
+                    truncated = true;
+                }
+            }
+        }
+
+        DWORD processWait = WaitForSingleObject(pi.hProcess, 0);
+        if (processWait == WAIT_OBJECT_0) {
+            processExited = true;
+        } else if (processWait == WAIT_FAILED) {
+            captureFailed = true;
+            break;
+        }
+
+        if (!pipeClosed || !processExited) {
+            Sleep(10);
         }
     }
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
-
     DWORD processExitCode = 0;
-    GetExitCodeProcess(pi.hProcess, &processExitCode);
-    exitCode = static_cast<int>(processExitCode);
+    if (captureFailed) {
+        if (WaitForSingleObject(pi.hProcess, 0) == WAIT_TIMEOUT) {
+            TerminateProcess(pi.hProcess, ERROR_TIMEOUT);
+            WaitForSingleObject(pi.hProcess, kTerminationWaitMs);
+        }
+    } else if (!GetExitCodeProcess(pi.hProcess, &processExitCode)) {
+        captureFailed = true;
+        if (WaitForSingleObject(pi.hProcess, 0) == WAIT_TIMEOUT) {
+            TerminateProcess(pi.hProcess, ERROR_GEN_FAILURE);
+            WaitForSingleObject(pi.hProcess, kTerminationWaitMs);
+        }
+    } else {
+        exitCode = static_cast<int>(processExitCode);
+    }
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     CloseHandle(hChildStdOutRead);
+
+    if (captureFailed) {
+        return false;
+    }
 
     if (truncated) {
         const std::string marker = "\n[...output truncated: limit reached...]\n";

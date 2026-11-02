@@ -5,6 +5,8 @@
 #include "jobs.hpp"
 #include "scripting.hpp"
 
+using namespace std;
+
 void enable_ansi_support() {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);

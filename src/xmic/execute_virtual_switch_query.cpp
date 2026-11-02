@@ -1128,6 +1128,10 @@ bool ExecuteWmiMethodCall(const WmiTargetConfig& target, const std::wstring& cla
             if (!assigned) {
                 V_VT(&vtVal) = VT_BSTR;
                 V_BSTR(&vtVal) = SysAllocString(rawValue.c_str());
+                if (V_BSTR(&vtVal) == NULL) {
+                    VariantClear(&vtVal);
+                    return false;
+                }
             }
 
             HRESULT putHr = pInClass->Put(name.c_str(), 0, &vtVal, 0);
@@ -1149,8 +1153,22 @@ bool ExecuteWmiMethodCall(const WmiTargetConfig& target, const std::wstring& cla
         pInParamsDef->Release();
     }
 
+    BSTR classNameBstr = SysAllocString(classNameOrPath.c_str());
+    BSTR methodNameBstr = SysAllocString(methodName.c_str());
+    if (classNameBstr == NULL || methodNameBstr == NULL) {
+        SysFreeString(classNameBstr);
+        SysFreeString(methodNameBstr);
+        std::wcerr << L"[!] Failed to allocate WMI method name strings." << std::endl;
+        if (pInClass) pInClass->Release();
+        pClass->Release();
+        pSvc->Release();
+        return false;
+    }
+
     IWbemClassObject* pOutParams = NULL;
-    hr = pSvc->ExecMethod(_bstr_t(classNameOrPath.c_str()), _bstr_t(methodName.c_str()), 0, NULL, pInClass, &pOutParams, NULL);
+    hr = pSvc->ExecMethod(classNameBstr, methodNameBstr, 0, NULL, pInClass, &pOutParams, NULL);
+    SysFreeString(classNameBstr);
+    SysFreeString(methodNameBstr);
 
     if (pInClass) pInClass->Release();
     pClass->Release();
@@ -1209,6 +1227,12 @@ bool ExecuteWmiSetProperty(const WmiTargetConfig& target, const std::wstring& ob
     VariantInit(&vtVal);
     V_VT(&vtVal) = VT_BSTR;
     V_BSTR(&vtVal) = SysAllocString(propValue.c_str());
+    if (V_BSTR(&vtVal) == NULL) {
+        pInst->Release();
+        pSvc->Release();
+        std::wcerr << L"[!] Failed to allocate property value string." << std::endl;
+        return false;
+    }
 
     hr = pInst->Put(propName.c_str(), 0, &vtVal, 0);
     VariantClear(&vtVal);

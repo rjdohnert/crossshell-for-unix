@@ -1,39 +1,36 @@
+[CmdletBinding()]
 param(
-    [string]$Action = "build"
+    [ValidateSet('auto', 'clang', 'cl', 'gcc')]
+    [string]$Compiler = 'auto',
+    [switch]$Clean,
+    [switch]$NoInstall
 )
-
-$ErrorActionPreference = "Stop"
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Push-Location $scriptDir
-
+$ErrorActionPreference = 'Stop'
+$ToolName = 'iostat'
+$SourceFiles = @("iostat.c")
+Push-Location $PSScriptRoot
 try {
-    if ($Action -eq "clean") {
-        Remove-Item -Force -ErrorAction SilentlyContinue iostat.exe, *.obj, *.o, *.pdb, *.ilk
-        Write-Host "[iostat] Clean complete."
+    if ($Clean) {
+        Remove-Item *.obj, *.o, "$ToolName.exe", *.pdb, *.ilk -Force -ErrorAction SilentlyContinue
         return
     }
-
-    if (-not (Get-Command clang++ -ErrorAction SilentlyContinue)) {
-        Write-Error "[iostat] Error: clang++ not found in PATH."
-        exit 1
+    if ($Compiler -eq 'auto') {
+        if (Get-Command clang -ErrorAction SilentlyContinue) { $Compiler = 'clang' }
+        elseif (Get-Command cl.exe -ErrorAction SilentlyContinue) { $Compiler = 'cl' }
+        elseif (Get-Command gcc -ErrorAction SilentlyContinue) { $Compiler = 'gcc' }
+        else { throw 'No suitable C compiler found (clang, cl, or gcc required).' }
     }
-
-    Write-Host "[iostat] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 iostat.cpp -lpdh -Wl,/subsystem:console -o iostat.exe
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "[iostat] Build failed."
-        exit $LASTEXITCODE
+    switch ($Compiler) {
+        'clang' { & clang -std=c99 -O2 -o "$ToolName.exe" @SourceFiles }
+        'cl'    { & cl.exe /nologo /std:c17 /O2 "/Fe:$ToolName.exe" @SourceFiles }
+        'gcc'   { & gcc -std=c99 -O2 -o "$ToolName.exe" @SourceFiles }
     }
-
-    Write-Host "[iostat] Build successful: iostat.exe"
-
-    if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force iostat.exe "..\..\bin\iostat.exe"
-            Write-Host "[iostat] Installed to ..\..\bin\iostat.exe"
-        }
+    if ($LASTEXITCODE -ne 0) { throw "Build failed for $ToolName (exit $LASTEXITCODE)." }
+    Write-Host "[$ToolName] Build successful: $ToolName.exe"
+    if (-not $NoInstall) {
+        $BinDir = Join-Path $PSScriptRoot '../../bin'
+        New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+        Copy-Item "$ToolName.exe" $BinDir -Force
+        Write-Host "[$ToolName] Installed to $BinDir\$ToolName.exe"
     }
-}
-finally {
-    Pop-Location
-}
+} finally { Pop-Location }

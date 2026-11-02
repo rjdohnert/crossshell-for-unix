@@ -1,0 +1,100 @@
+================================================================================
+CrossShell KSH - Change Log
+================================================================================
+
+This file tracks changes, bug fixes, security enhancements, and platform
+improvements to CrossShell KSH, the native KornShell (ksh93) shell
+implementation for Windows.
+
+--------------------------------------------------------------------------------
+2026-11-01 -- Maintenance & Security Release
+--------------------------------------------------------------------------------
+
+This release addresses security vulnerabilities, fixes command line and format
+string parsing issues, eliminates startup stderr pollution that affected
+redirection pipelines, and adds native Windows platform enhancements including
+Unix shebang script execution, Windows Terminal OSC 9;9 path integration,
+recursive process tree termination, and shortcut (.lnk) navigation.
+
+SECURITY FIXES
+--------------
+* Format String Injection in printf Builtin:
+  Fixed a vulnerability where dynamic width (`%*s`) and precision (`%.*s`)
+  arguments were concatenated directly into the internal format string without
+  sanitization. Malicious or malformed inputs containing `%` specifiers (such
+  as `%n` or `%s`) could trigger assertion aborts or arbitrary format parsing
+  in _snwprintf_s. Dynamic width and precision arguments are now strictly
+  parsed and validated as numeric integers.
+
+* Orphaned Child Process Tree Termination:
+  Enhanced `force_kill_process_by_pid` using Toolhelp32 process snapshotting
+  (`TH32CS_SNAPPROCESS`) to recursively enumerate and terminate child process
+  trees when terminating a shell job or process, preventing orphaned background
+  worker processes.
+
+* CPU Hardware Integer Division Overflow Trap:
+  Fixed an unhandled hardware exception (`0xC0000094 STATUS_INTEGER_DIVIDE_BY_ZERO /
+  Integer Overflow`) triggered on x86/x64 CPUs when evaluating signed 64-bit
+  division `INT64_MIN / -1` in arithmetic expressions (`$(( ... ))` and `let`).
+  Added an explicit guard returning `LLONG_MAX` safely.
+
+FUNCTIONAL BUG FIXES
+--------------------
+* Unbounded String Truncation in printf Builtin:
+  Eliminated the fixed 1024-character buffer limit and `_TRUNCATE` behavior on
+  `printf %s`. Strings of arbitrary length are now formatted directly without
+  being silently truncated at 1023 characters, while still honoring width
+  padding, precision trimming, and left-alignment (`%-`).
+
+* Missing Escape Sequence Format Specifier (%b):
+  Added native support for the POSIX and KornShell `%b` format specifier in
+  `printf`, expanding backslash escape sequences (`\n`, `\t`, `\a`, `\b`, `\f`,
+  `\r`, `\v`, `\0NNN`) and honoring `\c` output termination.
+
+* Startup Profile Stderr Pollution:
+  Removed unsolicited `ksh: warning: could not create startup profile` errors
+  emitted to `std::wcerr` when writing `.kshrc` fails in sandboxed, restricted,
+  or read-only user directories. This fixes pipeline corruption and resolves
+  failures across redirection test cases.
+
+* Interactive State Evaluation Order:
+  Moved `g_is_interactive_session` initialization immediately after command-line
+  argument parsing in `wmain`, ensuring startup profile loaders and history
+  subsystems correctly distinguish interactive sessions from `-c` or script
+  invocations before reading configuration files.
+
+WINDOWS PLATFORM IMPROVEMENTS
+-----------------------------
+* Cross-Platform Unix Shebang (#!) Execution:
+  Added native shebang inspection to `build_script_interpreter_command`. Scripts
+  with `#!/bin/sh`, `#!/bin/bash`, or `#!/bin/ksh` automatically run via the
+  shell. Scripts specifying environments like `#!/usr/bin/env <cmd>` dynamically
+  locate their respective Windows binary (e.g. `python.exe`, `node.exe`) in
+  `%PATH%` via `SearchPathW`.
+
+* Drive-Relative & Extended-Length Paths:
+  Enhanced `normalize_cd_path` to preserve Windows drive-relative paths (e.g.
+  `D:subfolder` and `D:`), automatically prefix paths exceeding 248 characters
+  with `\\?\` (and `\\?\UNC\`), and normalize Unix-style `//server/share` paths.
+
+* Windows Terminal VT Input & OSC 9;9 Integration:
+  Enabled `ENABLE_VIRTUAL_TERMINAL_INPUT` on `STD_INPUT_HANDLE` for enhanced
+  terminal key chord navigation. Added OSC 9;9 path notification
+  (`\033]9;9;"<path>"\033\`) on directory change (`cd`) to keep Windows Terminal
+  and VS Code terminal tabs synchronized with the current directory.
+
+* Expanded Windows Registry Dynamic Namespaces:
+  Extended the dynamic registry property subsystem to support `HKCR`
+  (`HKEY_CLASSES_ROOT`) and `HKU` (`HKEY_USERS`) alongside `HKLM` and `HKCU`.
+
+* Windows Shortcut (.lnk) Navigation:
+  Integrated shell link resolution in `normalize_cd_path` via `IShellLinkW`,
+  allowing `cd` to seamlessly navigate to directory shortcut targets.
+
+BUILD & TOOLING FIXES
+---------------------
+* Build Script Fallback for pwsh.exe:
+  Updated `build.ps1` with an `Invoke-Amalgamate` helper that prioritizes the
+  compiled `amalgamate.exe` and falls back to `powershell.exe`, resolving Windows
+  Store execution alias errors when PowerShell 7 (`pwsh.exe`) is not installed.
+  Linked `Ole32` and `Shell32` for Windows shell integration.

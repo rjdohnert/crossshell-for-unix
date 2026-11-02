@@ -1,0 +1,96 @@
+================================================================================
+kgdb - Change Log
+================================================================================
+
+This file tracks changes to kgdb (win-kgdb), the CrossShell for UNIX kernel
+debugger and crash dump diagnostic tool. kgdb provides GDB RSP protocol kernel
+debugging (Windows KDNET, FreeBSD, Linux/WSL2, Hyper-V VM, Azure VM) and crash
+dump analysis (Windows MEMORY.DMP and Minidumps) on Windows.
+
+--------------------------------------------------------------------------------
+v4.6.0 -- 2026-11-01
+--------------------------------------------------------------------------------
+
+This release eliminates synthetic/mock data fallbacks across the engine, fixes
+zeroed module base addresses, implements authentic PE image header size parsing,
+adds Windows Minidump and SEH unwind call stack walking, and establishes honest
+reporting for user-mode self-probes and crash dump parameters.
+
+BUG FIXES & AUTHENTICITY
+------------------------
+* Eliminated All-Zero Module Base Addresses:
+  - Addressed Windows KASLR address masking where non-elevated calls to
+    EnumDeviceDrivers() and NtQuerySystemInformation(SystemModuleInformation)
+    return arrays of NULL pointers. kgdb now strictly rejects zeroed base
+    pointers.
+  - Fixed resolveSymbol(addr) to reject baseAddress == 0, preventing low addresses
+    from false-matching uninitialized or masked module records.
+
+* Dynamic PE Image Size Discovery (Eliminated Hardcoded Sizes):
+  - Implemented QueryPeImageSize() to inspect PE OptionalHeader.SizeOfImage
+    directly from disk files (\SystemRoot\, \System32\drivers\, or file paths).
+  - EnumDeviceDrivers fallback now queries exact on-disk image sizes instead of
+    hardcoding 0x10000.
+  - Crash dump ntoskrnl.exe image resolution queries the authentic on-disk PE
+    image size rather than hardcoding 0x2000000.
+  - Remote GDB RSP qXfer:libraries:read parses authentic size="0x..." attributes,
+    and qOffsets derives text section sizes from Data= offsets. Undefined sizes
+    are presented as "Unknown" rather than fabricated.
+
+* Authentic Call Stack Unwinding:
+  - Implemented 64-bit Windows SEH table unwinding via RtlLookupFunctionEntry
+    and RtlVirtualUnwind for local self-probe execution context. Backtrace (bt)
+    now reliably walks through caller frames down to KERNEL32.DLL and ntdll.dll
+    even with Frame Pointer Omission (FPO) active.
+  - Filtered out raw non-code stack values in fallback RBP chain walking,
+    eliminating cosmetic "0x... in caller" unresolved stack pointer frames.
+  - Added stack-truncation indicators: both the SEH unwinder (capped at 16
+    frames) and the RBP-chain walker (capped at 8 frames) now print
+    "... (stack truncated at N frames)" when the frame cap is reached with a
+    live return context, instead of silently stopping.
+
+* Honest Target Labeling & Privilege Model:
+  - When running without Administrator privileges, kgdb now honestly labels its
+    target as "Local Self-Probe (User Mode)" rather than overstating it as
+    "authentic local kernel context".
+  - Updated EnableDebugPrivilege() to check GetLastError() == ERROR_SUCCESS,
+    properly detecting ERROR_NOT_ALL_ASSIGNED when user tokens lack the privilege.
+  - Surfaces a clear warning when SeDebugPrivilege cannot be acquired, noting
+    that Administrator elevation is required to unmask Ring-0 kernel drivers.
+
+* Crash Dump Context & BugCheck Clarification:
+  - Removed synthesis of registers.rip from BugCheckParameter4/1. Registers
+    are kept explicitly invalid (registers.valid = false) when raw processor
+    context records were not parsed from dump streams.
+  - 'info registers' now clearly explains that crash dump headers contain
+    BugCheck parameters rather than thread context, directing users to 'analyze'.
+  - 'bt' on dumps without thread context transparently labels fault addresses
+    as "[Fault address from BugCheck parameter: 0x... in module + 0xoffset]".
+
+* Minidump Architecture Guard:
+  - Added MINIDUMP_SYSTEM_INFO_LITE parser to inspect ProcessorArchitecture from
+    SystemInfoStream (type 10).
+  - CONTEXT stream structures are only mapped to local x64 CONTEXT when
+    ProcessorArchitecture == 9 (PROCESSOR_ARCHITECTURE_AMD64), safely avoiding
+    misparsing on ARM64 or x86 minidumps.
+
+* Remote GDB RSP Protocol Refinements:
+  - Corrected ParseGRegisters length guards: requires 17 * 16 = 272 characters
+    minimum (rax through rip). Documented that stubs omitting rflags (18 * 16)
+    default rflags to 0 while maintaining valid = true.
+  - Upgraded qXfer:libraries:read XML parsing to bounded block tokenization,
+    making it resilient to whitespace, line breaks, pretty-printed formatting,
+    self-closing tags (/>), and arbitrary attribute ordering.
+
+BUILD & PACKAGING
+-----------------
+* Fixed PowerShell quotation in build.ps1 ("-Wl,/subsystem:console").
+* Linked advapi32.lib for token privilege management.
+* Updated CLI version string to v4.6.0 and refreshed docs/kgdb.md.
+
+================================================================================
+Notes
+================================================================================
+* All commands and interactive shells retain full FreeBSD kgdb / GDB RSP syntax.
+* For usage, run: kgdb -h   (or 'kgdb --help')
+================================================================================

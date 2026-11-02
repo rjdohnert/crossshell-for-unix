@@ -1,0 +1,59 @@
+================================================================================
+ipadm - Change Log
+================================================================================
+
+This file tracks changes to ipadm, the CrossShell for UNIX IP interface and
+address administration tool. ipadm emulates Solaris ipadm on Windows,
+discovering interfaces and address objects via the IP Helper API and managing
+static/DHCP address assignments on the NT IP stack.
+
+--------------------------------------------------------------------------------
+v1.1.0 -- 2026-11-01
+--------------------------------------------------------------------------------
+
+This release makes the write-operation subcommands honest, implements the
+documented structured output formats, fixes the PowerShell build script, and
+modularizes the codebase.
+
+NEW FEATURES
+------------
+* Structured output: show-if and show-addr now support --json and --csv (in
+  addition to the default --table). Interface and address names are properly
+  escaped for JSON and CSV. (These flags were previously documented but
+  silently ignored.)
+
+BUG FIXES
+---------
+* create-if, delete-if, and set-prop no longer falsely report success. They now
+  honestly report that the operation is not supported via the Windows IP Helper
+  API and point to the equivalent netsh command, returning exit code 1.
+
+* create-addr now validates the IPv4 address and CIDR prefix before committing
+  to the NT IP stack, and guards against malformed prefixes (previously a bad
+  prefix could crash the tool via an unhandled std::stoi exception).
+
+* The synthetic-interface filter no longer excludes legitimate Microsoft-branded
+  physical NICs (the "microsoft" substring filter was removed).
+
+* Removed a block of unreachable help text (dead code after a return).
+
+CODE HEALTH
+-----------
+* Modularized the codebase: the six .inc include-fragments are now proper
+  header/translation-unit modules (ipadm_common, ipadm_models, ipadm_helpers,
+  ipadm_engine, ipadm_help, ipadm_subcommands, ipadm_app) plus a thin ipadm.cpp
+  entry point. Each module compiles independently.
+
+* Deduplicated the synthetic-interface blocklist: IsRealNetworkInterface now
+  uses the shared IsSyntheticWindowsInterface instead of a second copy with
+  inverted logic.
+
+* Fixed the PowerShell build script (build.ps1): the -Wl,/subsystem:console
+  linker flag is now quoted so PowerShell does not misparse it as a parameter.
+
+================================================================================
+Notes
+================================================================================
+* All changes are backward compatible with existing ipadm usage.
+* For usage, run: ipadm help   (or 'ipadm --help')
+================================================================================

@@ -46,6 +46,13 @@ enum class LinkClass {
     Vlan    // NDIS 802.1Q Tagged Interface
 };
 
+// Structured output formats for the show-* subcommands.
+enum class OutputFormat {
+    Table,  // default human-readable table
+    Json,   // JSON array of objects
+    Csv     // comma-separated values
+};
+
 struct DataLinkInfo {
     std::string linkName;       // e.g., net0, net1, vnic0, aggr0
     std::string adapterName;    // Win32 Friendly Name
@@ -66,6 +73,8 @@ std::string FormatMacAddress(const BYTE* mac, DWORD length);
 std::string FormatSpeed(UINT64 bps);
 std::string TruncateString(const std::string& value, size_t maxLen);
 std::string LinkClassToString(LinkClass lc);
+std::string JsonEscape(const std::string& value);
+std::string CsvEscape(const std::string& value);
 bool IsSyntheticWindowsInterface(const std::string& adapterName, const std::string& friendlyName, ULONG ifType);
 
 } // namespace dladm

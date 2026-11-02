@@ -48,6 +48,13 @@ void enable_ansi_support() {
             SetConsoleMode(hErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         }
     }
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    if (hIn != INVALID_HANDLE_VALUE && hIn != nullptr) {
+        DWORD mode = 0;
+        if (GetConsoleMode(hIn, &mode)) {
+            SetConsoleMode(hIn, mode | ENABLE_VIRTUAL_TERMINAL_INPUT);
+        }
+    }
 }
 
 class RedStderrBuffer : public std::wstreambuf {

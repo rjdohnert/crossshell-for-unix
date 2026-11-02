@@ -1,3 +1,5 @@
 .vscode/
 .wix/
 installer/
+
+*.old.exe

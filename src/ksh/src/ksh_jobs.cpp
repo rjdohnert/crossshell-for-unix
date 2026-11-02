@@ -1694,6 +1694,30 @@ bool is_absolute_windows_path(const std::wstring& path) {
     return path.rfind(L"\\\\", 0) == 0;
 }
 
+std::wstring resolve_shell_link_target(const std::wstring& lnk_path) {
+    std::wstring result;
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    IShellLinkW* psl = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&psl)))) {
+        IPersistFile* ppf = nullptr;
+        if (SUCCEEDED(psl->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&ppf)))) {
+            if (SUCCEEDED(ppf->Load(lnk_path.c_str(), STGM_READ))) {
+                wchar_t target[MAX_PATH] = {};
+                WIN32_FIND_DATAW fd = {};
+                if (SUCCEEDED(psl->GetPath(target, MAX_PATH, &fd, SLGP_UNCPRIORITY)) && target[0] != L'\0') {
+                    result = target;
+                }
+            }
+            ppf->Release();
+        }
+        psl->Release();
+    }
+    if (SUCCEEDED(hr)) {
+        CoUninitialize();
+    }
+    return result;
+}
+
 std::wstring normalize_cd_path(const std::wstring& input_path) {
     if (input_path.empty()) {
         return input_path;
@@ -1702,7 +1726,31 @@ std::wstring normalize_cd_path(const std::wstring& input_path) {
     std::wstring path = input_path;
     std::replace(path.begin(), path.end(), L'/', L'\\');
 
+    // Resolve .lnk shortcut if path doesn't exist but path.lnk does
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        std::wstring lnk_candidate = path + L".lnk";
+        DWORD lnk_attr = GetFileAttributesW(lnk_candidate.c_str());
+        if (lnk_attr != INVALID_FILE_ATTRIBUTES && (lnk_attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            std::wstring resolved = resolve_shell_link_target(lnk_candidate);
+            if (!resolved.empty() && GetFileAttributesW(resolved.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                path = resolved;
+            }
+        }
+    }
+
+    // Drive-relative path: D:relative\path (preserve relative to drive D's current directory)
+    if (path.size() >= 2 && std::iswalpha(path[0]) && path[1] == L':' && (path.size() == 2 || path[2] != L'\\')) {
+        return path;
+    }
+
     if (is_absolute_windows_path(path)) {
+        // Extended-length path support (\\?\) for paths >= 248 chars
+        if (path.size() >= 248 && path.rfind(L"\\\\?\\", 0) != 0) {
+            if (path.rfind(L"\\\\", 0) == 0) {
+                return L"\\\\?\\UNC\\" + path.substr(2);
+            }
+            return L"\\\\?\\" + path;
+        }
         return path;
     }
 
@@ -1801,6 +1849,48 @@ ScriptInterpreterResolution build_script_interpreter_command(const std::vector<s
         }
         return ScriptInterpreterResolution::Resolved;
     } else {
+        if (file_exists_regular(script_path)) {
+            std::ifstream file(script_path.c_str(), std::ios::binary);
+            if (file.is_open()) {
+                char magic[3] = {};
+                file.read(magic, 2);
+                if (file.gcount() == 2 && magic[0] == '#' && magic[1] == '!') {
+                    std::string line;
+                    std::getline(file, line);
+                    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+                        line.pop_back();
+                    }
+                    size_t pos = 0;
+                    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
+                    std::string shebang_cmd = line.substr(pos);
+                    std::wstring wshebang(shebang_cmd.begin(), shebang_cmd.end());
+                    if (wshebang.find(L"/sh") != std::wstring::npos ||
+                        wshebang.find(L"/bash") != std::wstring::npos ||
+                        wshebang.find(L"/ksh") != std::wstring::npos) {
+                        const std::vector<std::wstring> script_args(tokens.begin() + 1, tokens.end());
+                        if (build_self_script_command(script_path, script_args, command_line)) {
+                            return ScriptInterpreterResolution::Resolved;
+                        }
+                    } else if (!wshebang.empty()) {
+                        std::wstring interp;
+                        if (wshebang.rfind(L"/usr/bin/env ", 0) == 0) {
+                            interp = trim_copy(wshebang.substr(13));
+                        } else {
+                            size_t last_slash = wshebang.find_last_of(L"/\\");
+                            interp = (last_slash != std::wstring::npos) ? wshebang.substr(last_slash + 1) : wshebang;
+                        }
+                        wchar_t buf[MAX_PATH] = {};
+                        if (SearchPathW(nullptr, interp.c_str(), L".exe", MAX_PATH, buf, nullptr) > 0) {
+                            command_line = quote_command_argument(buf);
+                            command_line += L" ";
+                            command_line += quote_command_argument(script_path);
+                            append_script_arguments();
+                            return ScriptInterpreterResolution::Resolved;
+                        }
+                    }
+                }
+            }
+        }
         return ScriptInterpreterResolution::NotScript;
     }
 }

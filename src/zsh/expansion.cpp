@@ -3,6 +3,8 @@
 #include "parser.hpp"
 #include "scripting.hpp"
 
+using namespace std;
+
 vector<string> g_process_subst_temp_files;
 vector<ProcessSubstSink> g_process_subst_sinks;
 int g_process_subst_eval_depth = 0;
@@ -91,6 +93,23 @@ long long eval_math_expr(const string& expr) {
                 while (i < s.size() && s[i]>='0' && s[i]<='7') v = v*8 + (s[i++]-'0');
                 --depth; return v;
             }
+            // bare variable names: zsh arithmetic resolves identifiers against
+            // the shell environment, recursively evaluating their values
+            if (i < s.size() && (isalpha((unsigned char)s[i]) || s[i] == '_')) {
+                size_t name_start = i;
+                while (i < s.size() && (isalnum((unsigned char)s[i]) || s[i] == '_')) ++i;
+                long long v = 0;
+                auto it = g_env.vars.find(s.substr(name_start, i - name_start));
+                if (it != g_env.vars.end()) {
+                    static thread_local int var_eval_depth = 0;
+                    if (var_eval_depth < 16) {
+                        ++var_eval_depth;
+                        v = eval_math_expr(it->second);
+                        --var_eval_depth;
+                    }
+                }
+                --depth; return v;
+            }
             long long v = 0;
             while (i < s.size() && isdigit((unsigned char)s[i])) v = v*10 + (s[i++]-'0');
             --depth; return v;
@@ -108,10 +127,28 @@ long long eval_math_expr(const string& expr) {
             v = primary(); --depth; return v;
         }
 
-        long long mul() {
+        long long power() {
             long long v = unary();
+            if (i + 1 < s.size() && s[i]=='*' && s[i+1]=='*') {
+                i += 2;
+                long long e = power(); // right-associative
+                if (e < 0) return 0;
+                long long result = 1;
+                long long base = v;
+                while (e > 0) {
+                    if (e & 1LL) { long long t; if (!checked_mul(result, base, t)) return 0; result = t; }
+                    e >>= 1;
+                    if (e > 0) { long long t; if (!checked_mul(base, base, t)) return 0; base = t; }
+                }
+                return result;
+            }
+            return v;
+        }
+
+        long long mul() {
+            long long v = power();
             while (i < s.size() && (s[i]=='*'||s[i]=='/'||s[i]=='%')) {
-                char op = s[i++]; long long r = unary();
+                char op = s[i++]; long long r = power();
                 long long tmp;
                 if (op == '*') {
                     if (!checked_mul(v, r, tmp)) return 0;
@@ -209,6 +246,58 @@ long long eval_math_expr(const string& expr) {
     for (char c : expr) if (!isspace((unsigned char)c)) clean += c;
     if (clean.empty()) return 0;
     return Eval(clean).lorr();
+}
+
+int eval_arithmetic_command(const string& expr_in) {
+    string expr = trim_copy(expr_in);
+    if (expr.empty()) return 1;
+    string var_name, rhs, op_type = "=";
+    if (expr.length() >= 2 && expr.substr(expr.length() - 2) == "++") {
+        var_name = trim_copy(expr.substr(0, expr.length() - 2));
+        op_type = "++";
+    } else if (expr.length() >= 2 && expr.substr(expr.length() - 2) == "--") {
+        var_name = trim_copy(expr.substr(0, expr.length() - 2));
+        op_type = "--";
+    } else {
+        size_t eq = expr.find('=');
+        bool is_comparison = eq != string::npos &&
+            ((eq + 1 < expr.size() && expr[eq + 1] == '=') ||
+             (eq > 0 && (expr[eq - 1] == '<' || expr[eq - 1] == '>' ||
+                         expr[eq - 1] == '!' || expr[eq - 1] == '=')));
+        if (eq != string::npos && !is_comparison) {
+            if (eq > 0 && (expr[eq - 1] == '+' || expr[eq - 1] == '-' || expr[eq - 1] == '*' || expr[eq - 1] == '/')) {
+                op_type = string(1, expr[eq - 1]) + "=";
+                var_name = trim_copy(expr.substr(0, eq - 1));
+            } else {
+                string lhs = trim_copy(expr.substr(0, eq));
+                if (!lhs.empty() && (lhs.back() == '+' || lhs.back() == '-' || lhs.back() == '*' || lhs.back() == '/')) {
+                    op_type = string(1, lhs.back()) + "=";
+                    lhs.pop_back();
+                    var_name = trim_copy(lhs);
+                } else {
+                    var_name = lhs;
+                }
+            }
+            rhs = trim_copy(expr.substr(eq + 1));
+        } else {
+            return (eval_math_expr(g_env.expand_vars(expr)) != 0) ? 0 : 1;
+        }
+    }
+    if (var_name.empty()) return 1;
+    long long cur = 0;
+    if (g_env.vars.count(var_name)) { try { cur = stoll(g_env.vars[var_name]); } catch (...) {} }
+    long long rv = rhs.empty() ? 0 : eval_math_expr(g_env.expand_vars(rhs));
+    long long res;
+    if      (op_type == "=")  res = rv;
+    else if (op_type == "+=") res = cur + rv;
+    else if (op_type == "-=") res = cur - rv;
+    else if (op_type == "*=") res = cur * rv;
+    else if (op_type == "/=") res = rv ? cur / rv : 0;
+    else if (op_type == "++") res = cur + 1;
+    else if (op_type == "--") res = cur - 1;
+    else res = rv;
+    g_env.vars[var_name] = to_string(res);
+    return (res != 0) ? 0 : 1;
 }
 
 

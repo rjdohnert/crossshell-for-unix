@@ -8162,6 +8162,10 @@ bool execute_command_line_impl(const std::wstring& input_line, bool& should_exit
                 std::wstring new_cwd_str = new_cwd;
                 ksh_env.variables[L"PWD"] = new_cwd_str;
                 SetEnvironmentVariableW(L"PWD", new_cwd_str.c_str());
+                if (g_is_interactive_session && _isatty(_fileno(stdout))) {
+                    std::wcout << L"\033]9;9;\"" << new_cwd_str << L"\"\033\\";
+                    std::wcout.flush();
+                }
                 if (print_after) {
                     write_builtin_output(new_cwd_str + L"\n");
                 }

@@ -65,12 +65,20 @@ bool ExecuteRamStatusSummary(const WmiTargetConfig& target, const std::wstring& 
         unsigned long long usedKb = (totalKb > freeKb) ? (totalKb - freeKb) : 0;
 
         if (totalKb > 0) {
-            unsigned long long loadPct = (usedKb * 100ULL) / totalKb;
+            unsigned long long loadPct = static_cast<unsigned long long>(
+                (static_cast<long double>(usedKb) * 100.0L) / totalKb
+            );
             ramLoad = std::to_wstring(loadPct) + L"%";
         }
 
-        totalPhysical = FormatBytes(totalKb * 1024ULL);
-        availablePhysical = FormatBytes(freeKb * 1024ULL);
+        const unsigned long long maxKilobytes =
+            std::numeric_limits<unsigned long long>::max() / 1024ULL;
+        if (totalKb <= maxKilobytes) {
+            totalPhysical = FormatBytes(totalKb * 1024ULL);
+        }
+        if (freeKb <= maxKilobytes) {
+            availablePhysical = FormatBytes(freeKb * 1024ULL);
+        }
     }
 
     if (g_outputOptions.format == OutputFormat::Table) {

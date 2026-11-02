@@ -218,6 +218,10 @@ bool read_registry_property(const std::wstring& property_path, std::wstring& val
         root = HKEY_LOCAL_MACHINE;
     } else if (root_name == L"HKCU" || root_name == L"HKEY_CURRENT_USER") {
         root = HKEY_CURRENT_USER;
+    } else if (root_name == L"HKCR" || root_name == L"HKEY_CLASSES_ROOT") {
+        root = HKEY_CLASSES_ROOT;
+    } else if (root_name == L"HKU" || root_name == L"HKEY_USERS") {
+        root = HKEY_USERS;
     } else {
         return false;
     }
@@ -310,6 +314,10 @@ bool write_registry_property(const std::wstring& property_path, const std::wstri
         root = HKEY_LOCAL_MACHINE;
     } else if (root_name == L"HKCU" || root_name == L"HKEY_CURRENT_USER") {
         root = HKEY_CURRENT_USER;
+    } else if (root_name == L"HKCR" || root_name == L"HKEY_CLASSES_ROOT") {
+        root = HKEY_CLASSES_ROOT;
+    } else if (root_name == L"HKU" || root_name == L"HKEY_USERS") {
+        root = HKEY_USERS;
     } else {
         return false;
     }
@@ -374,7 +382,7 @@ bool write_registry_property(const std::wstring& property_path, const std::wstri
 }
 
 static void register_registry_namespaces() {
-    for (const wchar_t* name : {L"HKLM", L"HKCU"}) {
+    for (const wchar_t* name : {L"HKLM", L"HKCU", L"HKCR", L"HKU"}) {
         CustomTypeDefinition& definition = g_custom_types[name];
         definition.name = name;
         definition.is_dynamic_namespace = true;

@@ -2,6 +2,8 @@
 #include "engine.hpp"
 #include "expansion.hpp"
 
+using namespace std;
+
 string trim_copy(const string& s) {
     size_t b = 0;
     while (b < s.size() && isspace((unsigned char)s[b])) ++b;
@@ -32,6 +34,98 @@ Pipeline parse_pipeline(const string& line) {
     };
 
     Pipeline pl;
+
+    // Fast path: a stage that is a compound construct (while/case/if/subshell/
+    // brace-group) cannot be tokenized as a simple command. Split the line on
+    // top-level '|' and keep each compound stage's source intact for
+    // --pipeline-stage re-execution.
+    {
+        bool has_top_pipe = false;
+        bool all_simple = true;
+        {
+            bool q_sq = false, q_dq = false, esc = false;
+            int p_depth = 0, b_depth = 0, db_depth = 0;
+            for (size_t i = 0; i < line.size(); ++i) {
+                char c = line[i];
+                if (esc) { esc = false; continue; }
+                if (c == '\\' && !q_sq) { esc = true; continue; }
+                if (c == '"' && !q_sq) { q_dq = !q_dq; continue; }
+                if (c == '\'' && !q_dq) { q_sq = !q_sq; continue; }
+                if (q_sq || q_dq) continue;
+                if (c == '[' && i + 1 < line.size() && line[i + 1] == '[') { ++db_depth; ++i; continue; }
+                if (c == ']' && i + 1 < line.size() && line[i + 1] == ']' && db_depth > 0) { --db_depth; ++i; continue; }
+                if (db_depth > 0) continue;
+                if (c == '(') { ++p_depth; continue; }
+                if (c == ')' && p_depth > 0) { --p_depth; continue; }
+                if (c == '{') { ++b_depth; continue; }
+                if (c == '}' && b_depth > 0) { --b_depth; continue; }
+                if (c == '|' && p_depth == 0 && b_depth == 0 &&
+                    (i + 1 >= line.size() || line[i + 1] != '|') &&
+                    (i == 0 || line[i - 1] != '|')) has_top_pipe = true;
+            }
+        }
+        if (has_top_pipe) {
+            bool q_sq = false, q_dq = false, esc = false;
+            int p_depth = 0, b_depth = 0, db_depth = 0;
+            string cur;
+            vector<string> stages;
+            for (size_t i = 0; i < line.size(); ++i) {
+                char c = line[i];
+                if (esc) { cur += c; esc = false; continue; }
+                if (c == '\\' && !q_sq) { cur += c; esc = true; continue; }
+                if (c == '"' && !q_sq) { q_dq = !q_dq; cur += c; continue; }
+                if (c == '\'' && !q_dq) { q_sq = !q_sq; cur += c; continue; }
+                if (q_sq || q_dq) { cur += c; continue; }
+                if (c == '[' && i + 1 < line.size() && line[i + 1] == '[') { ++db_depth; cur += "[["; ++i; continue; }
+                if (c == ']' && i + 1 < line.size() && line[i + 1] == ']' && db_depth > 0) { --db_depth; cur += "]]"; ++i; continue; }
+                if (db_depth > 0) { cur += c; continue; }
+                if (c == '(') { ++p_depth; cur += c; continue; }
+                if (c == ')' && p_depth > 0) { --p_depth; cur += c; continue; }
+                if (c == '{') { ++b_depth; cur += c; continue; }
+                if (c == '}' && b_depth > 0) { --b_depth; cur += c; continue; }
+                if (c == '|' && p_depth == 0 && b_depth == 0 &&
+                    (i + 1 >= line.size() || line[i + 1] != '|') &&
+                    (i == 0 || line[i - 1] != '|')) {
+                    stages.push_back(trim_copy(cur));
+                    cur.clear();
+                    continue;
+                }
+                cur += c;
+            }
+            stages.push_back(trim_copy(cur));
+
+            auto is_compound_stage = [](const string& s) {
+                if (s.empty()) return false;
+                if (s.front() == '(' || s.front() == '{') return true;
+                return starts_with_word_trimmed(s, "while") || starts_with_word_trimmed(s, "until") ||
+                       starts_with_word_trimmed(s, "for") || starts_with_word_trimmed(s, "case") ||
+                       starts_with_word_trimmed(s, "if") || starts_with_word_trimmed(s, "select") ||
+                       starts_with_word_trimmed(s, "repeat");
+            };
+            for (const auto& st : stages) if (is_compound_stage(st)) all_simple = false;
+
+            if (!all_simple) {
+                for (const auto& st : stages) {
+                    if (st.empty()) { pl.error = "missing pipeline command"; return pl; }
+                    if (is_compound_stage(st)) {
+                        SingleCmd sc;
+                        sc.args = {"__compound__"};
+                        sc.glob_allowed = {false};
+                        pl.cmds.push_back(std::move(sc));
+                        pl.compound_sources.push_back(st);
+                    } else {
+                        Pipeline sub = parse_pipeline(st);
+                        if (!sub.error.empty()) { pl.error = sub.error; return pl; }
+                        if (sub.cmds.size() != 1) { pl.error = "invalid pipeline stage"; return pl; }
+                        pl.cmds.push_back(std::move(sub.cmds[0]));
+                        pl.compound_sources.push_back("");
+                    }
+                }
+                return pl;
+            }
+        }
+    }
+
     string current = "";
     bool in_dq = false, in_sq = false;
     bool current_started = false;

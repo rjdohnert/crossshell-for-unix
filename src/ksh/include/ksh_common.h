@@ -58,6 +58,7 @@
 #include <ctime>
 #include <memory>
 #include <windows.h>
+#include <shlobj.h>
 #include <sddl.h>
 #include <winternl.h>
 #include <io.h>

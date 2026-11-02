@@ -356,7 +356,22 @@ bool CollectWslDetectionResult(
     const WmiSecurityConfig& securityConfig,
     WslDetectionResult& result
 );
+bool ApplyWslCliProbeResult(
+    WslDetectionResult& result,
+    bool executableResolved,
+    bool commandStarted,
+    int exitCode,
+    const std::wstring& output
+);
 bool ParseWslListOutput(const std::wstring& wslOutput, std::vector<std::pair<std::wstring, std::wstring>>& distrosOut, const std::wstring& sourceLabel);
+bool ValidatePathVerbArgumentCount(const std::wstring& verb, int argumentCount, std::wstring& errorOut);
+bool ParseInteractiveShellSetCommand(
+    const std::vector<std::wstring>& tokens,
+    std::wstring& keyOut,
+    std::wstring& valueOut,
+    bool& resetOut,
+    std::wstring& errorOut
+);
 bool ExecuteVirtualSwitchQuery(const WmiTargetConfig& target, const std::wstring& wmiLocale, const WmiSecurityConfig& securityConfig);
 bool ExecuteWMISwitchStateQuery(
     const WmiTargetConfig& target,
@@ -2373,6 +2388,7 @@ enum class WslProbeError {
     AccessDenied,
     RegistryUnavailable,
     WslNotInstalled,
+    WslCliFailed,
     PowerShellFailed,
     UnsupportedHost,
     Unknown

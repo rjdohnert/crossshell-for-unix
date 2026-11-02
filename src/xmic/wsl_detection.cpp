@@ -9,6 +9,7 @@ std::wstring DescribeWslProbeError(WslProbeError error) {
     case WslProbeError::AccessDenied: return L"Access denied";
     case WslProbeError::RegistryUnavailable: return L"Registry path unavailable";
     case WslProbeError::WslNotInstalled: return L"WSL CLI not available";
+    case WslProbeError::WslCliFailed: return L"WSL CLI probe failed";
     case WslProbeError::PowerShellFailed: return L"PowerShell fallback failed";
     case WslProbeError::UnsupportedHost: return L"Unsupported host environment";
     case WslProbeError::Unknown:
@@ -130,6 +131,41 @@ bool EnumerateWslDistrosFromRegistry(HKEY hive, const std::wstring& rootSubKey, 
     RegCloseKey(key);
     return !distrosOut.empty();
 }
+bool ApplyWslCliProbeResult(
+    WslDetectionResult& result,
+    bool executableResolved,
+    bool commandStarted,
+    int exitCode,
+    const std::wstring& output
+) {
+    result.attemptedCli = true;
+    result.cliSucceeded = commandStarted && exitCode == 0;
+    if (!executableResolved) {
+        AppendWslError(result, WslProbeError::WslNotInstalled, L"Unable to resolve wsl.exe.");
+        AppendWslDiagnostic(result, L"wsl.exe could not be located for fallback probing.");
+    } else if (!commandStarted) {
+        AppendWslError(result, WslProbeError::WslCliFailed, L"Failed to start wsl.exe fallback command.");
+        AppendWslDiagnostic(result, L"wsl.exe could not be started during fallback probing.");
+    } else if (exitCode != 0) {
+        AppendWslError(result, WslProbeError::WslCliFailed, L"wsl.exe fallback command returned a non-zero exit code.");
+        AppendWslDiagnostic(result, L"wsl.exe returned a non-zero exit code during fallback probing.");
+    } else {
+        ParseWslListOutput(output, result.distros, L"Detected via wsl.exe");
+        if (!result.distros.empty()) {
+            result.foundDistros = true;
+            result.status = WslProbeError::None;
+            AppendWslDiagnostic(result, L"Detected WSL distributions via wsl.exe -l -q fallback.");
+        }
+    }
+
+    if (!result.foundDistros) {
+        if (result.status == WslProbeError::None) {
+            result.status = WslProbeError::NoDistrosFound;
+        }
+        AppendWslDiagnostic(result, L"No WSL distributions were discovered from registry or CLI fallback paths.");
+    }
+    return result.foundDistros;
+}
 bool CollectWslDetectionResult(const WmiTargetConfig& target, const std::wstring& wmiLocale, const WmiSecurityConfig& securityConfig, WslDetectionResult& result) {
     result = WslDetectionResult{};
 
@@ -227,30 +263,13 @@ bool CollectWslDetectionResult(const WmiTargetConfig& target, const std::wstring
     }
 
     if (!result.foundDistros) {
-        result.attemptedCli = true;
         std::wstring wslOutput;
         int wslExit = -1;
         std::wstring wslPath;
-        bool cliOk = ResolveSystemExecutablePath(L"wsl.exe", wslPath) &&
+        bool executableResolved = ResolveSystemExecutablePath(L"wsl.exe", wslPath);
+        bool commandStarted = executableResolved &&
             RunCommandCapture(QuoteCommandLineArgument(wslPath) + L" -l -q", wslOutput, wslExit);
-        if (cliOk && wslExit == 0) {
-            result.cliSucceeded = true;
-            ParseWslListOutput(wslOutput, result.distros, L"Detected via wsl.exe");
-            if (!result.distros.empty()) {
-                result.foundDistros = true;
-                AppendWslDiagnostic(result, L"Detected WSL distributions via wsl.exe -l -q fallback.");
-            }
-        } else {
-            AppendWslError(result, WslProbeError::PowerShellFailed, L"WSL CLI fallback command did not succeed.");
-            if (wslExit != 0) {
-                AppendWslDiagnostic(result, L"wsl.exe returned a non-zero exit code during fallback probing.");
-            }
-        }
-    }
-
-    if (!result.foundDistros) {
-        result.status = WslProbeError::NoDistrosFound;
-        AppendWslDiagnostic(result, L"No WSL distributions were discovered from registry or CLI fallback paths.");
+        ApplyWslCliProbeResult(result, executableResolved, commandStarted, wslExit, wslOutput);
     }
 
     if (pRegSvc) {

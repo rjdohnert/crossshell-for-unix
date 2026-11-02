@@ -3,73 +3,73 @@
 #include "zsh.hpp"
 
 struct FunctionLocalScope {
-    map<string, string> vars_before;
-    map<string, vector<string>> indexed_arrays_before;
-    map<string, map<string, string>> assoc_arrays_before;
-    set<string> integer_vars_before;
-    set<string> readonly_vars_before;
-    set<string> unique_arrays_before;
-    set<string> local_names;
+    std::map<std::string, std::string> vars_before;
+    std::map<std::string, std::vector<std::string>> indexed_arrays_before;
+    std::map<std::string, std::map<std::string, std::string>> assoc_arrays_before;
+    std::set<std::string> integer_vars_before;
+    std::set<std::string> readonly_vars_before;
+    std::set<std::string> unique_arrays_before;
+    std::set<std::string> local_names;
     bool local_options = false;
-    map<string, bool> options_before;
+    std::map<std::string, bool> options_before;
 };
 
-extern vector<FunctionLocalScope> g_function_local_scopes;
+extern std::vector<FunctionLocalScope> g_function_local_scopes;
 
-void mark_function_local(const string& name);
+void mark_function_local(const std::string& name);
 void restore_function_locals(const FunctionLocalScope& scope);
 
-bool split_zsh_registry_path(const string& property_path, HKEY& root, wstring& key_path, wstring& value_name);
-bool read_zsh_registry_property(const string& property_path, string& value, RegistryValueMetadata& metadata);
-bool write_zsh_registry_property(const string& property_path, const string& value);
+bool split_zsh_registry_path(const std::string& property_path, HKEY& root, std::wstring& key_path, std::wstring& value_name);
+bool read_zsh_registry_property(const std::string& property_path, std::string& value, RegistryValueMetadata& metadata);
+bool write_zsh_registry_property(const std::string& property_path, const std::string& value);
 
-vector<string> find_all_executables_in_path(const string& bin);
+std::vector<std::string> find_all_executables_in_path(const std::string& bin);
 
-string win_quote_arg(const string& arg);
-string cmd_escape_meta(const string& s);
+std::string win_quote_arg(const std::string& arg);
+std::string cmd_escape_meta(const std::string& s);
 
 class ZshEnvironment {
 public:
-    map<string, string> vars;
-    map<string, RegistryValueMetadata> registry_metadata;
-    map<string, vector<string>> indexed_arrays;      // typeset -a
-    map<string, map<string, string>> assoc_arrays;   // typeset -A
-    set<string> unique_arrays;
-    set<string> integer_vars;
-    map<string, string> aliases;
-    map<string, bool> options;
-    map<string, string> functions;
-    set<string> readonly_vars;
-    set<string> autoload_functions;
-    map<string, string> completion_definitions;
-    map<string, map<string, string>> keymaps;
-    map<pair<string, string>, vector<string>> styles;
-    map<string, string> widgets;
-    set<string> loaded_modules;
-    vector<string> positional_args;
-    vector<string> dir_stack;
-    vector<string> history;
-    vector<BackgroundJob> jobs;
+    std::map<std::string, std::string> vars;
+    std::map<std::string, RegistryValueMetadata> registry_metadata;
+    std::map<std::string, std::vector<std::string>> indexed_arrays;      // typeset -a
+    std::map<std::string, std::map<std::string, std::string>> assoc_arrays;   // typeset -A
+    std::set<std::string> unique_arrays;
+    std::set<std::string> integer_vars;
+    std::map<std::string, std::string> aliases;
+    std::map<std::string, bool> options;
+    std::map<std::string, std::string> functions;
+    std::set<std::string> readonly_vars;
+    std::set<std::string> autoload_functions;
+    std::map<std::string, std::string> completion_definitions;
+    std::map<std::string, std::map<std::string, std::string>> keymaps;
+    std::map<std::pair<std::string, std::string>, std::vector<std::string>> styles;
+    std::map<std::string, std::string> widgets;
+    std::set<std::string> loaded_modules;
+    std::vector<std::string> positional_args;
+    std::vector<std::string> dir_stack;
+    std::vector<std::string> history;
+    std::vector<BackgroundJob> jobs;
     
-    set<string> disabled_builtins;
-    set<string> disabled_aliases;
-    set<string> disabled_functions;
-    map<string, string> command_hash_table;
-    map<string, string> named_directories;
-    map<string, string> resource_limits;
-    vector<pair<time_t, string>> scheduled_events;
+    std::set<std::string> disabled_builtins;
+    std::set<std::string> disabled_aliases;
+    std::set<std::string> disabled_functions;
+    std::map<std::string, std::string> command_hash_table;
+    std::map<std::string, std::string> named_directories;
+    std::map<std::string, std::string> resource_limits;
+    std::vector<std::pair<time_t, std::string>> scheduled_events;
     
-    string home_dir;
-    string zshrc_path;
-    string history_path;
-    string oldpwd;
+    std::string home_dir;
+    std::string zshrc_path;
+    std::string history_path;
+    std::string oldpwd;
     int    last_exit_code = 0;
     bool   prompt_dirty   = true;  // invalidated by cd; avoids per-keystroke Win32 API calls
-    string prompt_cache;
+    std::string prompt_cache;
     time_t start_time     = time(nullptr);
 
     ZshEnvironment();
     void load_history();
-    void add_history(const string& cmd);
-    string expand_vars(const string& input);
+    void add_history(const std::string& cmd);
+    std::string expand_vars(const std::string& input);
 };

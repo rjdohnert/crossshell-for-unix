@@ -43,6 +43,7 @@ $Sources = @(
     "jobs.cpp",
     "terminal.cpp",
     "builtins.cpp",
+    "builtins_help.cpp",
     "scripting.cpp",
     "selftest.cpp",
     "zsh.cpp"

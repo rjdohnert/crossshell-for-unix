@@ -48,13 +48,18 @@ try {
         return
     }
 
+    function Invoke-Amalgamate([string]$outputPath) {
+        if (Test-Path "$scriptDir\amalgamate.exe") {
+            & "$scriptDir\amalgamate.exe" --source-dir "$scriptDir" --output $outputPath
+        } else {
+            $psExe = if (Get-Command powershell.exe -ErrorAction SilentlyContinue) { "powershell.exe" } else { "pwsh.exe" }
+            & $psExe -NoProfile -File "$scriptDir\amalgamate.ps1" -OutputFile $outputPath -SourceDir "$scriptDir"
+        }
+    }
+
     if ($Action -eq "amalgamate") {
         Write-Host "[ksh] Generating amalgamation..."
-        if (Test-Path "$scriptDir\amalgamate.exe") {
-            & "$scriptDir\amalgamate.exe" --source-dir "$scriptDir" --output "$scriptDir\ksh.cpp"
-        } else {
-            & pwsh.exe -NoProfile -File "$scriptDir\amalgamate.ps1" -OutputFile "$scriptDir\ksh.cpp" -SourceDir "$scriptDir"
-        }
+        Invoke-Amalgamate "$scriptDir\ksh.cpp"
         Write-Host "[ksh] Amalgamation updated: ksh.cpp"
         return
     }
@@ -81,18 +86,14 @@ try {
         if ($Action -eq "test") {
             $testAmalgamationPath = Join-Path $env:TEMP ("ksh-test-" + [guid]::NewGuid().ToString("N") + ".cpp")
             Write-Host "[ksh] Generating a fresh test amalgamation..."
-            & pwsh.exe -NoProfile -File "$scriptDir\amalgamate.ps1" -OutputFile $testAmalgamationPath -SourceDir $scriptDir
+            Invoke-Amalgamate $testAmalgamationPath
             if ($LASTEXITCODE -ne 0) {
                 Write-Error "[ksh] Failed to generate the test amalgamation."
                 exit $LASTEXITCODE
             }
         } elseif (-not (Test-Path "$scriptDir\ksh.cpp")) {
             Write-Host "[ksh] Generating initial amalgamation..."
-            if (Test-Path "$scriptDir\amalgamate.exe") {
-                & "$scriptDir\amalgamate.exe" --source-dir "$scriptDir" --output "$scriptDir\ksh.cpp"
-            } else {
-                & pwsh.exe -NoProfile -File "$scriptDir\amalgamate.ps1" -OutputFile "$scriptDir\ksh.cpp" -SourceDir "$scriptDir"
-            }
+            Invoke-Amalgamate "$scriptDir\ksh.cpp"
         }
     }
 
@@ -103,9 +104,9 @@ try {
         Write-Host "[ksh] Compiling amalgamated ksh.exe..."
         $amalgamationSource = if ($testAmalgamationPath) { $testAmalgamationPath } else { "ksh.cpp" }
         if ($isMsvc) {
-            & $compilerCmd /std:c++17 /O2 /EHsc /nologo /Fe:ksh.exe $amalgamationSource Advapi32.lib User32.lib
+            & $compilerCmd /std:c++17 /O2 /EHsc /nologo /Fe:ksh.exe $amalgamationSource Advapi32.lib User32.lib Ole32.lib Shell32.lib
         } else {
-            & $compilerCmd -std=c++17 -O2 $amalgamationSource -lAdvapi32 -lUser32 "-Wl,/subsystem:console" -o ksh.exe
+            & $compilerCmd -std=c++17 -O2 $amalgamationSource -lAdvapi32 -lUser32 -lole32 -lshell32 "-Wl,/subsystem:console" -o ksh.exe
         }
         if ($LASTEXITCODE -ne 0) {
             Write-Error "[ksh] Build failed for ksh.exe."
@@ -118,9 +119,9 @@ try {
         Write-Host "[ksh] Compiling modular ksh_modular.exe..."
         $sources = Get-ChildItem -Path "$scriptDir\src\*.cpp" | ForEach-Object { $_.FullName }
         if ($isMsvc) {
-            & $compilerCmd /std:c++17 /O2 /EHsc /nologo /I "$scriptDir\include" /Fe:ksh_modular.exe $sources Advapi32.lib User32.lib
+            & $compilerCmd /std:c++17 /O2 /EHsc /nologo /I "$scriptDir\include" /Fe:ksh_modular.exe $sources Advapi32.lib User32.lib Ole32.lib Shell32.lib
         } else {
-            & $compilerCmd -std=c++17 -O2 -I "$scriptDir\include" $sources -lAdvapi32 -lUser32 "-Wl,/subsystem:console" -o ksh_modular.exe
+            & $compilerCmd -std=c++17 -O2 -I "$scriptDir\include" $sources -lAdvapi32 -lUser32 -lole32 -lshell32 "-Wl,/subsystem:console" -o ksh_modular.exe
         }
         if ($LASTEXITCODE -ne 0) {
             Write-Error "[ksh] Build failed for ksh_modular.exe."

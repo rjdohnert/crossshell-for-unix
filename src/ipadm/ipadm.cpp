@@ -29,35 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <windows.h>
-#include <ws2tcpip.h>
-#include <iphlpapi.h>
-#include <netioapi.h>
-
-#include <iostream>
-#include <fcntl.h>
-#include <io.h>
-#include <iomanip>
-#include <vector>
-#include <string>
-#include <sstream>
-#include <memory>
-#include <algorithm>
-#include <cctype>
-#include <cstdint>
-
-#pragma comment(lib, "iphlpapi.lib")
-#pragma comment(lib, "ws2_32.lib")
-
-#include "ipadm_module_01_models.inc"
-#include "ipadm_module_02_helpers.inc"
-#include "ipadm_module_03_engine.inc"
-#include "ipadm_module_04_help.inc"
-#include "ipadm_module_05_subcommands.inc"
-#include "ipadm_module_06_app.inc"
+#include "ipadm_app.h"
 
 int main(int argc, char* argv[]) {
     return IpadmApplication().run(argc, argv);

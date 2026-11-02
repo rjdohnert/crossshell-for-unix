@@ -287,6 +287,20 @@ std::wstring signal_spec_to_trap_event(const std::wstring& raw_signal) {
 }
 
 bool force_kill_process_by_pid(DWORD pid) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32First(snapshot, &pe)) {
+            do {
+                if (pe.th32ParentProcessID == pid && pe.th32ProcessID != 0 && pe.th32ProcessID != pid) {
+                    force_kill_process_by_pid(pe.th32ProcessID);
+                }
+            } while (Process32Next(snapshot, &pe));
+        }
+        CloseHandle(snapshot);
+    }
+
     HANDLE process_handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
     if (process_handle == nullptr) {
         return false;

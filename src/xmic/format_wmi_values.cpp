@@ -1,7 +1,6 @@
 #include "xmic_common.hpp"
 
 std::wstring FormatBytes(unsigned long long bytes) {
-    if (bytes == 0) return L"N/A";
     double gb = static_cast<double>(bytes) / (1024 * 1024 * 1024);
     wchar_t buf[32];
     if (gb >= 1.0) {
@@ -29,6 +28,10 @@ bool TryParseUnsignedLongLong(const std::wstring& input, unsigned long long& val
     return true;
 }
 std::wstring FormatJsonFloatingToken(double value) {
+    if (!std::isfinite(value)) {
+        return L"null";
+    }
+
     thread_local std::wostringstream stream;
     thread_local bool initialized = false;
     if (!initialized) {
@@ -261,8 +264,21 @@ std::wstring VariantToJson(VARIANT& vtProp) {
                 }
                 break;
             }
+            case VT_VARIANT: {
+                VARIANT v;
+                VariantInit(&v);
+                if (SUCCEEDED(SafeArrayGetElement(psa, &i, &v))) {
+                    out += VariantToJson(v);
+                } else {
+                    out += L"null";
+                }
+                VariantClear(&v);
+                break;
+            }
             default: {
-                out += L"null";
+                out += L"\"<unsupported array element type ";
+                out += std::to_wstring(elementType);
+                out += L">\"";
                 break;
             }
             }

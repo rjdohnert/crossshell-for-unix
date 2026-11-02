@@ -36,12 +36,13 @@
 namespace dladm {
 
 void PrintHelp();
-void ShowLink(const std::vector<DataLinkInfo>& links, const std::string& targetLink);
-void ShowPhys(const std::vector<DataLinkInfo>& links, const std::string& targetLink);
-void ShowLinkProp(const std::vector<DataLinkInfo>& links, const std::string& targetProp, const std::string& targetLink);
-void ShowVnic(const std::vector<DataLinkInfo>& links, const std::string& targetLink);
-void ShowAggr(const std::vector<DataLinkInfo>& links, const std::string& targetLink);
-void ShowVlan(const std::vector<DataLinkInfo>& links, const std::string& targetLink);
+void ShowLink(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt = OutputFormat::Table);
+void ShowPhys(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt = OutputFormat::Table);
+void ShowLinkProp(const std::vector<DataLinkInfo>& links, const std::string& targetProp, const std::string& targetLink, OutputFormat fmt = OutputFormat::Table);
+void ShowVnic(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt = OutputFormat::Table);
+void ShowAggr(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt = OutputFormat::Table);
+void ShowVlan(const std::vector<DataLinkInfo>& links, const std::string& targetLink, OutputFormat fmt = OutputFormat::Table);
+int  SetLinkProp(const std::vector<DataLinkInfo>& links, const std::string& targetProp, const std::string& targetLink);
 
 } // namespace dladm
 

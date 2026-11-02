@@ -34,6 +34,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 
 #include <iostream>
 #include <fcntl.h>

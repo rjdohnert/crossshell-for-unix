@@ -86,7 +86,7 @@ std::string FormatMacAddress(const BYTE* mac, DWORD length) {
 }
 
 std::string FormatSpeed(UINT64 bps) {
-    if (bps == 0) return "0";
+    if (bps == 0) return "--"; // unknown / no link
     double mbps = static_cast<double>(bps) / 1000000.0;
     if (mbps >= 1000.0) {
         std::ostringstream oss;
@@ -117,6 +117,45 @@ std::string LinkClassToString(LinkClass lc) {
         case LinkClass::Vlan: return "vlan";
         default: return "unknown";
     }
+}
+
+std::string JsonEscape(const std::string& value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    return out;
+}
+
+std::string CsvEscape(const std::string& value) {
+    // Quote if the value contains a comma, quote, or newline; double inner quotes.
+    if (value.find_first_of(",\"\n\r") == std::string::npos) {
+        return value;
+    }
+    std::string out = "\"";
+    for (char c : value) {
+        if (c == '"') out += "\"\"";
+        else out += c;
+    }
+    out += "\"";
+    return out;
 }
 
 bool IsSyntheticWindowsInterface(const std::string& adapterName, const std::string& friendlyName, ULONG ifType) {
@@ -155,8 +194,9 @@ bool IsSyntheticWindowsInterface(const std::string& adapterName, const std::stri
         text.find("802.3 mac layer lightweight filter") != std::string::npos ||
         text.find("kernel debugger") != std::string::npos ||
         text.find("vpn") != std::string::npos ||
-        text.find("ras") != std::string::npos ||
-        text.find("microsoft") != std::string::npos;
+        text.find("ras") != std::string::npos;
+    // Note: do NOT filter on "microsoft" -- a Microsoft-branded physical NIC is
+    // a legitimate adapter, not a synthetic interface.
 
     return synthetic;
 }
