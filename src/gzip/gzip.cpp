@@ -29,23 +29,16 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "gzip_app.hpp"
 
-#include <fcntl.h>
+#include <exception>
 #include <iostream>
-#include <io.h>
-#include <string>
-#include <vector>
-#include <cstdio>
-#include <memory>
-
-#include "gzip_module_01_options.inc"
-#include "gzip_module_02_reporter.inc"
-#include "gzip_module_03_bridge.inc"
-#include "gzip_module_04_engine.inc"
-#include "gzip_module_05_app.inc"
 
 int wmain(int argc, wchar_t* argv[]) {
-    return GzipApp::run(argc, argv);
+    try {
+        return GzipApp::run(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "gzip: fatal error: " << exception.what() << '\n';
+        return 1;
+    }
 }

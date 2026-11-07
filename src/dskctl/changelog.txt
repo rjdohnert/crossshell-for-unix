@@ -1,0 +1,43 @@
+dskctl
+Change Log
+==========
+
+Security
+--------
+- Removed loading of cleanup configuration from the temporary directory.
+- Derive cleanup locations from Windows Known Folders and the Windows
+  directory, then constrain operations to those approved roots.
+- Skip reparse points and enforce traversal depth and entry limits.
+- Require an elevated Administrator process for cleanup; help and previews
+  remain available without elevation.
+- Restrict --safe to low- and medium-risk targets and reject explicitly
+  selected high-risk targets when --safe is present.
+- Require --force when --execute is combined with structured output.
+- Keep cleanup in preview mode by default and require explicit execution.
+
+Functionality and reliability
+-----------------------------
+- Replace the single-file implementation and included source fragments with
+  separately compiled modules for application flow, argument parsing,
+  cleanup targets, security checks, cleanup execution, reporting, logging,
+  and shared helpers.
+- Add strict handling for incompatible output and execution options.
+- Skip inaccessible or unsafe paths with report details; count cleanup and
+  filesystem operation failures rather than silently ignoring them.
+- Skip reparse points during both preview and execution, and bound directory
+  traversal to prevent unbounded scans.
+- Report aggregate file, byte, skip, and error totals, with bounded issue
+  details in human, JSON, CSV, and tab-separated output.
+- Preserve clean structured output without preview banners or prompts.
+- Create exclusive per-session logs under the current user's LocalAppData
+  and report incomplete or failed log writes.
+- Improve Recycle Bin operation status reporting.
+
+Build and documentation
+-----------------------
+- Update PowerShell, batch, and shell build scripts to compile the modules
+  and install dskctl.exe into bin\ by default.
+- Create the bin directory when needed and fail the build when installation
+  fails.
+- Document supported options, target risk levels, output formats, and safety
+  behavior.

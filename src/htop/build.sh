@@ -15,19 +15,13 @@ if ! command -v clang++ >/dev/null 2>&1; then
 fi
 
 echo "[htop] Compiling with clang++..."
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-    clang++ -std=c++17 -O2 htop.cpp -ladvapi32 -lntdll -Wl,/subsystem:console -o htop.exe
-    TARGET="htop.exe"
-else
-    clang++ -std=c++17 -O2 htop.cpp -ladvapi32 -lntdll -o htop
-    TARGET="htop"
-fi
+TARGET="htop.exe"
+clang++ -std=c++17 -O2 htop.cpp htop_app.cpp htop_telemetry.cpp htop_console.cpp htop_format.cpp -ladvapi32 -lpsapi -lntdll -Wl,/subsystem:console -o "$TARGET"
 
 echo "[htop] Build successful: $TARGET"
 
 if [ "$1" != "noinstall" ]; then
-    if [ -d "../../bin" ]; then
-        cp -f "$TARGET" "../../bin/"
-        echo "[htop] Installed to ../../bin/$TARGET"
-    fi
+    mkdir -p "../../bin"
+    cp -f "$TARGET" "../../bin/"
+    echo "[htop] Installed to ../../bin/$TARGET"
 fi

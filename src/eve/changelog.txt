@@ -1,0 +1,40 @@
+EVE CHANGELOG
+=============
+
+Security and reliability
+------------------------
+- Validate console handles and mode changes before entering the editor; restore
+  terminal modes on every normal startup and shutdown path.
+- Wait on console input and a dedicated shutdown event, and report failed input
+  operations instead of consuming uninitialized records.
+- Limit child-process handle inheritance for /PIPE, check every write and exit
+  status, and terminate pipe commands that exceed the bounded timeout.
+- Store journals under the current user's LocalAppData directory and use a
+  stable path hash so journal names remain consistent across runs.
+- Write shutdown recovery snapshots to the same journal files that startup
+  detects and the RECOVER command restores.
+- Write saves, preferences, and journals through uniquely created temporary
+  files, flush them before replacement, preserve the prior backup until a save
+  succeeds, and report failures.
+- Treat unreadable files as errors rather than silently opening them as empty
+  new files.
+
+Functional fixes
+----------------
+- Preserve whether an existing file ends with a newline.
+- Parse command-line options safely, support -- for filenames beginning with a
+  dash, reject unknown options, and report invalid/conflicting options.
+- Support quoted file names containing spaces in OPEN and SAVE commands.
+- Apply read-only mode to buffers opened after startup and prevent all writes
+  when the editor was launched read-only.
+- Report completed, interrupted, and failed editor outcomes accurately in
+  structured output; check output and pipe failures.
+- Highlight complete lines rather than silently truncating highlighting after
+  8192 bytes.
+
+Modularization and installation
+-------------------------------
+- Replaced numbered include fragments with focused console, editor, file I/O,
+  pipe, application, shared-type, and syntax-highlighting modules.
+- Updated the PowerShell, batch, and Windows shell builds to compile the modules,
+  create bin when needed, and install the executable as bin\\eve.exe by default.

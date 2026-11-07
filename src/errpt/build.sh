@@ -14,18 +14,29 @@ if ! command -v clang++ >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "[errpt] Compiling with clang++..."
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-    clang++ -std=c++17 -O2 errpt.cpp -Wl,/subsystem:console -o errpt.exe
-    TARGET="errpt.exe"
-else
-    clang++ -std=c++17 -O2 errpt.cpp -o errpt
-    TARGET="errpt"
+if [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* && "$OSTYPE" != win32* ]]; then
+    echo "[errpt] Error: errpt uses the Windows Event Log API; build it with build.ps1 or build.bat on Windows." >&2
+    exit 1
 fi
+
+SOURCES=(
+    errpt.cpp
+    errpt_application.cpp
+    errpt_event_reader.cpp
+    errpt_output.cpp
+    errpt_parser.cpp
+)
+
+TARGET="errpt.exe"
+echo "[errpt] Compiling Windows modules with clang++..."
+clang++ -std=c++17 -O2 "${SOURCES[@]}" -Wl,/subsystem:console -o "$TARGET"
 
 echo "[errpt] Build successful: $TARGET"
 if [ "$1" != "noinstall" ]; then
-    if [ -d "../../bin" ]; then
-        cp -f "$TARGET" "../../bin/"
+    mkdir -p "../../bin"
+    cp -f "$TARGET" "../../bin/$TARGET"
+    if [ ! -f "../../bin/$TARGET" ]; then
+        echo "[errpt] Error: failed to install $TARGET to bin/." >&2
+        exit 1
     fi
 fi

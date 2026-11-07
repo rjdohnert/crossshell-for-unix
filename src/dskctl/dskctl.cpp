@@ -29,39 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <algorithm>
-#include <cctype>
-#include <cwctype>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
-#include <sstream>
-#include <string>
-#include <system_error>
-#include <vector>
-#include <windows.h>
-#include <shellapi.h>
-#include <shlobj.h>
-#include <memory>
-
-#pragma comment(lib, "Shell32.lib")
-#pragma comment(lib, "Advapi32.lib")
-
-#undef min
-#undef max
-
-namespace fs {
-using namespace std::filesystem;
-}
-
-#include "dskctl_module_01_models.inc"
-#include "dskctl_module_02_helpers.inc"
-#include "dskctl_module_03_security.inc"
-#include "dskctl_module_04_engine.inc"
-#include "dskctl_module_05_options.inc"
-#include "dskctl_module_06_reporter.inc"
-#include "dskctl_module_07_app.inc"
+#include "dskctl_app.hpp"
 
 int main(int argc, char* argv[]) {
     DskctlApplication app;

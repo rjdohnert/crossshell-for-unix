@@ -15,17 +15,30 @@ if ! command -v clang++ >/dev/null 2>&1; then
 fi
 
 echo "[driverctl] Compiling with clang++..."
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-    clang++ -std=c++17 -O2 driverctl.cpp -Wl,/subsystem:console -o driverctl.exe
-    TARGET="driverctl.exe"
-else
-    clang++ -std=c++17 -O2 driverctl.cpp -o driverctl
-    TARGET="driverctl"
+SOURCES=(
+    driverctl.cpp
+    driverctl_app.cpp
+    driverctl_scanner.cpp
+    driverctl_logger.cpp
+    driverctl_decoder.cpp
+    driverctl_formatters.cpp
+    driverctl_utilities.cpp
+)
+case "$OSTYPE" in
+    msys*|cygwin*|win32*)
+        TARGET="driverctl.exe"
+        clang++ -std=c++17 -O2 "${SOURCES[@]}" -Wl,/subsystem:console \
+            -lsetupapi -lcfgmgr32 -ladvapi32 -lshell32 -lole32 -o "$TARGET"
+        ;;
+    *)
+        echo "[driverctl] Error: driverctl requires a Windows or MSYS/Cygwin build environment." >&2
+        exit 1
+        ;;
+esac
+
+if [ "$1" != "noinstall" ]; then
+    mkdir -p "../../bin"
+    cp -f "$TARGET" "../../bin/driverctl.exe"
 fi
 
 echo "[driverctl] Build successful: $TARGET"
-if [ "$1" != "noinstall" ]; then
-    if [ -d "../../bin" ]; then
-        cp -f "$TARGET" "../../bin/"
-    fi
-fi

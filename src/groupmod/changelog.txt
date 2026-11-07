@@ -1,0 +1,16 @@
+groupmod changes
+================
+
+- Replaced the include-fragment implementation with separate CLI, input,
+  local-group, application, and shared-type modules.
+- Switched to Unicode command-line arguments, strict option validation, and
+  bounded UTF-8 CSV/TSV input with BOM, quoting, NUL, and control handling.
+- Reworked comment and rename operations to use a single NetAPI update when
+  both are requested, avoiding partial application between separate calls.
+- Corrected force behavior so a missing source is idempotent while a rename
+  collision remains an error; aligned diagnostics and exit statuses.
+- Corrected documentation to describe local Windows groups and actual
+  supported operations instead of unsupported AD, GID, and RID claims.
+- Updated build scripts to compile all modules and install groupmod.exe in
+  bin\; the installer now verifies the executable is present.
+- Removed the obsolete groupmod .inc fragments.

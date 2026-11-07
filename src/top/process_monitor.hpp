@@ -4,18 +4,34 @@
 #include "process_record.hpp"
 #include "top.hpp"
 
+struct TopOptions {
+    int refreshDelaySec = 1;
+    int maxDisplayCount = 20;
+    SortMode currentSort = SortMode::CPU;
+    std::string userFilter;
+};
+
+struct ProcessCpuSample {
+    uint64_t cpuTime = 0;
+    uint64_t creationTime = 0;
+};
+
 class HpUxTopEngine {
 private:
     double load1 = 0.0, load5 = 0.0, load15 = 0.0;
     CpuSnapshot prevSystemCpu{};
-    std::unordered_map<DWORD, uint64_t> prevProcTimes;
+    std::unordered_map<DWORD, ProcessCpuSample> prevProcTimes;
     std::chrono::steady_clock::time_point lastSampleTime;
 
-    int refreshDelaySec = 2;
-    int maxDisplayCount = 20;
-    SortMode currentSort = SortMode::CPU;
-    std::string userFilter = "";
-    bool showHelp = false;
+    int refreshDelaySec;
+    int maxDisplayCount;
+    SortMode currentSort;
+    std::string userFilter;
+    bool running = true;
+    HANDLE consoleOutput = INVALID_HANDLE_VALUE;
+    DWORD originalConsoleMode = 0;
+    bool consoleModeSaved = false;
+    bool cursorHidden = false;
 
     // Helper: Convert FILETIME to 100ns units
     static uint64_t FileTimeToUint64(const FILETIME& ft);
@@ -27,11 +43,11 @@ private:
     std::string GetProcessUser(HANDLE hProcess);
 
 public:
-    HpUxTopEngine();
+    explicit HpUxTopEngine(const TopOptions& options);
 
     ~HpUxTopEngine();
 
-    void EnableVirtualTerminal();
+    bool EnableVirtualTerminal();
 
     void InitSystemSnapshot();
 
@@ -45,5 +61,7 @@ public:
 
     void PromptLine(const std::string& msg);
 
-    void Run();
+    std::string ReadPromptLine(const std::string& msg);
+
+    int Run();
 };

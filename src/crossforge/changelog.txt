@@ -1,0 +1,124 @@
+================================================================================
+CrossForge IDE - Changelog
+Date: 2026-11-03
+================================================================================
+
+Summary of Bug Fixes, Functional Improvements, and Stability Updates
+--------------------------------------------------------------------------------
+
+1. VT Terminal Cursor Tracking & Visibility Management
+   - Files: src/crossforge/crossforge_engine.h, src/crossforge/crossforge_engine.cpp
+   - Added m_cursorX and m_cursorY state tracking to CrossForgeEngine and updated
+     SetCursorPositionVT() to record desired cursor coordinates.
+   - Updated FlushBuffer() to position the VT cursor at (m_cursorX + 1, m_cursorY + 1)
+     after drawing the frame buffer, and only emit \x1b[?25h (show cursor) when
+     m_cursorVisible is true (preventing FlushBuffer() from unconditionally
+     re-showing the cursor during modal dialogs or when scrolled off-screen).
+   - Updated RenderSingleWindow() to dynamically hide the hardware/VT cursor when
+     the active document's caret is scrolled outside the visible viewport and show
+     it when inside the viewport.
+
+2. Modal Dialog Cursor State & Render Ordering
+   - Files: src/crossforge/crossforge_engine.cpp
+   - Saved and restored cursor visibility (SetCursorVisible(false) on entry,
+     SetCursorVisible(prevCursorVisible) on exit) across all modal dialogs:
+     ShowCommandOutputDialog(), ShowBuildResultDialog(), ShowDebuggerDetectDialog(),
+     ShowAboutDialog(), and ShowCompilerDetectDialog().
+   - Reordered RenderScreen() before SetCursorVisible(false) in ShowPathNavigatorDialog(),
+     ShowInputDialog(), and ShowMenuPopup() (including WINDOW_BUFFER_SIZE_EVENT
+     resize handling) so RenderScreen() does not overwrite dialog cursor state.
+   - Fixed input box cursor X positioning in ShowInputDialog() and
+     ShowPathNavigatorDialog() to use Utf8DisplayWidth() instead of byte length
+     for accurate caret placement on multi-byte/wide UTF-8 input.
+
+3. Asynchronous Git Commit Temp File Lifetime & Git Stage Status
+   - Files: src/crossforge/crossforge_engine.h, src/crossforge/crossforge_engine.cpp
+   - Fixed a race condition in GitCommit() where the temporary commit message file
+     (crossforge_commit_<pid>.txt) was deleted on the main thread immediately
+     after starting the asynchronous git commit -F worker thread, before git
+     could read the file.
+   - Added an optional cleanupFile (std::filesystem::path) parameter to
+     StartToolProcess() and RunGitCommand() so the worker thread deletes the
+     temporary file after ProcessRunner::RunProcess() finishes (or immediately
+     if a tool is already running or git is missing on PATH).
+   - Removed the premature "Staged all changes." status message from GitAddAll()
+     that immediately overwrote the "Running Git Stage All..." status before the
+     async command completed.
+
+4. Thread-Safe ESC Cancellation for Background Build/Run/Test/Git Processes
+   - Files: src/crossforge/process_runner.h, src/crossforge/process_runner.cpp,
+            src/crossforge/crossforge_engine.cpp
+   - Fixed a console input race condition where ProcessRunner::RunProcess()
+     polled GetStdHandle(STD_INPUT_HANDLE) on a background thread while the main
+     UI thread also read from STD_INPUT_HANDLE.
+   - Added ProcessRunner::RequestCancel() and ProcessRunner::ClearCancel() backed
+     by an atomic flag (std::atomic<bool> g_cancelRequested).
+   - Wired VK_ESCAPE in CrossForgeEngine::ProcessInput() to call
+     ProcessRunner::RequestCancel() when m_toolRunning is active, and updated
+     StartToolProcess() to call ProcessRunner::ClearCancel() before launching
+     a worker thread.
+
+5. Editor Keyboard Handling (Delete, Tab, Select All, and Modifier Filtering)
+   - Files: src/crossforge/crossforge_engine.cpp
+   - Added VK_DELETE support in ProcessInput() to delete the UTF-8 codepoint at
+     the cursor or merge the next line when at the end of a line.
+   - Added VK_TAB support in ProcessInput() to insert a tab character ("\t")
+     when neither Ctrl nor Alt is pressed.
+   - Wired Select All (m_selectAllActive via Ctrl+A) into VK_RETURN, VK_BACK,
+     VK_DELETE, VK_TAB, character typing, and PasteClipboardAtCursor() so
+     editing or pasting while the buffer is selected replaces the buffer cleanly.
+   - Reset m_selectAllActive across document switches, window/tab clicks, file
+     open/new/close/recent, Undo/Redo, FindNext, ReplaceTextPrompt, and
+     GoToNextDiagnostic to prevent stale selection state from wiping another
+     buffer on the next keystroke.
+   - Updated VK_ESCAPE to clear m_selectAllActive and update the status bar.
+   - Added modifier guards (IsCtrlPressed(state) == IsAltPressed(state)) to
+     character input in ProcessInput(), ShowPathNavigatorDialog(), and
+     ShowInputDialog() so unbound Ctrl+<key> or Alt+<key> chords do not insert
+     stray characters (while preserving AltGr international input).
+
+6. Multi-Window & Tab Layout Mouse Handling
+   - Files: src/crossforge/crossforge_engine.cpp
+   - Fixed mouse clicking in the editor area to iterate all documents via
+     GetDocWindowFrame(i, topY, botY), switch m_activeDocIndex when clicking an
+     inactive split pane, and calculate clicked line indices relative to the
+     clicked pane's topY + 1 (fixing off-by-one line clicks in Tabs mode and
+     broken clicks in Split mode).
+   - Fixed mouse wheel scrolling to keep doc->CursorY clamped within the visible
+     viewport [ScrollY, ScrollY + viewHeight - 1] so EnsureCursorVisible() does
+     not snap ScrollY back to the old cursor line on the next render.
+
+7. File Save Validation, Rollback, & Document Load State Reset
+   - Files: src/crossforge/crossforge_engine.cpp, src/crossforge/document.cpp
+   - Checked doc->SaveFile() return values in SaveActiveDocument(),
+     SaveActiveDocumentAs(), EnsureActiveDocumentPath(), RunDebugForActiveTarget(),
+     RunLinkerForActiveTarget(), BuildActiveTarget(), and RunActiveTarget().
+   - Added rollback of FilePath, Title, and Lang if saving a newly named file
+     fails, preventing false "Saved" statuses or builds against unwritten files.
+   - Updated Document::LoadFile() to reset CursorX, CursorY, ScrollY, ScrollX,
+     IsModified, UndoStack, and RedoStack when loading a file.
+
+8. Undo/Redo & Search/Replace Viewport and Cursor Invariants
+   - Files: src/crossforge/crossforge_engine.cpp
+   - Added EnsureCursorVisible(doc, m_activeDocIndex) after Undo and Redo in
+     UndoActiveDocument() and RedoActiveDocument() so the viewport scrolls to
+     the restored caret position.
+   - Added EnsureDocumentInvariants(doc) and EnsureCursorVisible(doc, m_activeDocIndex)
+     to ReplaceTextPrompt() and FindNext() so shortening lines during Replace
+     cannot leave CursorX past end-of-line or mid-UTF-8 codepoint.
+
+9. Project Persistence, Directory Browser, Linker Detection, & Menu Accelerators
+   - Files: src/crossforge/crossforge_engine.cpp
+   - Fixed LoadUserProject() to strip trailing '\r' characters from ~/.crossforge
+     config lines and preserve the saved RECENT file order instead of reversing it.
+   - Hardened ShowPathNavigatorDialog() directory iteration with
+     fs::directory_options::skip_permission_denied and non-throwing error_code
+     overloads of is_directory() so protected system entries do not abort folder
+     listings.
+   - Added Rust (rustc.exe) and Go (go.exe) support to DetectLinkerForLanguage()
+     and IsLikelyCompilerToolDirectory().
+   - Bound Ctrl+Shift+E to MenuCommand::FileRecent in HandleMenuAccelerator()
+     (avoiding the conflict with Ctrl+R / CompileRun) and updated menu and help
+     labels accordingly.
+   - Fixed ShowMenuPopup() to check m_inPos >= m_inBuf.size() before waiting on
+     m_hStdIn so buffered console events are processed without latency.

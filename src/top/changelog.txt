@@ -1,0 +1,51 @@
+================================================================================
+top - Change Log
+================================================================================
+
+This file tracks changes to top, the CrossShell for UNIX interactive process
+monitor for Windows.
+
+--------------------------------------------------------------------------------
+2026-11-01
+--------------------------------------------------------------------------------
+
+This update implements the documented command-line options and improves process
+sampling, memory reporting, input validation, and console cleanup.
+
+NEW FEATURES
+------------
+* Command-line options: -d/--delay and -i set the refresh interval; -n sets
+  the displayed row count; -s selects CPU, memory, PID, name, or time sorting;
+  and -u filters by username.
+
+* Interactive controls now support Escape and Ctrl+X to quit, plus sorting by
+  command name. The default refresh interval is one second.
+
+BUG FIXES
+---------
+* Invalid, missing, or unsupported command-line values now produce an error
+  instead of being silently ignored and starting the monitor.
+
+* Process names and usernames are converted from UTF-16 to UTF-8 using
+  dynamically sized buffers, avoiding unsafe fixed-size conversions.
+
+* Per-process CPU usage now checks process creation time and counter ordering,
+  preventing PID reuse from producing wrapped CPU percentages.
+
+* Memory reporting now distinguishes physical memory from Windows commit usage.
+  It no longer derives misleading swap values, and reports when the memory
+  status query fails.
+
+* The process table labels sampled CPU activity rather than presenting it as
+  the Windows scheduler state. Processes whose owners cannot be queried are
+  shown as unknown instead of being labeled SYSTEM.
+
+* Console virtual-terminal settings and cursor visibility are restored on
+  normal exit. Running without an interactive console now returns an error.
+
+DOCUMENTATION
+-------------
+* Updated the top manual to match supported options, defaults, interactive
+  keys, and the meaning of the activity and memory fields.
+
+================================================================================

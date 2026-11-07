@@ -29,42 +29,40 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <string_view>
-#include <vector>
-#include <memory>
+#include "gsar_app.hpp"
+#include "gsar_cli.hpp"
+
+#include <exception>
 #include <filesystem>
-#include <cstdint>
-#include <cctype>
-#include <iomanip>
-#include <sstream>
-#include <algorithm>
-
-#ifdef _WIN32
-#include <io.h>
-#include <fcntl.h>
-#define SET_BINARY_MODE(handle) _setmode(_fileno(handle), _O_BINARY)
-#else
-#define SET_BINARY_MODE(handle) ((void)0)
-#endif
-
-namespace fs = std::filesystem;
-
-#include "gsar_module_01_pattern.inc"
-#include "gsar_module_02_options.inc"
-#include "gsar_module_03_parser.inc"
-#include "gsar_module_04_engine.inc"
-#include "gsar_module_05_app.inc"
+#include <iostream>
+#include <string>
+#include <utility>
 
 int main(int argc, char* argv[]) {
+    Options options;
+    std::string error;
+    if (!CommandLineParser::parse(argc, argv, options, error)) {
+        std::cerr << "[gsar] Error: " << error << '\n'
+                  << "Use -h or --help for usage information.\n";
+        return 1;
+    }
+
+    if (options.showHelp) {
+        const std::string executableName = argc > 0 && argv[0] != nullptr
+            ? std::filesystem::path(argv[0]).stem().string()
+            : "gsar";
+        CommandLineParser::printHelp(executableName);
+        return 0;
+    }
+    if (options.showVersion) {
+        std::cout << "gsar version 1.0.0 (CrossShell for UNIX)\n";
+        return 0;
+    }
+
     try {
-        Options options = CommandLineParser::parse(argc, argv);
-        GSARApp app(std::move(options));
-        return app.run();
-    } catch (const std::exception& ex) {
-        std::cerr << "[gsar] Fatal Exception: " << ex.what() << "\n";
+        return GSARApp(std::move(options)).run();
+    } catch (const std::exception& exception) {
+        std::cerr << "[gsar] Fatal error: " << exception.what() << '\n';
         return 1;
     }
 }

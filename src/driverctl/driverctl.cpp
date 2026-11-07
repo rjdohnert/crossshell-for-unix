@@ -29,45 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <windows.h>
-#include <setupapi.h>
-#include <cfgmgr32.h>
-#include <initguid.h>
-#include <devpkey.h>
-#include <knownfolders.h>
-#include <shlobj.h>
-
-#include <iostream>
-#include <vector>
-#include <string>
-#include <string_view>
-#include <chrono>
-#include <fstream>
-#include <memory>
-#include <filesystem>
-#include <algorithm>
-#include <sstream>
-#include <iomanip>
-#include <ctime>
-#include <cstring>
-#include <cctype>
-#include <cstdio>
-
-#pragma comment(lib, "setupapi.lib")
-#pragma comment(lib, "cfgmgr32.lib")
-#pragma comment(lib, "advapi32.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "ole32.lib")
-
-namespace fs = std::filesystem;
-
-#include "driverctl_module_01_formatters.inc"
-#include "driverctl_module_02_utilities.inc"
-#include "driverctl_module_03_models.inc"
-#include "driverctl_module_04_decoder.inc"
-#include "driverctl_module_05_logger.inc"
-#include "driverctl_module_06_scanner.inc"
-#include "driverctl_module_07_app.inc"
+#include "driverctl_app.hpp"
 
 int main(int argc, char* argv[]) {
     DriverCtlApp app;

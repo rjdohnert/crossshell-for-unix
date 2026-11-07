@@ -30,30 +30,36 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+
+#include "errpt_application.hpp"
+
 #include <windows.h>
-#include <iostream>
-#include <iomanip>
-#include <string>
-#include <vector>
-#include <algorithm>
-#include <ctime>
-#include <sstream>
+#include <fcntl.h>
+#include <io.h>
+
 #include <cstdio>
-#include <streambuf>
-
-#pragma comment(lib, "advapi32.lib")
-
-namespace {
-
-#include "errpt_module_01_models.inc"
-#include "errpt_module_02_helpers.inc"
-#include "errpt_module_03_formatters.inc"
-#include "errpt_module_04_argparser.inc"
-#include "errpt_module_05_engine.inc"
-#include "errpt_module_06_app.inc"
-
-} // namespace
+#include <exception>
+#include <iostream>
 
 int wmain(int argc, wchar_t* argv[]) {
-    return ErrptApplication().run(argc, argv);
+    SetConsoleOutputCP(CP_UTF8);
+    if (_setmode(_fileno(stderr), _O_U8TEXT) == -1) {
+        std::fputs("errpt: cannot configure UTF-8 diagnostics.\n", stderr);
+        return 1;
+    }
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        std::wcerr << L"errpt: cannot configure standard output.\n";
+        return 1;
+    }
+
+    try {
+        return ErrptApplication().Run(argc, argv);
+    } catch (const std::exception&) {
+        std::wcerr << L"errpt: fatal error while processing event logs.\n";
+        return 1;
+    } catch (...) {
+        std::wcerr << L"errpt: unknown fatal error.\n";
+        return 1;
+    }
 }

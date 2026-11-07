@@ -29,61 +29,49 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef UNICODE
-#define UNICODE
-#endif
-#ifndef _UNICODE
-#define _UNICODE
-#endif
+#include "htop_app.hpp"
+#include "htop_types.hpp"
+#include "htop_version.hpp"
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
-#include <windows.h>
-#include <tlhelp32.h>
-#include <psapi.h>
-#include <sddl.h>
+#include <cerrno>
+#include <climits>
+#include <cwchar>
 #include <iostream>
-#include <vector>
+#include <new>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <algorithm>
-#include <chrono>
-#include <thread>
-#include <iomanip>
-#include <sstream>
-#include <mutex>
-#include <atomic>
-#include <cwctype>
-#include <io.h>
-#include <fcntl.h>
-#include <conio.h>
 
-#pragma comment(lib, "Advapi32.lib")
-#pragma comment(lib, "ntdll.lib")
-
-namespace AppInfo {
-    constexpr wchar_t NAME[] = L"htop";
-    constexpr wchar_t VERSION[] = L"5.9";
+namespace {
+bool ParsePositiveInteger(const wchar_t* text, int& value) {
+    if (text == nullptr || *text == L'\0') return false;
+    errno = 0;
+    wchar_t* end = nullptr;
+    long parsed = std::wcstol(text, &end, 10);
+    if (errno == ERANGE || end == text || *end != L'\0' || parsed <= 0 || parsed > INT_MAX) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
 }
 
-#include "htop_module_01_ntdll.inc"
-#include "htop_module_02_color.inc"
-#include "htop_module_03_models.inc"
-#include "htop_module_04_telemetry.inc"
-#include "htop_module_05_formatters.inc"
-#include "htop_module_06_renderer.inc"
-#include "htop_module_07_app.inc"
+bool ParseProcessId(const wchar_t* text, DWORD& value) {
+    if (text == nullptr || *text == L'\0' || *text == L'-') return false;
+    errno = 0;
+    wchar_t* end = nullptr;
+    unsigned long long parsed = std::wcstoull(text, &end, 10);
+    if (errno == ERANGE || end == text || *end != L'\0' || parsed > MAXDWORD) return false;
+    value = static_cast<DWORD>(parsed);
+    return true;
+}
+}
 
-int wmain() {
+static int RunCommandLine() {
     int argc = __argc;
     wchar_t** argv = __wargv;
 
-    if (argc > 1) {
-        std::wstring arg1 = argv[1] ? argv[1] : L"";
-        if (arg1 == L"--help" || arg1 == L"-h" || arg1 == L"/?") {
+    HtopOptions options;
+    for (int i = 1; i < argc; ++i) {
+        std::wstring arg = argv[i] ? argv[i] : L"";
+        if (arg == L"--help" || arg == L"-h" || arg == L"/?" || arg == L"-?") {
             std::wcout << LR"(htop(1)            CrossShell for UNIX Reference Manual                 htop(1)
 
     NAME
@@ -99,19 +87,19 @@ int wmain() {
 
     OPTIONS
         -d, --delay DELAY
-            Delay between updates in tenths of seconds.
+            Delay between updates in tenths of seconds (default: 15).
 
         -u, --user USERNAME
             Show only processes owned by the specified user.
 
         -p, --pid PID...
-            Show only processes with the specified process IDs.
+            Show only processes with the specified process IDs (repeatable).
 
         -h, --help
             Display this reference manual.
 
         -V, --version
-            Display version and license information.
+            Display version information.
 
     INTERACTIVE KEYS
         F1, h, ?
@@ -132,14 +120,14 @@ int wmain() {
         F6, <, >
             Sort by selected column.
 
-        F7, ]
-            Increase process priority.
+        F7, [
+            Lower process priority.
 
-        F8, [
-            Decrease process priority.
+        F8, ]
+            Raise process priority.
 
         F9, k
-            Send signal or terminate selected process.
+            Open the process action menu.
 
         F10, q
             Quit the application.
@@ -154,23 +142,62 @@ int wmain() {
         htop -u SYSTEM
             Show processes running under the SYSTEM account.
 
+        htop -p 1234 5678
+            Show only processes 1234 and 5678.
+
     CrossShell for UNIX                                                    htop(1)
 )";
             return 0;
         }
-        if (arg1 == L"--version" || arg1 == L"-V") {
+        if (arg == L"--version" || arg == L"-V") {
             std::wcout << AppInfo::NAME << L" " << AppInfo::VERSION << L"\n";
             return 0;
         }
+
+        if (arg == L"-d" || arg == L"--delay") {
+            if (i + 1 >= argc || !ParsePositiveInteger(argv[i + 1], options.delayTenths)) {
+                std::wcerr << L"htop: delay must be a positive integer number of tenths\n";
+                return 2;
+            }
+            ++i;
+        } else if (arg == L"-u" || arg == L"--user") {
+            if (i + 1 >= argc || argv[i + 1] == nullptr || argv[i + 1][0] == L'\0' ||
+                argv[i + 1][0] == L'-') {
+                std::wcerr << L"htop: missing username for " << arg << L"\n";
+                return 2;
+            }
+            options.userFilter = argv[++i];
+        } else if (arg == L"-p" || arg == L"--pid") {
+            bool parsedAny = false;
+            while (i + 1 < argc && argv[i + 1] != nullptr && argv[i + 1][0] != L'-') {
+                DWORD pid = 0;
+                if (!ParseProcessId(argv[i + 1], pid)) {
+                    std::wcerr << L"htop: invalid process ID: " << argv[i + 1] << L"\n";
+                    return 2;
+                }
+                options.processIds.insert(pid);
+                parsedAny = true;
+                ++i;
+            }
+            if (!parsedAny) {
+                std::wcerr << L"htop: " << arg << L" requires at least one process ID\n";
+                return 2;
+            }
+        } else {
+            std::wcerr << L"htop: unknown option: " << arg << L"\n";
+            std::wcerr << L"Try 'htop --help' for more information.\n";
+            return 2;
+        }
     }
 
-    if (!InitializeNtApis()) {
-        std::wcerr << L"Error: Failed to bind Native NTDLL APIs.\n";
+    return RunHtopApp(options);
+}
+
+int wmain() {
+    try {
+        return RunCommandLine();
+    } catch (const std::bad_alloc&) {
+        std::wcerr << L"htop: insufficient memory to continue.\n";
         return 1;
     }
-
-    HtopApp app;
-    app.Run();
-
-    return 0;
 }

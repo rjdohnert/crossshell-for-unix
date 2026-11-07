@@ -1,0 +1,36 @@
+du
+Change Log
+==========
+
+Security and correctness
+------------------------
+- Do not traverse symbolic links or Windows reparse points unless -L is
+  explicitly requested.
+- Detect active directory cycles when links are followed and avoid counting
+  hard-linked files more than once.
+- Replace recursive traversal with an explicit directory stack.
+- Report access, metadata, enumeration, output, and pipe failures instead of
+  silently returning zero-sized results.
+- Validate depth values and reject negative, malformed, or overflowing input
+  without throwing exceptions.
+- Use operating-system allocation metadata rather than assuming every volume
+  has 4 KiB clusters; retain apparent-size reporting.
+- Guard aggregate size arithmetic against overflow.
+- Properly escape JSON, quote CSV fields, and protect CSV output from
+  spreadsheet formula interpretation.
+
+Modularization and CLI
+----------------------
+- Replace the single translation unit with separately compiled modules for
+  argument parsing, scanning, size formatting, path filtering, input reading,
+  reporting, help, and application orchestration.
+- Reject incompatible output formats, NUL-delimited structured output, and
+  `--files0-from` combined with positional operands.
+- Preserve `--pipe` while checking output-write and child-process failures.
+- Update help and documentation to match the implemented flags and output.
+
+Build and installation
+----------------------
+- Update PowerShell, batch, and shell builds to compile the module sources.
+- Install the generated executable into bin by default, creating the directory
+  and reporting installation failures.

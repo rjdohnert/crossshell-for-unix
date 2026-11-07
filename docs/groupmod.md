@@ -1,42 +1,69 @@
 # groupmod
 
-## What it does
-Modifies an existing local group definition on the Windows SAM or Active Directory database.
-
-This command is Solaris-compatible in interface and maps group updates to native Win32 security operations.
+`groupmod` renames local Windows groups and updates their descriptions through
+the Windows NetAPI. It does not modify Active Directory groups, assign Unix
+GIDs, or set Windows RIDs.
 
 ## Usage
-`groupmod [options] GROUP`
 
-## Options
-- `-g`, `--gid GID`: assign new numerical Group Identifier (GID/RID). GID must be a non-negative decimal integer.
-- `-o`, `--non-unique`: allow assignment of a duplicate (non-unique) GID; requires `-g`.
-- `-n`, `--new-name NEW_NAME`: rename the group to `NEW_NAME`.
-- `-c`, `--comment COMMENT`: set group description comment.
-- `-A`, `--attributes KEY=VAL`: set extended project/attribute key-value metadata.
-- `-h`, `--help`: display help and exit.
-- `-v`, `--version`: display version and exit.
-
-## Windows Mapping Notes
-- Group renames update the local SAM alias object.
-- Unix-style GIDs map directly to Security Relative Identifiers (RIDs).
-
-## Exit Codes
-- `0`: success
-- `2`: invalid command syntax
-- `3`: invalid argument supplied to option
-- `4`: GID is not unique (when `-o` is not specified)
-- `9`: group does not exist, or new group name already exists
-- `10`: cannot update system SAM/Security database
-- `28`: permission denied (must run as Administrator)
-
-## Examples
-```powershell
-groupmod -n dev_team developers
-groupmod -c "Database Operations Team" dba
-groupmod -g 1010 engineers
-groupmod -g 1010 -o qa_team
+```text
+groupmod [OPTIONS] GROUP
+groupmod [OPTIONS] -
+groupmod [OPTIONS] < modifications.csv
 ```
 
-## UNIX Origin
-Solaris `groupmod` style group-management utility.
+| Option | Description |
+| --- | --- |
+| `-n`, `--new-name NEW_GROUP` | Rename the group. |
+| `-c`, `--comment COMMENT` | Set or clear the group's description. |
+| `-f`, `--force` | Succeed if the source group is absent. Does not suppress a name collision or bypass permissions/protection. |
+| `-q`, `--quiet` | Suppress progress and success messages; errors remain visible. |
+| `-v`, `--verbose` | Display progress and per-group results. |
+| `-h`, `--help`, `/?`, `-?` | Display help. |
+| `-V`, `--version` | Display version information. |
+| `--` | Treat the remaining operand as a group name, even if it begins with `-`. |
+| `-` | Explicitly read UTF-8 modification records from standard input. |
+
+At least one of `-n` or `-c` is required. If no group operand is given and
+standard input is redirected, modification records are read automatically.
+Use `--new-name=VALUE` or `--comment=VALUE` when an option value begins with
+`-`.
+Records contain `GROUP`, optionally followed by comma- or tab-delimited
+`NEW_GROUP` and `COMMENT` fields. Quoted CSV fields support doubled quotes.
+One-field records use command-line `-n`/`-c` defaults. An empty new-name field
+means do not rename; an empty comment field clears the description. Blank lines
+and lines whose first non-whitespace character is `#` are ignored. A UTF-8 BOM
+is accepted. Records are limited to 64 KiB; malformed UTF-8, NULs, malformed
+quoting, and control characters in group names are rejected.
+
+When both the new name and comment are supplied, they are sent in one Windows
+group update. `--force` ignores only a missing source group; it never reports a
+rename collision as success.
+
+## Exit status
+
+- `0`: requested changes succeeded, or the source group was absent with `-f`.
+- `2`: invalid command-line arguments, input records, or group-name characters.
+- `4`: other Windows account-management or input/output failure.
+- `6`: source group does not exist and `-f` was not specified.
+- `8`: Windows protects the built-in or special group.
+- `9`: the requested new group name is already in use.
+- `10`: access denied; an elevated terminal may be required.
+
+Input batches continue after individual failures and return the first nonzero
+status.
+
+## Examples
+
+```powershell
+groupmod -n senior_engineers developers
+groupmod -c "Core Engineering Team" devops
+groupmod -n secops -c "Security Operations" security
+Get-Content .\modifications.csv | .\groupmod.exe -v
+```
+
+## Build
+
+Build on Windows with `src\groupmod\build.ps1`. The normal build copies
+`groupmod.exe` into `bin\`, where the installer collects it. Modifying local
+groups usually requires an elevated terminal.

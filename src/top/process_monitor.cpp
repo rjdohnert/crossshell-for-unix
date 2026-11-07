@@ -1,32 +1,60 @@
 #include "process_monitor.hpp"
 
-HpUxTopEngine::HpUxTopEngine() {
-        EnableVirtualTerminal();
+    HpUxTopEngine::HpUxTopEngine(const TopOptions& options)
+        : refreshDelaySec(options.refreshDelaySec),
+          maxDisplayCount(options.maxDisplayCount),
+          currentSort(options.currentSort),
+          userFilter(options.userFilter) {
         InitSystemSnapshot();
     }
 
-HpUxTopEngine::~HpUxTopEngine() {
-        // Show cursor again on exit
-        std::cout << "\033[?25h\033[0m\n";
-    }
-
-void HpUxTopEngine::EnableVirtualTerminal() {
-        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-        DWORD mode = 0;
-        if (GetConsoleMode(hOut, &mode)) {
-            mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-            SetConsoleMode(hOut, mode);
+    HpUxTopEngine::~HpUxTopEngine() {
+        if (cursorHidden) {
+            std::cout << "\033[?25h\033[0m\r\n";
         }
-        std::cout << "\033[?25l"; // Hide cursor
+        if (consoleModeSaved) {
+            SetConsoleMode(consoleOutput, originalConsoleMode);
+        }
     }
 
-void HpUxTopEngine::Run() {
-        std::cout << "\033[2J"; // Clear screen initially
-        while (true) {
+    bool HpUxTopEngine::EnableVirtualTerminal() {
+        consoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (consoleOutput == nullptr || consoleOutput == INVALID_HANDLE_VALUE ||
+            !GetConsoleMode(consoleOutput, &originalConsoleMode)) {
+            std::cerr << "top: an interactive console is required for output\r\n";
+            return false;
+        }
+
+        DWORD mode = originalConsoleMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        if (mode != originalConsoleMode && !SetConsoleMode(consoleOutput, mode)) {
+            std::cerr << "top: unable to enable virtual-terminal processing (error "
+                      << GetLastError() << ")\r\n";
+            return false;
+        }
+
+        consoleModeSaved = true;
+        std::cout << "\033[?25l";
+        cursorHidden = true;
+        return true;
+    }
+
+    int HpUxTopEngine::Run() {
+        HANDLE consoleInput = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD inputMode = 0;
+        if (consoleInput == nullptr || consoleInput == INVALID_HANDLE_VALUE ||
+            !GetConsoleMode(consoleInput, &inputMode)) {
+            std::cerr << "top: an interactive console is required for input\r\n";
+            return 2;
+        }
+        if (!EnableVirtualTerminal()) {
+            return 2;
+        }
+
+        std::cout << "\033[2J";
+        while (running) {
             Update();
-            // Non-blocking sleep loop checking keyboard input every 100ms
-            int slices = refreshDelaySec * 10;
-            for (int i = 0; i < slices; ++i) {
+            const uint64_t slices = static_cast<uint64_t>(refreshDelaySec) * 10;
+            for (uint64_t i = 0; i < slices && running; ++i) {
                 if (_kbhit()) {
                     HandleInput();
                     break;
@@ -34,4 +62,5 @@ void HpUxTopEngine::Run() {
                 Sleep(100);
             }
         }
+        return 0;
     }

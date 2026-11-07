@@ -12,6 +12,9 @@ try {
         Write-Host "[groupmod] Clean complete."
         return
     }
+    if ($Action -notin @("build", "noinstall")) {
+        throw "[groupmod] Unknown action '$Action'. Use 'build', 'noinstall', or 'clean'."
+    }
 
     if (-not (Get-Command clang++ -ErrorAction SilentlyContinue)) {
         Write-Error "[groupmod] Error: clang++ not found in PATH."
@@ -19,7 +22,13 @@ try {
     }
 
     Write-Host "[groupmod] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 groupmod.cpp -lnetapi32 -Wl,/subsystem:console -o groupmod.exe
+    $sources = @(
+        "groupmod.cpp", "groupmod_cli.cpp", "groupmod_group.cpp",
+        "groupmod_input.cpp", "groupmod_app.cpp"
+    )
+    $arguments = @("-std=c++17", "-O2") + $sources +
+        @("-lnetapi32", "-Wl,/subsystem:console", "-o", "groupmod.exe")
+    & clang++ @arguments
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[groupmod] Build failed."
         exit $LASTEXITCODE
@@ -28,10 +37,10 @@ try {
     Write-Host "[groupmod] Build successful: groupmod.exe"
 
     if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force groupmod.exe "..\..\bin\groupmod.exe"
-            Write-Host "[groupmod] Installed to ..\..\bin\groupmod.exe"
-        }
+        $binaryDirectory = Join-Path $scriptDir "..\..\bin"
+        New-Item -ItemType Directory -Force $binaryDirectory | Out-Null
+        Copy-Item -Force groupmod.exe (Join-Path $binaryDirectory "groupmod.exe")
+        Write-Host "[groupmod] Installed to $binaryDirectory\groupmod.exe"
     }
 }
 finally {

@@ -19,6 +19,8 @@ public:
     static std::string ResolveShellPath();
     static std::string StripCmdPrefix(const std::string& command);
     static bool CheckEscapeCancel(HANDLE inputHandle);
+    static void RequestCancel();
+    static void ClearCancel();
 
     // Execute `command`, appending combined stdout/stderr to `outputText`.
     // Returns true only if the process launched and exited with code 0.

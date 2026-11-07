@@ -1,55 +1,108 @@
 # gsar
 
-## What it does
-
-Searches and optionally replaces byte patterns or strings in text and binary files. Treats all files as binary streams so patterns can span line boundaries, contain null bytes, and include arbitrary control characters.
-
-## Options
-
-- `-s<string>`: search string (required)
-- `-r[string]`: replacement string; omit the string to delete matches; omit `-r` entirely for search-only mode
-- `-i`: ignore case
-- `-f`: force overwrite of an existing output file
-- `-o`: overwrite input files in place using a temporary file
-- `-c[n]`: display match context in ASCII format (default: 20 bytes)
-- `-x[n]`: display match context in hex dump format (default: 16 bytes)
-- `-b`: display search and replace buffer contents
-- `-l`: list file names and match counts only
-- `-F`: filter mode, reads from stdin and writes to stdout
-- `-h`, `--help`, `/?`: show help text
-- `-v`, `--version`: show version information
-
-## Escape Sequences
-
-The `:` character introduces escape sequences in search and replacement strings.
-
-- `::` — literal colon
-- `:n` — line feed (0x0A)
-- `:r` — carriage return (0x0D)
-- `:t` — tab (0x09)
-- `:b` — backspace (0x08)
-- `:a` — bell (0x07)
-- `:e` — escape (0x1B)
-- `:0` — null byte (0x00)
-- `:xHH` — hexadecimal byte value (e.g. `:x0D`, `:xDEADBEEF`)
-- `:DDD` — decimal byte value 0–255 (e.g. `:13`, `:255`)
+`gsar` searches and optionally replaces byte patterns in text and binary files.
+Input is processed as binary data, so matches may include null bytes or cross
+line and buffer boundaries.
 
 ## Usage
 
-- `gsar [options] [infile(s)] [outfile]`
+```text
+gsar -sPATTERN [-rPATTERN] [options] [input [output]]
+gsar -sPATTERN -F [options] < input > output
+```
+
+Use `-s PATTERN` or `--search PATTERN` to separate the search option from its
+value. Without `-r`, matches are passed through unchanged. A bare `-r` deletes
+matches; `-rPATTERN` or `--replace PATTERN` supplies replacement bytes.
+
+One input and one output can be supplied positionally, or with `-oFILE` /
+`--output FILE`. Without an output path, replacement edits each input file
+in-place. Existing separate output files are not overwritten unless `-f` or
+`--force` is specified. Writes use a temporary file in the destination
+directory and atomically install the completed result. In-place replacement
+refuses symbolic links and Windows reparse points.
+
+If no input files are given, `gsar` reads standard input and writes transformed
+data to standard output. `-F` / `--filter` explicitly selects this mode.
+Diagnostics and match summaries are written to standard error.
+
+## Options
+
+| Option | Description |
+| --- | --- |
+| `-sPATTERN`, `-s PATTERN`, `--search PATTERN` | Required search pattern. |
+| `-rPATTERN`, `--replace PATTERN` | Replace each match. |
+| `-r` | Delete each match. |
+| `-i`, `--ignore-case` | Case-insensitive ASCII byte matching. |
+| `-c`, `--count` | Count matches without writing transformed data. |
+| `-l`, `--list` | List only input files containing a match. |
+| `-b`, `--offsets` | Print match offsets in hexadecimal. |
+| `-x`, `--hex` | Print each matching byte sequence in hexadecimal. |
+| `-v`, `--verbose` | Print per-file match summaries. |
+| `-f`, `--force` | Allow replacing an existing separate output file. |
+| `-F`, `--filter` | Read standard input and write standard output. |
+| `-oFILE`, `--output FILE` | Write one input file to a separate output file. |
+| `-u`, `--backup` | Create a `.bak` backup before in-place replacement. |
+| `-BEXT`, `--backup-ext EXT` | Create a backup using the supplied suffix. |
+| `-h`, `--help`, `/?` | Display help. |
+| `-V`, `--version` | Display version identification. |
+
+`-c` cannot be combined with replacement or an output file. `-l` is for
+search-only file input. Backups are only available for in-place replacement;
+an existing backup is never overwritten. File searches report the number of
+matches when at least one match is found; `-v` also reports files with no
+matches.
+
+## Pattern escapes
+
+The following escapes are recognized in both search and replacement patterns:
+
+| Escape | Byte |
+| --- | --- |
+| `\a`, `\b`, `\e`, `\f`, `\n`, `\r`, `\t`, `\v` | ASCII control bytes |
+| `\\` | Literal backslash |
+| `\OOO` | Octal byte, up to three digits and at most 255 |
+| `\xHH` | One hexadecimal byte |
+| `\dDDD` | Decimal byte, up to three digits and at most 255 |
+| `::` | Literal colon |
+| `:n`, `:r`, `:t`, `:b`, `:a`, `:e`, `:0` | Newline, carriage return, tab, backspace, bell, escape, null |
+| `:xHH...` | One or more complete hexadecimal byte pairs |
+| `:DDD` | Decimal byte from 0 to 255 |
+
+Invalid numeric escapes are rejected rather than truncated or wrapped.
 
 ## Examples
 
-- Convert Unix LF to DOS CR/LF: `gsar -s:n -r:r:n input.txt output.txt`
-- Replace text in multiple files in place: `gsar -i -s"old" -r"new" -o *.cpp`
-- Delete a binary pattern: `gsar -s:xDEADBEEF -r -o binary.dat`
-- Filter mode: `type input.txt | gsar -s"foo" -r"bar" > output.txt`
+Replace CR/LF with LF and write a separate output:
 
-## Exit Status
+```text
+gsar -s\r\n -r\n input.txt output.txt
+```
 
-- `0`: success
-- `1`: error
+Replace text in-place, saving the original as `source.cpp.bak`:
 
-## UNIX origin
+```text
+gsar -i -sold -rnew -u source.cpp
+```
 
-Inspired by the classic gsar utility for general-purpose binary and text search-and-replace operations.
+Search a binary signature and print matching bytes:
+
+```text
+gsar -s:xDEADBEEF -b -x binary.exe
+```
+
+Use GSAR as a filter:
+
+```text
+type input.txt | gsar -sfoo -rbar -F > output.txt
+```
+
+## Exit status
+
+- `0`: operation completed successfully, including searches with no matches.
+- `1`: invalid arguments or an input, output, or processing error.
+
+## Build
+
+Run `src/gsar/build.ps1` on Windows to build `gsar.exe` and install it to the
+repository's `bin` directory.

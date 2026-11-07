@@ -17,8 +17,16 @@ try {
         exit 1
     }
 
-    Write-Host "[eve] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 eve.cpp -Wl,/subsystem:console -o eve.exe
+    $sources = @(
+        "eve.cpp",
+        "eve_app.cpp",
+        "eve_console.cpp",
+        "eve_editor.cpp",
+        "eve_file_io.cpp",
+        "eve_pipe.cpp"
+    )
+    Write-Host "[eve] Compiling modular sources with clang++..."
+    & clang++ -std=c++17 -O2 -Wall -Wextra -Wpedantic $sources "-Wl,/subsystem:console" -o eve.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[eve] Build failed."
         exit $LASTEXITCODE
@@ -26,9 +34,15 @@ try {
 
     Write-Host "[eve] Build successful: eve.exe"
     if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force eve.exe "..\..\bin\eve.exe"
+        try {
+            New-Item -ItemType Directory -Force "..\..\bin" -ErrorAction Stop | Out-Null
+            Copy-Item -Force eve.exe "..\..\bin\eve.exe" -ErrorAction Stop
         }
+        catch {
+            Write-Error "[eve] Installation to bin failed."
+            exit 1
+        }
+        Write-Host "[eve] Installed: ..\..\bin\eve.exe"
     }
 }
 finally {

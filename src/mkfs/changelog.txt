@@ -1,0 +1,18 @@
+mkfs changelog
+==============
+
+- Kept mkfs in C and split command parsing, format orchestration, FMIFS access,
+  and error handling into focused modules.
+- Replaced unbounded string copies and permissive parsing with bounded label
+  handling, strict drive-target validation, supported file-system validation,
+  and checked cluster-size parsing.
+- Restrict formatting targets to existing local drive-letter volumes.
+- Load fmifs.dll from the Windows system directory and validate FormatEx
+  completion through FMIFS callback status instead of reporting unconditional
+  success.
+- Added callback handling for access denial, unsupported formats, in-use
+  volumes, and invalid cluster sizes.
+- Added clear quick/full, confirmation, and verbose behavior.
+- Added PowerShell, batch, and Windows-shell build scripts that compile the C
+  modules and install mkfs.exe into bin.
+- Added mkfs usage documentation.

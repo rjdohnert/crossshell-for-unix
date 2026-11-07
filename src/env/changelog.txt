@@ -1,0 +1,35 @@
+env
+Change Log
+==========
+
+Security and reliability
+------------------------
+- Escape JSON, CSV, and table output, including spreadsheet formula prefixes
+  and control characters that could inject rows or columns.
+- Limit child-process handle inheritance to standard input, output, and error.
+- Resolve executable paths using the modified environment and working
+  directory without implicit current-directory executable lookup.
+- Validate child environment entries, enforce the Windows environment-block
+  size limit, and use the required double-NUL terminator for empty blocks.
+- Check environment loading, output writes, pipe status, process waits, and
+  child exit-code retrieval; report failures with non-zero status.
+- Reject missing option arguments, malformed split strings, conflicting
+  output modes, and incompatible listing options.
+- Avoid printing assigned environment values in verbose diagnostics.
+
+Modularization and command line
+-------------------------------
+- Replace included implementation fragments with separately compiled
+  environment, argument, output, process, and application modules.
+- Use concise, purpose-specific module filenames and keep env.cpp as the entry
+  point.
+- Preserve options parsed before -S expansion and validate quoting and escapes.
+
+Build and documentation
+-----------------------
+- Update PowerShell, batch, and Windows shell builds to compile all modules.
+- Create bin when needed and install env.exe there by default; keep noinstall
+  as an explicit opt-out.
+- Make the POSIX shell build report that this Windows API utility requires a
+  Windows build environment.
+- Refresh the built-in help and version information to match supported behavior.

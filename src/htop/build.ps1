@@ -19,7 +19,7 @@ try {
     }
 
     Write-Host "[htop] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 htop.cpp -ladvapi32 -lntdll -Wl,/subsystem:console -o htop.exe
+    & clang++ -std=c++17 -O2 htop.cpp htop_app.cpp htop_telemetry.cpp htop_console.cpp htop_format.cpp -ladvapi32 -lpsapi -lntdll '-Wl,/subsystem:console' -o htop.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[htop] Build failed."
         exit $LASTEXITCODE
@@ -28,10 +28,10 @@ try {
     Write-Host "[htop] Build successful: htop.exe"
 
     if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force htop.exe "..\..\bin\htop.exe"
-            Write-Host "[htop] Installed to ..\..\bin\htop.exe"
-        }
+        $binDirectory = Join-Path $scriptDir "..\..\bin"
+        $null = New-Item -ItemType Directory -Path $binDirectory -Force
+        Copy-Item -Force htop.exe (Join-Path $binDirectory "htop.exe")
+        Write-Host "[htop] Installed to $binDirectory\htop.exe"
     }
 }
 finally {

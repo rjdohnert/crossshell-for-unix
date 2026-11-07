@@ -1,0 +1,19 @@
+groupadd changes
+================
+
+- Replaced the include-fragment implementation with separate CLI, input,
+  local-group, application, and shared-type modules.
+- Switched command-line handling to wide Windows arguments and strict UTF-8
+  conversion for piped records; reject malformed input, NULs, oversized lines,
+  missing options, unknown switches, and extra operands.
+- Added quoted CSV/TSV input parsing, BOM support, explicit input-error
+  handling, and safe processing of multiple records.
+- Reject empty command-line operands and control characters in group names;
+  escape control characters in diagnostics and avoid echoing unknown switches.
+- Corrected force semantics, clarified that --system is compatibility-only,
+  and report per-record failures with consistent exit codes, including invalid
+  group-name errors.
+- Corrected documentation to describe local Windows groups and supported
+  options instead of unsupported GID, attribute, and Active Directory claims.
+- Modular build scripts compile the new sources and install groupadd.exe in
+  bin\; the installer now verifies that groupadd.exe is present.

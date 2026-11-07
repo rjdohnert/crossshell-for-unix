@@ -1,0 +1,17 @@
+GSAR changes
+
+- Replaced the single-file include-fragment implementation with separate
+  pattern, CLI, engine, file-output, and application modules.
+- Added strict argument validation, help and version handling, ASCII
+  case-insensitive matching, count/list/offset/hex output, filter mode, and
+  documented backslash and colon byte escapes.
+- Fixed search-only output so matched bytes are passed through unchanged.
+- Preserved matches across input chunk boundaries and reported read, write,
+  flush, and diagnostic-stream failures as nonzero exits.
+- Reworked file writes to use exclusive temporary files and atomic installation;
+  refused accidental output overwrite, unsafe link targets, and overwriting
+  existing backups.
+- Added in-place backup suffix support and made file failures affect the exit
+  status.
+- Updated the GSAR usage documentation and all build scripts. Normal builds
+  now compile every module and install the executable into bin.

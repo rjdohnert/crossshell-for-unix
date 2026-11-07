@@ -9,25 +9,29 @@ if [ "$1" = "clean" ]; then
     exit 0
 fi
 
+if [ -n "$1" ] && [ "$1" != "build" ] && [ "$1" != "noinstall" ]; then
+    echo "[handles] Error: unknown action '$1'." >&2
+    exit 1
+fi
+
 if ! command -v clang++ >/dev/null 2>&1; then
     echo "[handles] Error: clang++ not found in PATH." >&2
     exit 1
 fi
 
 echo "[handles] Compiling with clang++..."
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-    clang++ -std=c++17 -O2 handles.cpp -Wl,/subsystem:console -o handles.exe
-    TARGET="handles.exe"
-else
-    clang++ -std=c++17 -O2 handles.cpp -o handles
-    TARGET="handles"
+if [[ "$OSTYPE" != "msys" && "$OSTYPE" != "cygwin" && "$OSTYPE" != "win32" ]]; then
+    echo "[handles] Error: handles requires the Windows process APIs." >&2
+    exit 1
 fi
+
+clang++ -std=c++17 -O2 handles.cpp handles_cli.cpp handles_collect.cpp handles_format.cpp handles_app.cpp -Wl,/subsystem:console -o handles.exe
+TARGET="handles.exe"
 
 echo "[handles] Build successful: $TARGET"
 
 if [ "$1" != "noinstall" ]; then
-    if [ -d "../../bin" ]; then
-        cp -f "$TARGET" "../../bin/"
-        echo "[handles] Installed to ../../bin/$TARGET"
-    fi
+    mkdir -p "../../bin"
+    cp -f "$TARGET" "../../bin/"
+    echo "[handles] Installed to ../../bin/$TARGET"
 fi

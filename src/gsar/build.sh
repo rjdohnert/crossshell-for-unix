@@ -2,8 +2,9 @@
 set -e
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SRC_DIR"
+ACTION="${1:-build}"
 
-if [ "$1" = "clean" ]; then
+if [ "$ACTION" = "clean" ]; then
     rm -f gsar gsar.exe *.o *.obj *.pdb *.ilk
     echo "[gsar] Clean complete."
     exit 0
@@ -16,18 +17,15 @@ fi
 
 echo "[gsar] Compiling with clang++..."
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-    clang++ -std=c++17 -O2 gsar.cpp -Wl,/subsystem:console -o gsar.exe
+    clang++ -std=c++17 -O2 gsar.cpp gsar_pattern.cpp gsar_cli.cpp gsar_engine.cpp gsar_file.cpp gsar_app.cpp -Wl,/subsystem:console -o gsar.exe
     TARGET="gsar.exe"
 else
-    clang++ -std=c++17 -O2 gsar.cpp -o gsar
+    clang++ -std=c++17 -O2 gsar.cpp gsar_pattern.cpp gsar_cli.cpp gsar_engine.cpp gsar_file.cpp gsar_app.cpp -o gsar
     TARGET="gsar"
 fi
 
 echo "[gsar] Build successful: $TARGET"
 
-if [ "$1" != "noinstall" ]; then
-    if [ -d "../../bin" ]; then
-        cp -f "$TARGET" "../../bin/"
-        echo "[gsar] Installed to ../../bin/$TARGET"
-    fi
-fi
+mkdir -p "../../bin"
+cp -f "$TARGET" "../../bin/"
+echo "[gsar] Installed to ../../bin/$TARGET"

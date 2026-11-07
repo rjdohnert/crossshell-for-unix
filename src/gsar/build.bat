@@ -13,7 +13,7 @@ if errorlevel 1 (
 )
 
 echo [gsar] Compiling with clang++...
-clang++ -std=c++17 -O2 gsar.cpp -Wl,/subsystem:console -o gsar.exe
+clang++ -std=c++17 -O2 gsar.cpp gsar_pattern.cpp gsar_cli.cpp gsar_engine.cpp gsar_file.cpp gsar_app.cpp -Wl,/subsystem:console -o gsar.exe
 if errorlevel 1 (
     echo [gsar] Build failed.
     popd
@@ -22,13 +22,20 @@ if errorlevel 1 (
 
 echo [gsar] Build successful: gsar.exe
 
-if /I "%~1"=="noinstall" goto :skip_install
-if exist "..\..\bin" (
-    copy /y gsar.exe "..\..\bin\gsar.exe" >nul
-    echo [gsar] Installed to ..\..\bin\gsar.exe
+if not exist "..\..\bin" mkdir "..\..\bin"
+if errorlevel 1 (
+    echo [gsar] Error: could not create the bin directory.
+    popd
+    exit /b 1
 )
+copy /y gsar.exe "..\..\bin\gsar.exe" >nul
+if errorlevel 1 (
+    echo [gsar] Error: could not install gsar.exe to bin.
+    popd
+    exit /b 1
+)
+echo [gsar] Installed to ..\..\bin\gsar.exe
 
-:skip_install
 popd
 exit /b 0
 

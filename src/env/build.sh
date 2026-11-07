@@ -14,18 +14,30 @@ if ! command -v clang++ >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "[env] Compiling with clang++..."
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-    clang++ -std=c++17 -O2 env.cpp -Wl,/subsystem:console -o env.exe
-    TARGET="env.exe"
-else
-    clang++ -std=c++17 -O2 env.cpp -o env
-    TARGET="env"
+if [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* && "$OSTYPE" != win32* ]]; then
+    echo "[env] Error: env uses the Windows process API; build it with build.ps1 or build.bat on Windows." >&2
+    exit 1
 fi
+
+SOURCES=(
+    env.cpp
+    env_arguments.cpp
+    env_application.cpp
+    env_environment.cpp
+    env_output.cpp
+    env_process.cpp
+)
+
+TARGET="env.exe"
+echo "[env] Compiling Windows modules with clang++..."
+clang++ -std=c++17 -O2 "${SOURCES[@]}" -Wl,/subsystem:console -o "$TARGET"
 
 echo "[env] Build successful: $TARGET"
 if [ "$1" != "noinstall" ]; then
-    if [ -d "../../bin" ]; then
-        cp -f "$TARGET" "../../bin/"
+    mkdir -p "../../bin"
+    cp -f "$TARGET" "../../bin/$TARGET"
+    if [ ! -f "../../bin/$TARGET" ]; then
+        echo "[env] Error: failed to install $TARGET to bin/." >&2
+        exit 1
     fi
 fi

@@ -1,5 +1,17 @@
 #include "process_runner.h"
 
+namespace {
+std::atomic<bool> g_cancelRequested{ false };
+}
+
+void ProcessRunner::RequestCancel() {
+    g_cancelRequested.store(true);
+}
+
+void ProcessRunner::ClearCancel() {
+    g_cancelRequested.store(false);
+}
+
 DWORD ProcessRunner::GetProcessTimeoutMs() {
     const DWORD defaultMs = 180000;
     const DWORD minMs = 1000;
@@ -309,11 +321,7 @@ bool ProcessRunner::RunProcess(const std::string& command, std::string& outputTe
         }
         // WAIT_OBJECT_0+1 (pipe data) or WAIT_TIMEOUT: check cancel/deadline.
 
-        // ESC-cancel. stdin can be a real console input handle (conhost /
-        // Windows Terminal, FILE_TYPE_CHAR) or a pipe/PTY. PeekNamedPipe only
-        // works on pipes, so pick the right peek per handle type.
-        HANDLE inputHandle = GetStdHandle(STD_INPUT_HANDLE);
-        if (inputHandle != INVALID_HANDLE_VALUE && CheckEscapeCancel(inputHandle)) {
+        if (g_cancelRequested.exchange(false)) {
             cancelled = true;
             TerminateJobObject(hJob, 123);
             TerminateProcess(pi.hProcess, 123);

@@ -1,36 +1,3 @@
-/*
- * BSD 3-Clause License
- *
- * Copyright (c) 2026, Roberto J Dohnert
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- * Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- * Neither the name of the project nor the names of its contributors may be
- * used to endorse or promote products derived from this software without
- * specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * CrossShell for UNIX
- */
-
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -38,43 +5,57 @@
 #define _UNICODE
 #endif
 
-#include <windows.h>
-#include <io.h>
-#include <fcntl.h>
+#include "env_application.hpp"
+#include "env_arguments.hpp"
 
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+
+#include <exception>
 #include <iostream>
 #include <string>
-#include <string_view>
-#include <vector>
-#include <map>
-#include <memory>
-#include <sstream>
-#include <algorithm>
-#include <cwctype>
-#include <cstdio>
+#include <utility>
 
-#include "env_module_01_options.inc"
-#include "env_module_02_environmentmanager.inc"
-#include "env_module_03_argumenttokenizer.inc"
-#include "env_module_04_processrunner.inc"
-#include "env_module_05_commandlineparser.inc"
-#include "env_module_06_envapplication.inc"
+namespace {
+
+std::wstring Utf8ToWide(const char* text) {
+    if (!text) return L"unknown error";
+    const int length = MultiByteToWideChar(
+        CP_UTF8, 0, text, -1, nullptr, 0);
+    if (length <= 0) return L"unknown error";
+    std::wstring result(static_cast<std::size_t>(length), L'\0');
+    if (!MultiByteToWideChar(CP_UTF8, 0, text, -1, result.data(), length)) {
+        return L"unknown error";
+    }
+    result.pop_back();
+    return result;
+}
+
+} // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
-    _setmode(_fileno(stdout), _O_U16TEXT);
-    _setmode(_fileno(stdin), _O_U16TEXT);
-    _setmode(_fileno(stderr), _O_U16TEXT);
+    if (_setmode(_fileno(stdout), _O_U8TEXT) == -1 ||
+        _setmode(_fileno(stderr), _O_U8TEXT) == -1) {
+        std::wcerr << L"env: cannot configure UTF-8 output.\n";
+        return 1;
+    }
 
     try {
-        ProgramOptions options = CommandLineParser::parse(argc, argv);
-        for (int i = 1; i < argc; ++i) { std::wstring arg = argv[i]; if (arg == L"--json") options.outputFormat = 1; else if (arg == L"--csv") options.outputFormat = 2; else if (arg == L"--table") options.outputFormat = 3; else if (arg == L"--pipe" && i + 1 < argc) options.pipeCommand = argv[++i]; }
-        EnvApplication app(options);
-        return app.run();
-    } catch (const std::exception& ex) {
-        std::wcerr << L"env: fatal error: " << ex.what() << L"\n";
+        ParseResult parsed = CommandLineParser::Parse(argc, argv);
+        if (!parsed.success) {
+            std::wcerr << L"env: " << parsed.error
+                       << L"\nTry 'env --help' for more information.\n";
+            return 2;
+        }
+        EnvApplication application(std::move(parsed.options));
+        return application.Run();
+    } catch (const std::exception& exception) {
+        std::wcerr << L"env: fatal error: " << Utf8ToWide(exception.what())
+                   << L'\n';
         return 1;
     } catch (...) {
-        std::wcerr << L"env: unknown fatal error occurred.\n";
+        std::wcerr << L"env: unknown fatal error.\n";
         return 1;
     }
 }

@@ -1,42 +1,53 @@
 @echo off
 setlocal enabledelayedexpansion
 
+set "SCRIPT_DIR=%~dp0"
 set "TARGET=diff"
-set "BIN_DIR=..\..\bin"
-set "SRC=diff.cpp diff_app.cpp arg_parser.cpp formatter.cpp myers_diff.cpp line_reader.cpp normalizer.cpp"
+set "BIN_DIR=%SCRIPT_DIR%..\..\bin"
+set "SRC=%SCRIPT_DIR%diff.c"
 
-if not exist "!BIN_DIR!" mkdir "!BIN_DIR!"
+if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
+
+where clang >nul 2>nul
+if %errorlevel% equ 0 (
+    echo Building %TARGET% with clang...
+    clang -O2 "%SRC%" -o "%BIN_DIR%\%TARGET%.exe"
+    if %errorlevel% equ 0 (
+        echo Build successful: %BIN_DIR%\%TARGET%.exe
+        exit /b 0
+    )
+)
 
 where clang++ >nul 2>nul
 if %errorlevel% equ 0 (
-    echo Building !TARGET! with clang++...
-    clang++ -std=c++17 -O2 !SRC! -o "!BIN_DIR!\!TARGET!.exe"
+    echo Building %TARGET% with clang++...
+    clang++ -O2 "%SRC%" -o "%BIN_DIR%\%TARGET%.exe"
     if %errorlevel% equ 0 (
-        echo Build successful: !BIN_DIR!\!TARGET!.exe
+        echo Build successful: %BIN_DIR%\%TARGET%.exe
         exit /b 0
     )
 )
 
 where cl >nul 2>nul
 if %errorlevel% equ 0 (
-    echo Building !TARGET! with MSVC cl...
-    cl /std:c++17 /O2 /EHsc /Fe:"!BIN_DIR!\!TARGET!.exe" !SRC!
+    echo Building %TARGET% with MSVC cl...
+    cl /O2 /Fe:"%BIN_DIR%\%TARGET%.exe" "%SRC%"
     if %errorlevel% equ 0 (
-        echo Build successful: !BIN_DIR!\!TARGET!.exe
-        if exist "*.obj" del *.obj
+        echo Build successful: %BIN_DIR%\%TARGET%.exe
+        if exist "%SCRIPT_DIR%*.obj" del "%SCRIPT_DIR%*.obj"
         exit /b 0
     )
 )
 
-where g++ >nul 2>nul
+where gcc >nul 2>nul
 if %errorlevel% equ 0 (
-    echo Building !TARGET! with g++...
-    g++ -std=c++17 -O2 !SRC! -o "!BIN_DIR!\!TARGET!.exe"
+    echo Building %TARGET% with gcc...
+    gcc -O2 "%SRC%" -o "%BIN_DIR%\%TARGET%.exe"
     if %errorlevel% equ 0 (
-        echo Build successful: !BIN_DIR!\!TARGET!.exe
+        echo Build successful: %BIN_DIR%\%TARGET%.exe
         exit /b 0
     )
 )
 
-echo Error: No suitable C++ compiler found (clang++, cl, or g++).
+echo Error: No suitable C compiler found (clang, cl, or gcc).
 exit /b 1

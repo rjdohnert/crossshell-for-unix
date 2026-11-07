@@ -1,0 +1,39 @@
+CSPLIT CHANGELOG
+================
+
+Unreleased - 2026-11-06
+
+SECURITY
+--------
+- Reject path separators and unsafe characters in output prefixes and suffix
+  formats; reject reserved Windows device filenames.
+- Create output files exclusively so existing files are not truncated.
+- Validate custom suffix formats before passing them to the formatter.
+
+FUNCTIONALITY
+-------------
+- Implement regular-expression anchors, dot, repetition, escaped characters,
+  character classes, ranges, and negation using bounded, non-recursive matching.
+- Parse signed regular-expression offsets. Buffer preceding lines when negative
+  offsets require a split at an earlier line.
+- Validate options, patterns, repeat counts, offsets, and numeric suffix widths;
+  report malformed or incomplete arguments instead of silently ignoring them.
+- Support signed, unsigned, and hexadecimal suffix conversions with widths up
+  to 64 digits.
+
+RELIABILITY
+-----------
+- Guard dynamic string growth and pattern/output allocations against overflow
+  and allocation failure.
+- Detect input read, output write, flush, and close errors. Roll back files
+  created by a failed run unless keep-files mode is enabled.
+
+BUILD AND DOCUMENTATION
+-----------------------
+
+- Update the Windows build script to compile all C17 modules and install the
+  executable in bin by default.
+- Correct the source comment and Windows header include ordering required for
+  compilation.
+- Document the supported options, patterns, regular expressions, offsets, and
+  output-file safeguards.

@@ -12,6 +12,9 @@ try {
         Write-Host "[groupdel] Clean complete."
         return
     }
+    if ($Action -notin @("build", "noinstall")) {
+        throw "[groupdel] Unknown action '$Action'. Use 'build', 'noinstall', or 'clean'."
+    }
 
     if (-not (Get-Command clang++ -ErrorAction SilentlyContinue)) {
         Write-Error "[groupdel] Error: clang++ not found in PATH."
@@ -19,7 +22,13 @@ try {
     }
 
     Write-Host "[groupdel] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 groupdel.cpp -lnetapi32 -Wl,/subsystem:console -o groupdel.exe
+    $sources = @(
+        "groupdel.cpp", "groupdel_cli.cpp", "groupdel_group.cpp",
+        "groupdel_input.cpp", "groupdel_app.cpp"
+    )
+    $arguments = @("-std=c++17", "-O2") + $sources +
+        @("-lnetapi32", "-Wl,/subsystem:console", "-o", "groupdel.exe")
+    & clang++ @arguments
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[groupdel] Build failed."
         exit $LASTEXITCODE
@@ -28,10 +37,10 @@ try {
     Write-Host "[groupdel] Build successful: groupdel.exe"
 
     if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force groupdel.exe "..\..\bin\groupdel.exe"
-            Write-Host "[groupdel] Installed to ..\..\bin\groupdel.exe"
-        }
+        $binaryDirectory = Join-Path $scriptDir "..\..\bin"
+        New-Item -ItemType Directory -Force $binaryDirectory | Out-Null
+        Copy-Item -Force groupdel.exe (Join-Path $binaryDirectory "groupdel.exe")
+        Write-Host "[groupdel] Installed to $binaryDirectory\groupdel.exe"
     }
 }
 finally {

@@ -1,0 +1,29 @@
+fdisk changelog
+===============
+
+- Kept the implementation in C and split it into focused device, error,
+  formatting, options, and application modules.
+- Replaced the fixed drive-index scan with Windows disk-interface enumeration.
+- Hardened disk and partition-layout reads with returned-buffer bounds checks,
+  geometry validation, extent checks, and allocation handling.
+- Replaced permissive disk-target parsing with strict decimal and device-path
+  parsing; invalid options and multiple targets now return an error.
+- Added an interactive MBR/GPT editor with staged create, delete, type, active,
+  resize, and partition-table initialization operations.
+- Added MBR extended/logical partition handling and cylinder/sector display
+  selection.
+- Added VHD and VHDX image creation, attachment for partition listing/editing,
+  safe capacity resizing, and explicit detachment.
+- Virtual images are attached without drive letters and remain attached after
+  fdisk exits; capacity resizing requires a detached image.
+- Added explicit write confirmation and write access only at commit time.
+- Lock and dismount all mounted volumes on the target disk before a layout
+  write, and abort safely if a volume cannot be inspected or locked.
+- Preserved the system-created GPT Microsoft Reserved partition and relocate
+  newly staged partitions if necessary after GPT initialization.
+- Removed the unconditional administrator requirement and report disk access
+  failures accurately.
+- Corrected version output, partition-type identification, disk-size reporting,
+  and error exit statuses.
+- Updated all build scripts to compile the C sources with clang and install
+  fdisk.exe into bin.

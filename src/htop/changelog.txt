@@ -1,0 +1,103 @@
+================================================================================
+htop - Change Log
+================================================================================
+
+This file tracks changes to htop, the CrossShell for UNIX interactive process
+monitor for Windows.
+
+--------------------------------------------------------------------------------
+2026-11-06
+--------------------------------------------------------------------------------
+
+BUG FIXES
+---------
+* The SHR column and its sort now report shared resident working-set bytes
+  instead of private committed memory.
+* System commit metrics now widen page counts before multiplying by page size,
+  preventing overflow on systems with large commit limits.
+* Priority keys now consistently use F7/[ to lower and F8/] to raise priority.
+  Telemetry and console-write failures are surfaced instead of silently ignored.
+* Process-owner formatting handles accounts that have no domain component.
+* Terminal control and bidirectional override characters in displayed process,
+  account, and filter text are replaced to prevent terminal-control spoofing.
+* Command-line option names are no longer accepted as missing username values;
+  allocation failures now produce an explicit error instead of an unhandled exit.
+
+MODULARIZATION AND BUILD
+-----------------------
+* Replaced concatenated .inc fragments with separately compiled app, telemetry,
+  console, and formatting modules plus concise shared headers.
+* Updated Windows and shell build scripts to compile all modules and install the
+  resulting htop.exe into bin by default.
+* The MSI build already harvests executables from bin, so the rebuilt htop.exe
+  is included automatically.
+
+VALIDATION
+----------
+* Interactive process actions and volume-independent process termination tests
+  were not run as part of this change.
+
+--------------------------------------------------------------------------------
+2026-11-01
+--------------------------------------------------------------------------------
+
+This update implements the documented command-line options and improves
+telemetry reliability, process controls, console cleanup, and high-core display.
+
+NEW FEATURES
+------------
+* Added -d/--delay, -u/--user, and -p/--pid options, including validation for
+  missing, invalid, and unsupported arguments. Help and version options are
+  handled consistently.
+
+* Process actions are now explicitly labeled as terminate, suspend, or resume.
+  Actions on multiple tagged processes require confirmation, report their
+  results, and apply to tagged processes even when filters hide their rows.
+
+* Added compact CPU percentages for systems with more than eight logical
+  processors, displaying every core alongside system memory, commit, task,
+  CPU, and uptime summaries.
+
+BUG FIXES
+---------
+* Process sorting now uses a strict ordering, and tree connectors correctly
+  preserve parent branches.
+
+* Process telemetry queries now check native API status, bound buffer retries,
+  validate returned lengths and process entries, and preserve the prior process
+  snapshot when a query fails.
+
+* CPU accounting and cached process owners now account for process creation
+  time, preventing PID reuse from carrying stale values or targeting a
+  different process.
+
+* Process actions and priority changes verify process identity, check Windows
+  API results, and report failures instead of silently ignoring them.
+
+* System memory reporting now uses the system page size and labels commit
+  usage accurately instead of presenting it as pagefile usage. The misleading
+  load-average display was replaced with aggregate CPU usage.
+
+* CPU telemetry accounts for active processor groups, and the display no
+  longer omits cores on high-core-count systems.
+
+* Console initialization now restores any modes already changed when a later
+  setup step fails. The application returns a failure exit code when console
+  initialization fails.
+
+DOCUMENTATION AND BUILD
+-----------------------
+* Updated the htop manual and built-in help to match supported options,
+  priority keys, process actions, confirmation behavior, and telemetry labels.
+
+* Quoted the linker argument in build.ps1 so PowerShell can parse the normal
+  build command. Rebuilt and installed the executable as bin\htop.exe.
+
+VALIDATION
+----------
+* The build completed successfully. CLI smoke tests covered help, version,
+  invalid and missing arguments, unknown options, and accepted option parsing.
+  Interactive UI and process actions were not exercised in a non-interactive
+  console session.
+
+================================================================================

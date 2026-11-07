@@ -112,6 +112,7 @@ This is a brief overview of the tools in CrossShell for UNIX. For in-depth docum
 - [`diskinfo`](docs/diskinfo.md) — Lists block-style devices and mounted volumes.
 - [`md5sum`](docs/md5sum.md) — Computes MD5 checksums.
 - [`mkfifo`](docs/mkfifo.md) — Creates Windows named pipes.
+- [`mkfs`](docs/mkfs.md) — Formats a local Windows volume as NTFS, FAT32, or exFAT.
 - [`mktemp`](docs/mktemp.md) — Creates secure temporary files or directories.
 - [`mount`](docs/mount.md) — Attaches filesystems and volume mappings to the system.
 - [`mv`](docs/mv.md) — Moves or renames files and directories.

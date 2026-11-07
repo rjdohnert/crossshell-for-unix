@@ -12,6 +12,9 @@ try {
         Write-Host "[gzip] Clean complete."
         return
     }
+    if ($Action -ne "build") {
+        throw "[gzip] Unknown action '$Action'. Use 'build' or 'clean'."
+    }
 
     if (-not (Get-Command clang++ -ErrorAction SilentlyContinue)) {
         Write-Error "[gzip] Error: clang++ not found in PATH."
@@ -19,20 +22,23 @@ try {
     }
 
     Write-Host "[gzip] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 gzip.cpp -Wl,/subsystem:console -o gzip.exe
+    $sources = @(
+        "gzip.cpp", "gzip_cli.cpp", "gzip_codec.cpp", "gzip_file.cpp",
+        "gzip_member.cpp", "gzip_report.cpp", "gzip_engine.cpp", "gzip_app.cpp"
+    )
+    $arguments = @("-std=c++17", "-O2") + $sources +
+        @("-Wl,/subsystem:console", "-o", "gzip.exe")
+    & clang++ @arguments
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[gzip] Build failed."
         exit $LASTEXITCODE
     }
 
     Write-Host "[gzip] Build successful: gzip.exe"
-
-    if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force gzip.exe "..\..\bin\gzip.exe"
-            Write-Host "[gzip] Installed to ..\..\bin\gzip.exe"
-        }
-    }
+    $binaryDirectory = Join-Path $scriptDir "..\..\bin"
+    New-Item -ItemType Directory -Force $binaryDirectory | Out-Null
+    Copy-Item -Force gzip.exe (Join-Path $binaryDirectory "gzip.exe")
+    Write-Host "[gzip] Installed to $binaryDirectory\gzip.exe"
 }
 finally {
     Pop-Location

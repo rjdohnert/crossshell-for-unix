@@ -1,0 +1,71 @@
+================================================================================
+diff3 - Change Log
+================================================================================
+
+This file tracks changes to diff3, the CrossShell for UNIX 3-way file comparison
+and merge utility for Windows.
+
+--------------------------------------------------------------------------------
+2026-11-03
+--------------------------------------------------------------------------------
+
+This update delivers a high-performance Windows-native C implementation of diff3
+featuring zero-copy memory-mapped I/O, 64-bit line hashing, ANSI terminal color
+support, authentic GNU/POSIX 3-way output formats, interactive merge bracketing,
+and critical reconciliation stability fixes.
+
+NEW FEATURES
+------------
+* Modernized to a single-file C11 architecture (diff3.c) leveraging Win32
+  Memory-Mapped Files (MMF) for zero-copy file ingestion and 64-bit FNV-1a
+  line hashing.
+
+* Comprehensive 3-way output format support:
+  - Authentic diff3 default format (====, ====1, ====2, ====3 with 1:2c, 2:2c, 3:2c)
+  - 3-Way merge output (-m, --merge) with Git/POSIX conflict markers
+  - Full common ancestor base display in conflicts (-A, --show-all)
+  - Reverse ed script generation (-e, --ed) for programmatic patch application
+  - Bracketed conflict ed script generation (-E, --show-overlap)
+  - Selective ed script generation (-3 for clean changes only, -x for overlaps)
+  - Append 'w' and 'q' commands to ed scripts (-i)
+
+* Flexible label overrides with -L and --label=LABEL (repeatable up to 3 times
+  for custom headers in conflict blocks).
+
+* Line alignment and normalization:
+  - -T, --initial-tab: align line contents by prepending a tab character
+  - --strip-trailing-cr: strip Windows CRLF carriage returns from input lines
+  - -a, --text: force text comparison and override binary file detection
+
+* Dynamic ANSI VT color formatting with --color, --color=always, --color=never,
+  and --color=auto (colorized conflict headers and delimiters).
+
+BUG FIXES & STABILITY PATCHES
+-----------------------------
+* Resolved critical infinite loop in 3-way reconciliation (Diff3Engine_Reconcile)
+  caused by pure insertion hunks (len1 == 0) stalling base cluster progression.
+  Implemented deterministic index advance across touching and overlapping hunk spans.
+
+* Fixed Myers backtracking stability in Myers2_ComputeDiff:
+  - Initialized distance vector with calloc to eliminate undefined behavior
+    from uninitialized heap garbage.
+  - Corrected trace snapshotting to store compact (2 * d + 3) slices, capping
+    memory consumption to O(D^2) instead of O((N+M)^2).
+  - Added proper diagonal match rewinding (cx > px && cy > py) and leading match
+    drain (while cx > 0 && cy > 0) to ensure accurate edit step reconstruction.
+
+* Fixed hunk synthesis to merge consecutive insertions and deletions into unified
+  replacement hunks rather than emitting isolated zero-length fragments.
+
+* Resolved CRT wide/narrow stream collisions by standardizing stdout output to
+  narrow printf (using %ls for wide path/label strings) and stderr to fprintf,
+  preventing stdout deadlocks and silent write failures on Windows.
+
+* Fixed compiler format string warnings on 64-bit targets by replacing invalid
+  %za / %zc specifiers with standard %zua / %zuc.
+
+BUILD SYSTEM
+------------
+* Modernized build.ps1, build.bat, build.sh, and CMakeLists.txt to detect diff3.c,
+  use directory-anchored paths ($PSScriptRoot / %~dp0), compile with -O2, and
+  output directly to bin\diff3.exe.

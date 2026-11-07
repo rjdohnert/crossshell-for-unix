@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="diff"
-BIN_DIR="../../bin"
-SRC="diff.cpp diff_app.cpp arg_parser.cpp formatter.cpp myers_diff.cpp line_reader.cpp normalizer.cpp"
+BIN_DIR="$SCRIPT_DIR/../../bin"
+SRC="$SCRIPT_DIR/diff.c"
 
 mkdir -p "$BIN_DIR"
 
-if command -v clang++ >/dev/null 2>&1; then
-    echo "Building $TARGET with clang++..."
-    clang++ -std=c++17 -O2 $SRC -o "$BIN_DIR/$TARGET"
-    echo "Build successful: $BIN_DIR/$TARGET"
+if command -v clang >/dev/null 2>&1; then
+    echo "Building $TARGET with clang..."
+    clang -O2 "$SRC" -o "$BIN_DIR/$TARGET.exe"
+    echo "Build successful: $BIN_DIR/$TARGET.exe"
     exit 0
 fi
 
-if command -v g++ >/dev/null 2>&1; then
-    echo "Building $TARGET with g++..."
-    g++ -std=c++17 -O2 $SRC -o "$BIN_DIR/$TARGET"
-    echo "Build successful: $BIN_DIR/$TARGET"
+if command -v gcc >/dev/null 2>&1; then
+    echo "Building $TARGET with gcc..."
+    gcc -O2 "$SRC" -o "$BIN_DIR/$TARGET.exe"
+    echo "Build successful: $BIN_DIR/$TARGET.exe"
     exit 0
 fi
 
-echo "Error: No suitable C++ compiler found (clang++ or g++)."
+echo "Error: No suitable C compiler found (clang or gcc)."
 exit 1

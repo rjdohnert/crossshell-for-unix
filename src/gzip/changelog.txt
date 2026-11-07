@@ -1,0 +1,19 @@
+gzip changes
+============
+
+- Replaced the include-fragment implementation with focused CLI, codec, file,
+  member-parser, engine, reporting, and application modules.
+- Added standard-output and standard-input processing, including concatenated
+  gzip-member output for multiple input files.
+- Added DEFLATE member-boundary parsing so decompression handles concatenated
+  members, validates optional header checksums, and supports stored, fixed, and
+  dynamic blocks.
+- Preserved transactional output behavior: temporary output is validated before
+  installation, existing outputs require --force, and source files are removed
+  only after successful output installation.
+- Hardened path handling, PowerShell process creation, report escaping, and
+  error propagation.
+- Updated all build scripts to compile the modules and install gzip.exe in
+  bin\; the installer now verifies that the executable is present.
+- Updated docs\gzip.md with the current options, compatibility, and safety
+  behavior.

@@ -17,8 +17,16 @@ try {
         exit 1
     }
 
-    Write-Host "[env] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 env.cpp -Wl,/subsystem:console -o env.exe
+    $sources = @(
+        "env.cpp",
+        "env_arguments.cpp",
+        "env_application.cpp",
+        "env_environment.cpp",
+        "env_output.cpp",
+        "env_process.cpp"
+    )
+    Write-Host "[env] Compiling modules with clang++..."
+    & clang++ -std=c++17 -O2 @sources "-Wl,/subsystem:console" -o env.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[env] Build failed."
         exit $LASTEXITCODE
@@ -26,8 +34,12 @@ try {
 
     Write-Host "[env] Build successful: env.exe"
     if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force env.exe "..\..\bin\env.exe"
+        $binDir = Join-Path $scriptDir "..\..\bin"
+        New-Item -ItemType Directory -Force -ErrorAction Stop $binDir | Out-Null
+        $installedPath = Join-Path $binDir "env.exe"
+        Copy-Item -Force -ErrorAction Stop env.exe $installedPath
+        if (-not (Test-Path $installedPath)) {
+            throw "[env] Error: failed to install env.exe to bin\."
         }
     }
 }

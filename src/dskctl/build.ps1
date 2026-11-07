@@ -18,7 +18,19 @@ try {
     }
 
     Write-Host "[dskctl] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 dskctl.cpp -Wl,/subsystem:console -o dskctl.exe
+    $sources = @(
+        "dskctl.cpp",
+        "dskctl_app.cpp",
+        "dskctl_engine.cpp",
+        "dskctl_helpers.cpp",
+        "dskctl_logger.cpp",
+        "dskctl_options.cpp",
+        "dskctl_reporter.cpp",
+        "dskctl_security.cpp",
+        "dskctl_targets.cpp"
+    )
+    & clang++ -std=c++17 -O2 @sources "-Wl,/subsystem:console" `
+        -lshell32 -ladvapi32 -lole32 -o dskctl.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[dskctl] Build failed."
         exit $LASTEXITCODE
@@ -26,8 +38,11 @@ try {
 
     Write-Host "[dskctl] Build successful: dskctl.exe"
     if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force dskctl.exe "..\..\bin\dskctl.exe"
+        $binDir = Join-Path $scriptDir "..\..\bin"
+        New-Item -ItemType Directory -Force -ErrorAction Stop $binDir | Out-Null
+        Copy-Item -Force -ErrorAction Stop dskctl.exe (Join-Path $binDir "dskctl.exe")
+        if (-not (Test-Path (Join-Path $binDir "dskctl.exe"))) {
+            throw "[dskctl] Error: failed to install dskctl.exe to bin\."
         }
     }
 }

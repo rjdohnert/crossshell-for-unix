@@ -18,7 +18,17 @@ try {
     }
 
     Write-Host "[driverctl] Compiling with clang++..."
-    & clang++ -std=c++17 -O2 driverctl.cpp -Wl,/subsystem:console -o driverctl.exe
+    $sources = @(
+        "driverctl.cpp",
+        "driverctl_app.cpp",
+        "driverctl_scanner.cpp",
+        "driverctl_logger.cpp",
+        "driverctl_decoder.cpp",
+        "driverctl_formatters.cpp",
+        "driverctl_utilities.cpp"
+    )
+    & clang++ -std=c++17 -O2 @sources "-Wl,/subsystem:console" `
+        -lsetupapi -lcfgmgr32 -ladvapi32 -lshell32 -lole32 -o driverctl.exe
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[driverctl] Build failed."
         exit $LASTEXITCODE
@@ -26,8 +36,11 @@ try {
 
     Write-Host "[driverctl] Build successful: driverctl.exe"
     if ($Action -ne "noinstall") {
-        if (Test-Path "..\..\bin") {
-            Copy-Item -Force driverctl.exe "..\..\bin\driverctl.exe"
+        $binDir = Join-Path $scriptDir "..\..\bin"
+        New-Item -ItemType Directory -Force -ErrorAction Stop $binDir | Out-Null
+        Copy-Item -Force -ErrorAction Stop driverctl.exe (Join-Path $binDir "driverctl.exe")
+        if (-not (Test-Path (Join-Path $binDir "driverctl.exe"))) {
+            throw "[driverctl] Error: failed to install driverctl.exe to bin\."
         }
     }
 }

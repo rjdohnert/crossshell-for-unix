@@ -28,6 +28,8 @@ private:
     std::string m_inBuf;      // VT input accumulator (raw bytes from stdin)
     size_t m_inPos = 0;       // parse cursor into m_inBuf
     bool m_cursorVisible = true; // tracked for VT cursor show/hide
+    int m_cursorX = 0;        // tracked VT cursor column (0-based)
+    int m_cursorY = 0;        // tracked VT cursor row (0-based)
     std::vector<std::shared_ptr<Document>> m_documents;
     int m_activeDocIndex = 0;
 
@@ -234,7 +236,7 @@ private:
 
     void ShowBuildResultDialog(bool ok);
 
-    void StartToolProcess(const std::string& title, const std::string& command, bool isDebug);
+    void StartToolProcess(const std::string& title, const std::string& command, bool isDebug, const fs::path& cleanupFile = {});
     void DrainCompletedTools();
     void ApplyToolResult(const ToolResult& result);
 
@@ -268,7 +270,7 @@ private:
 
     fs::path GitWorkDir() const;
 
-    void RunGitCommand(const std::string& title, const std::string& args);
+    void RunGitCommand(const std::string& title, const std::string& args, const fs::path& cleanupFile = {});
 
     void GitStatus();
 

@@ -1,0 +1,36 @@
+entab
+Change Log
+==========
+
+Security and reliability
+------------------------
+- Stream transformed bytes directly to the selected output instead of
+  buffering complete inputs in memory.
+- Escape JSON, CSV, and table output correctly, including invalid UTF-8 and
+  control characters.
+- Protect CSV output from formula-like content and table output from
+  control-character row or column injection; spill long CSV whitespace prefixes
+  to a temporary file without changing their contents.
+- Propagate input, output, flush, and --pipe child-process failures through
+  diagnostics and exit status.
+- Validate tab widths and explicit tab stops, including representability and
+  strictly increasing order, and reject malformed stop lists.
+- Make --first-only consistently take precedence over --all regardless of
+  option order.
+- Distinguish standard input from a literal file named "-" following --.
+
+Modularization and CLI
+----------------------
+- Replace the single translation unit and included fragments with separately
+  compiled modules for parsing, transformation, reporting, help, and app flow.
+- Reject conflicting structured output formats and duplicate --pipe options.
+- Correct entab command names in help, version, and error messages.
+- Support the documented Windows and POSIX build environments.
+
+Build and documentation
+-----------------------
+- Update PowerShell, batch, and shell builds to compile the modules and install
+  entab.exe into bin\ by default on Windows.
+- Create the bin directory and report installation failures.
+- Update the usage documentation to describe tab stops, output formats, and
+  error behavior.

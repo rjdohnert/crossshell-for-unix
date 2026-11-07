@@ -1,0 +1,68 @@
+================================================================================
+diff - Change Log
+================================================================================
+
+This file tracks changes to diff, the CrossShell for UNIX file comparison utility
+for Windows.
+
+--------------------------------------------------------------------------------
+2026-11-03
+--------------------------------------------------------------------------------
+
+This update delivers a high-performance Windows-native C implementation of diff
+featuring zero-copy memory-mapped I/O, 64-bit line hashing, ANSI terminal color
+support, multiple output formatters, and critical memory stability fixes.
+
+NEW FEATURES
+------------
+* Unified single-file C engine (diff.c) utilizing Win32 Memory-Mapped Files (MMF)
+  for zero-copy line ingestion and 64-bit FNV-1a normalized line hashing.
+
+* Added full support for standard input ("-") reading from pipes and consoles,
+  including duplicate stdin comparison (e.g., diff - -).
+
+* Multiple output formats supported:
+  - Normal POSIX ed-style diff format (default)
+  - Unified format (-u, -U NUM)
+  - Context format (-c, -C NUM)
+  - Side-by-side format (-y, -W/--width=NUM) with column alignment
+  - Brief mode (-q, --brief)
+
+* Automatic ANSI virtual terminal color detection and rendering with --color,
+  --color=always, --color=never, and --color=auto.
+
+* Content normalization options:
+  - -i, --ignore-case (case-insensitive comparisons)
+  - -w, --ignore-all-space (ignore all white space)
+  - -b, --ignore-space-change (ignore changes in the amount of white space)
+  - -B, --ignore-blank-lines (ignore lines that are entirely blank)
+  - --strip-trailing-cr (strip carriage returns from Windows CRLF files)
+  - -s, --report-identical-files (explicit notification when files match)
+
+* Added detection and reporting for missing final newlines ("\ No newline at
+  end of file").
+
+* Added support for the standard "--" end-of-options marker.
+
+BUG FIXES & STABILITY PATCHES
+-----------------------------
+* Resolved critical heap buffer overflow in Myers backtrack collection where
+  matching lines exceeded edit script capacity, causing STATUS_HEAP_CORRUPTION
+  crashes on large or identical files.
+
+* Implemented dynamic resizing (EditScript_Push) with safe capacity scaling to
+  ensure edit script allocations never overflow.
+
+* Optimized Myers graph traversal trace allocations from O((N+M)^2) to O(D^2),
+  preventing multi-gigabyte memory exhaustion during large file comparisons.
+
+* Fixed binary file comparison logic to verify byte contents rather than
+  treating distinct file paths as differing binary content.
+
+* Added strict numeric validation for context lines (-U, -C) and column width
+  (-W, --width) to reject negative or malformed values with exit code 2.
+
+BUILD SYSTEM
+------------
+* Updated build.ps1, build.bat, build.sh, and CMakeLists.txt to compile diff.c
+  with optimization (-O2) and install directly to bin\diff.exe.

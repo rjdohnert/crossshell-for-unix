@@ -1,0 +1,32 @@
+errpt
+Change Log
+==========
+
+Security and reliability
+------------------------
+- Validate event-record lengths, signatures, string offsets, terminators, and
+  optional data ranges before accessing event contents.
+- Grow the event-read buffer when Windows reports a larger record, with a
+  bounded allocation limit.
+- Stream records and formatted output instead of retaining the entire log in
+  memory when --all is selected.
+- Escape JSON control characters, CSV quotes and formula-like fields, and
+  table control characters to prevent malformed output and injection.
+- Check pipe creation, writes, flushes, and child exit status.
+- Validate line counts and conflicting output modes.
+- Check event-log opening, reading, and closing failures.
+
+Modularization and command line
+-------------------------------
+- Replace numbered included fragments with separately compiled event-reader,
+  output, parser, and application modules.
+- Keep event models and options in concise, purpose-specific headers and
+  errpt.cpp as the entry point.
+- Expand the built-in help with current options and exit statuses.
+
+Build and documentation
+-----------------------
+- Update PowerShell, batch, and Windows shell builds to compile every module.
+- Create bin when needed and install errpt.exe there by default; keep
+  noinstall as an explicit opt-out.
+- Make the shell build report that errpt requires the Windows Event Log API.

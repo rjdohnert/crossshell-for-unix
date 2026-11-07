@@ -13,7 +13,7 @@ if errorlevel 1 (
 )
 
 echo [handles] Compiling with clang++...
-clang++ -std=c++17 -O2 handles.cpp -Wl,/subsystem:console -o handles.exe
+clang++ -std=c++17 -O2 handles.cpp handles_cli.cpp handles_collect.cpp handles_format.cpp handles_app.cpp -Wl,/subsystem:console -o handles.exe
 if errorlevel 1 (
     echo [handles] Build failed.
     popd
@@ -23,10 +23,19 @@ if errorlevel 1 (
 echo [handles] Build successful: handles.exe
 
 if /I "%~1"=="noinstall" goto :skip_install
-if exist "..\..\bin" (
-    copy /y handles.exe "..\..\bin\handles.exe" >nul
-    echo [handles] Installed to ..\..\bin\handles.exe
+if not exist "..\..\bin" mkdir "..\..\bin"
+if errorlevel 1 (
+    echo [handles] Error: could not create the bin directory.
+    popd
+    exit /b 1
 )
+copy /y handles.exe "..\..\bin\handles.exe" >nul
+if errorlevel 1 (
+    echo [handles] Error: could not install handles.exe to bin.
+    popd
+    exit /b 1
+)
+echo [handles] Installed to ..\..\bin\handles.exe
 
 :skip_install
 popd

@@ -113,8 +113,10 @@ void CrossForgeEngine::LoadUserProject() {
     if (!file.is_open()) return;
 
     std::vector<std::string> paths;
+    std::vector<std::string> recentPaths;
     std::string line;
     while (std::getline(file, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.rfind("THEME ", 0) == 0) {
             try {
                 int theme = std::stoi(line.substr(6));
@@ -129,8 +131,16 @@ void CrossForgeEngine::LoadUserProject() {
         } else if (line.rfind("FILE ", 0) == 0) {
             paths.push_back(line.substr(5));
         } else if (line.rfind("RECENT ", 0) == 0) {
-            RememberRecentFile(line.substr(7));
+            std::string rpath = line.substr(7);
+            if (!rpath.empty() && std::find(recentPaths.begin(), recentPaths.end(), rpath) == recentPaths.end()) {
+                recentPaths.push_back(rpath);
+            }
         }
+    }
+    if (!recentPaths.empty()) {
+        if (recentPaths.size() > 10) recentPaths.resize(10);
+        m_recentFiles = std::move(recentPaths);
+        m_recentIndex = 0;
     }
 
     std::vector<std::shared_ptr<Document>> loaded;
@@ -310,7 +320,7 @@ bool CrossForgeEngine::IsLikelyCompilerToolDirectory(const fs::path& dir) {
     static const char* kToolNames[] = {
         "cl.exe", "link.exe", "gcc.exe", "g++.exe", "clang.exe", "clang++.exe",
         "javac.exe", "csc.exe", "fpc.exe", "gfortran.exe", "cobc.exe", "swiftc.exe",
-        "node.exe", "tsc.cmd"
+        "rustc.exe", "go.exe", "node.exe", "tsc.cmd"
     };
 
     std::error_code ec;
@@ -474,8 +484,10 @@ bool CrossForgeEngine::SetCursorVisible(bool visible) {
 
 // VT cursor position (1-based row/col in the escape sequence).
 void CrossForgeEngine::SetCursorPositionVT(int x, int y) {
+    m_cursorX = (std::max)(0, x);
+    m_cursorY = (std::max)(0, y);
     char esc[32];
-    int n = snprintf(esc, sizeof(esc), "\x1b[%d;%dH", y + 1, x + 1);
+    int n = snprintf(esc, sizeof(esc), "\x1b[%d;%dH", m_cursorY + 1, m_cursorX + 1);
     if (n > 0) {
         DWORD written = 0;
         WriteFile(m_hStdOut, esc, (DWORD)n, &written, nullptr);
@@ -766,7 +778,11 @@ void CrossForgeEngine::FlushBuffer() {
         }
     }
     frame += "\x1b[0m";      // reset attributes
-    frame += "\x1b[?25h";    // show cursor
+    if (m_cursorVisible) {
+        snprintf(esc, sizeof(esc), "\x1b[%d;%dH", m_cursorY + 1, m_cursorX + 1);
+        frame += esc;
+        frame += "\x1b[?25h"; // show cursor at tracked position
+    }
 
     DWORD written = 0;
     WriteFile(m_hStdOut, frame.data(), static_cast<DWORD>(frame.size()), &written, nullptr);
@@ -967,9 +983,11 @@ bool CrossForgeEngine::GetSystemClipboardText(std::string& text) {
 
 void CrossForgeEngine::UndoActiveDocument() {
     if (m_documents.empty()) return;
+    m_selectAllActive = false;
     auto doc = m_documents[m_activeDocIndex];
     if (doc && doc->Undo()) {
         EnsureDocumentInvariants(doc);
+        EnsureCursorVisible(doc, m_activeDocIndex);
         SetStatus("Undo.");
     } else {
         SetStatus("Nothing to undo.");
@@ -978,9 +996,11 @@ void CrossForgeEngine::UndoActiveDocument() {
 
 void CrossForgeEngine::RedoActiveDocument() {
     if (m_documents.empty()) return;
+    m_selectAllActive = false;
     auto doc = m_documents[m_activeDocIndex];
     if (doc && doc->Redo()) {
         EnsureDocumentInvariants(doc);
+        EnsureCursorVisible(doc, m_activeDocIndex);
         SetStatus("Redo.");
     } else {
         SetStatus("Nothing to redo.");
@@ -1065,6 +1085,7 @@ bool CrossForgeEngine::HandleMenuAccelerator(WORD vk, DWORD state) {
         case 'Y': ExecuteMenuCommand(MenuCommand::DebugViewOutput); return true;
         case 'O': ExecuteMenuCommand(MenuCommand::ViewCompilerOutput); return true;
         case 'G': ExecuteMenuCommand(MenuCommand::SearchFindPrevious); return true;
+        case 'E': ExecuteMenuCommand(MenuCommand::FileRecent); return true;
         case 'I': ExecuteMenuCommand(MenuCommand::EditInsertLine); return true;
         case 'U': ExecuteMenuCommand(MenuCommand::EditDuplicateLine); return true;
         case VK_BACK: ExecuteMenuCommand(MenuCommand::EditDeleteLine); return true;
@@ -1093,6 +1114,7 @@ void CrossForgeEngine::NewDocument() {
     doc->Lang = SupportedLanguage::Text;
     m_documents.push_back(doc);
     m_activeDocIndex = static_cast<int>(m_documents.size()) - 1;
+    m_selectAllActive = false;
     m_needsRender = true;
 }
 
@@ -1101,7 +1123,11 @@ void CrossForgeEngine::SaveActiveDocument() {
     auto doc = m_documents[m_activeDocIndex];
     if (!doc) return;
 
-    if (doc->FilePath.empty()) {
+    std::string prevPath = doc->FilePath;
+    std::string prevTitle = doc->Title;
+    SupportedLanguage prevLang = doc->Lang;
+    bool wasNewPath = prevPath.empty();
+    if (wasNewPath) {
         std::string selectedPath;
         if (!ShowPathNavigatorDialog("Save File", false, false, selectedPath)) {
             SetStatus("Save cancelled.");
@@ -1117,9 +1143,19 @@ void CrossForgeEngine::SaveActiveDocument() {
         doc->FilePath = normalizedPath;
         doc->Title = fs::path(normalizedPath).filename().string();
         doc->Lang = m_langRegistry.DetectLanguage(doc->FilePath);
+    }
+    if (!doc->SaveFile()) {
+        if (wasNewPath) {
+            doc->FilePath = prevPath;
+            doc->Title = prevTitle;
+            doc->Lang = prevLang;
+        }
+        SetStatus("Save failed: unable to write " + doc->Title);
+        return;
+    }
+    if (wasNewPath) {
         RememberRecentFile(doc->FilePath);
     }
-    doc->SaveFile();
     m_selectAllActive = false;
     SetStatus("Saved: " + doc->Title);
 }
@@ -1143,11 +1179,21 @@ void CrossForgeEngine::SaveActiveDocumentAs(const std::string& path) {
         return;
     }
 
+    std::string prevPath = doc->FilePath;
+    std::string prevTitle = doc->Title;
+    SupportedLanguage prevLang = doc->Lang;
     doc->FilePath = normalizedPath;
     doc->Title = fs::path(normalizedPath).filename().string();
     doc->Lang = m_langRegistry.DetectLanguage(doc->FilePath);
+    if (!doc->SaveFile()) {
+        doc->FilePath = prevPath;
+        doc->Title = prevTitle;
+        doc->Lang = prevLang;
+        SetStatus("Save As failed: unable to write file.");
+        m_needsRender = true;
+        return;
+    }
     RememberRecentFile(doc->FilePath);
-    doc->SaveFile();
     m_selectAllActive = false;
     SetStatus("Saved As: " + doc->Title);
     m_needsRender = true;
@@ -1243,6 +1289,7 @@ void CrossForgeEngine::OpenDocumentFromPrompt() {
         doc->Lang = m_langRegistry.DetectLanguage(path);
         m_documents.push_back(doc);
         m_activeDocIndex = static_cast<int>(m_documents.size()) - 1;
+        m_selectAllActive = false;
         RememberRecentFile(path);
         SetStatus("Opened: " + doc->Title);
     } else {
@@ -1300,12 +1347,14 @@ bool CrossForgeEngine::ShowPathNavigatorDialog(const std::string& title, bool mu
     auto loadEntries = [&](std::vector<fs::directory_entry>& entries) {
         entries.clear();
         try {
-            for (const auto& de : fs::directory_iterator(currentDir)) {
+            std::error_code ec;
+            for (const auto& de : fs::directory_iterator(currentDir, fs::directory_options::skip_permission_denied, ec)) {
                 entries.push_back(de);
             }
             std::sort(entries.begin(), entries.end(), [](const fs::directory_entry& a, const fs::directory_entry& b) {
-                bool aDir = a.is_directory();
-                bool bDir = b.is_directory();
+                std::error_code ecA, ecB;
+                bool aDir = a.is_directory(ecA) && !ecA;
+                bool bDir = b.is_directory(ecB) && !ecB;
                 if (aDir != bDir) return aDir > bDir;
                 return a.path().filename().string() < b.path().filename().string();
             });
@@ -1318,11 +1367,10 @@ bool CrossForgeEngine::ShowPathNavigatorDialog(const std::string& title, bool mu
 
     std::vector<fs::directory_entry> entries;
     loadEntries(entries);
-    bool prevCursorVisible = SetCursorVisible(false);
-    bool dialogDirty = true;
-
     RenderScreen();
     m_needsRender = false;
+    bool prevCursorVisible = SetCursorVisible(false);
+    bool dialogDirty = true;
     std::vector<CHAR_INFO> dialogBaseBuffer = m_screenBuffer;
 
     while (true) {
@@ -1379,7 +1427,8 @@ bool CrossForgeEngine::ShowPathNavigatorDialog(const std::string& title, bool mu
                 } else if (idx - 1 < static_cast<int>(entries.size())) {
                     const auto& de = entries[idx - 1];
                     std::string name = de.path().filename().string();
-                    line = (de.is_directory() ? "[DIR] " : "[FILE] ") + name;
+                    std::error_code ecDir;
+                    line = ((de.is_directory(ecDir) && !ecDir) ? "[DIR] " : "[FILE] ") + name;
                 }
 
                 if ((int)line.size() > itemAreaWidth) {
@@ -1402,6 +1451,7 @@ bool CrossForgeEngine::ShowPathNavigatorDialog(const std::string& title, bool mu
             if ((int)shownName.size() > inputMax) {
                 shownName = shownName.substr(shownName.size() - inputMax);
             }
+            int visibleLen = Utf8DisplayWidth(shownName);
             while ((int)shownName.size() < inputMax) shownName += ' ';
             DrawString(startX + 10, startY + dHeight - 4, shownName, listFocus ? dAttr : static_cast<WORD>(dAttr | FOREGROUND_BLUE));
 
@@ -1417,8 +1467,6 @@ bool CrossForgeEngine::ShowPathNavigatorDialog(const std::string& title, bool mu
             DrawString(startX + 2, startY + dHeight - 2, statusLine, dAttr);
 
             if (!listFocus) {
-                size_t lastNonSpace = shownName.find_last_not_of(' ');
-                int visibleLen = (lastNonSpace == std::string::npos) ? 0 : static_cast<int>(lastNonSpace + 1);
                 int cursorX = startX + 10 + visibleLen;
                 if (cursorX >= startX + dWidth - 2) cursorX = startX + dWidth - 3;
                 SetCursorVisible(true);
@@ -1553,7 +1601,8 @@ bool CrossForgeEngine::ShowPathNavigatorDialog(const std::string& title, bool mu
                 }
 
                 const auto& chosen = entries[selected - 1];
-                if (chosen.is_directory()) {
+                std::error_code ecDir;
+                if (chosen.is_directory(ecDir) && !ecDir) {
                     currentDir = chosen.path();
                     selected = 0;
                     scroll = 0;
@@ -1605,11 +1654,13 @@ bool CrossForgeEngine::ShowPathNavigatorDialog(const std::string& title, bool mu
                 SetCursorVisible(prevCursorVisible);
                 return true;
             }
-            std::string chUtf8 = Utf8FromWideChar(wch);
-            if (!chUtf8.empty() && chUtf8.find_first_of("\"<>|:*?") == std::string::npos) {
-                fileName += chUtf8;
-                dialogDirty = true;
-                continue;
+            if (IsCtrlPressed(state) == IsAltPressed(state)) {
+                std::string chUtf8 = Utf8FromWideChar(wch);
+                if (!chUtf8.empty() && chUtf8.find_first_of("\"<>|:*?") == std::string::npos) {
+                    fileName += chUtf8;
+                    dialogDirty = true;
+                    continue;
+                }
             }
         }
     }
@@ -1624,10 +1675,10 @@ bool CrossForgeEngine::ShowInputDialog(const std::string& title, const std::stri
     int startX = (m_width - dWidth) / 2;
     int startY = (m_height - dHeight) / 2;
 
-    bool prevCursorVisible = SetCursorVisible(true);
-    bool dialogDirty = true;
     RenderScreen();
     m_needsRender = false;
+    bool prevCursorVisible = SetCursorVisible(true);
+    bool dialogDirty = true;
     std::vector<CHAR_INFO> dialogBaseBuffer = m_screenBuffer;
 
     while (true) {
@@ -1665,11 +1716,12 @@ bool CrossForgeEngine::ShowInputDialog(const std::string& title, const std::stri
             }
             DrawString(startX + 2, startY + 4, shown, dAttr);
 
-            int cursorX = startX + 2 + static_cast<int>(shown.size());
+            int cursorX = startX + 2 + Utf8DisplayWidth(shown);
             int cursorY = startY + 4;
             if (cursorX >= startX + dWidth - 2) cursorX = startX + dWidth - 3;
-            FlushBuffer();
+            SetCursorVisible(true);
             SetCursorPositionVT(cursorX, cursorY);
+            FlushBuffer();
             dialogDirty = false;
         }
 
@@ -1710,10 +1762,13 @@ bool CrossForgeEngine::ShowInputDialog(const std::string& title, const std::stri
             dialogDirty = true;
             continue;
         }
-        std::string chUtf8 = Utf8FromWideChar(wch);
-        if (!chUtf8.empty()) {
-            value += chUtf8;
-            dialogDirty = true;
+        DWORD state = ir.Event.KeyEvent.dwControlKeyState;
+        if (IsCtrlPressed(state) == IsAltPressed(state)) {
+            std::string chUtf8 = Utf8FromWideChar(wch);
+            if (!chUtf8.empty()) {
+                value += chUtf8;
+                dialogDirty = true;
+            }
         }
     }
 }
@@ -1798,10 +1853,19 @@ bool CrossForgeEngine::EnsureActiveDocumentPath(std::shared_ptr<Document>& doc) 
         return false;
     }
 
+    std::string prevTitle = doc->Title;
+    SupportedLanguage prevLang = doc->Lang;
     doc->FilePath = normalizedPath;
     doc->Title = fs::path(normalizedPath).filename().string();
-    doc->SaveFile();
     doc->Lang = m_langRegistry.DetectLanguage(doc->FilePath);
+    if (!doc->SaveFile()) {
+        doc->FilePath.clear();
+        doc->Title = prevTitle;
+        doc->Lang = prevLang;
+        SetStatus("Build/Run cancelled: unable to save file.");
+        return false;
+    }
+    RememberRecentFile(doc->FilePath);
     return true;
 }
 
@@ -1822,6 +1886,7 @@ std::vector<std::string> CrossForgeEngine::SplitOutputLines(const std::string& t
 }
 
 void CrossForgeEngine::ShowCommandOutputDialog(const std::string& title, const std::string& command, const std::string& output, bool ok) {
+    bool prevCursorVisible = SetCursorVisible(false);
     int dWidth = (std::min)(m_width - 4, 108);
     int dHeight = (std::min)(m_height - 4, 22);
     int startX = (m_width - dWidth) / 2;
@@ -1876,6 +1941,7 @@ void CrossForgeEngine::ShowCommandOutputDialog(const std::string& title, const s
         }
     }
 
+    SetCursorVisible(prevCursorVisible);
     m_needsRender = true;
 }
 
@@ -1883,6 +1949,7 @@ void CrossForgeEngine::ShowCommandOutputDialog(const std::string& title, const s
 // compiler's own text (or the object file it prints) tells the user the result.
 void CrossForgeEngine::ShowBuildResultDialog(bool ok) {
     (void)ok;
+    bool prevCursorVisible = SetCursorVisible(false);
     int dWidth = (std::min)(m_width - 4, 52);
     int dHeight = 9;
     int startX = (m_width - dWidth) / 2;
@@ -1914,6 +1981,7 @@ void CrossForgeEngine::ShowBuildResultDialog(bool ok) {
         }
     }
 
+    SetCursorVisible(prevCursorVisible);
     m_needsRender = true;
 }
 
@@ -1921,24 +1989,33 @@ void CrossForgeEngine::ShowBuildResultDialog(bool ok) {
 // worker only runs the process and captures output; all UI state is applied
 // later on the main thread by DrainCompletedTools(). If a tool is already
 // running, the request is ignored with a status message.
-void CrossForgeEngine::StartToolProcess(const std::string& title, const std::string& command, bool isDebug) {
+void CrossForgeEngine::StartToolProcess(const std::string& title, const std::string& command, bool isDebug, const fs::path& cleanupFile) {
     if (m_toolRunning.load()) {
+        if (!cleanupFile.empty()) {
+            std::error_code ec;
+            fs::remove(cleanupFile, ec);
+        }
         SetStatus("A tool is already running (" + m_pendingToolTitle + "). Please wait.");
         return;
     }
     if (m_toolThread.joinable()) m_toolThread.join();
 
     m_pendingToolTitle = title;
+    ProcessRunner::ClearCancel();
     m_toolRunning.store(true);
-    SetStatus(title + " running... (Esc in output cancels)");
+    SetStatus(title + " running... (Esc cancels)");
     m_needsRender = true;
 
-    m_toolThread = std::thread([this, title, command, isDebug]() {
+    m_toolThread = std::thread([this, title, command, isDebug, cleanupFile]() {
         ToolResult result;
         result.Title = title;
         result.Command = command;
         result.IsDebug = isDebug;
         result.Ok = ProcessRunner::RunProcess(command, result.Output);
+        if (!cleanupFile.empty()) {
+            std::error_code ec;
+            fs::remove(cleanupFile, ec);
+        }
 
         {
             std::lock_guard<std::mutex> lock(m_toolMutex);
@@ -2081,9 +2158,10 @@ void CrossForgeEngine::GoToNextDiagnostic() {
     }
     const Diagnostic& diagnostic = m_diagnostics[m_diagnosticIndex % m_diagnostics.size()];
     for (int i = 0; i < static_cast<int>(m_documents.size()); ++i) {
-        if (m_documents[i] && (m_documents[i]->FilePath == diagnostic.FilePath ||
+        if ( m_documents[i] && (m_documents[i]->FilePath == diagnostic.FilePath ||
             fs::path(m_documents[i]->FilePath).filename() == fs::path(diagnostic.FilePath).filename())) {
             m_activeDocIndex = i;
+            m_selectAllActive = false;
             auto doc = m_documents[i];
             doc->CursorY = (std::max)(0, (std::min)(diagnostic.Line - 1, static_cast<int>(doc->Lines.size()) - 1));
             doc->CursorX = 0;
@@ -2221,12 +2299,17 @@ std::string CrossForgeEngine::DetectLinkerForLanguage(SupportedLanguage lang) co
         return FindToolInPath("fpc.exe");
     case SupportedLanguage::CSharp:
         return FindToolInPath("csc.exe");
+    case SupportedLanguage::Rust:
+        return FindToolInPath("rustc.exe");
+    case SupportedLanguage::Go:
+        return FindToolInPath("go.exe");
     default:
         return "";
     }
 }
 
 void CrossForgeEngine::ShowDebuggerDetectDialog() {
+    bool prevCursorVisible = SetCursorVisible(false);
     std::vector<std::pair<std::string, std::string>> probes = {
         {"C/C++ Debugger (cdb.exe)", "cdb.exe"},
         {"GNU Debugger (gdb.exe)", "gdb.exe"},
@@ -2290,6 +2373,7 @@ void CrossForgeEngine::ShowDebuggerDetectDialog() {
         }
     }
 
+    SetCursorVisible(prevCursorVisible);
     m_needsRender = true;
 }
 
@@ -2298,7 +2382,10 @@ void CrossForgeEngine::RunDebugForActiveTarget() {
     auto doc = m_documents[m_activeDocIndex];
     if (!EnsureActiveDocumentPath(doc)) return;
 
-    doc->SaveFile();
+    if (!doc->SaveFile()) {
+        SetStatus("Debug cancelled: unable to save " + doc->Title);
+        return;
+    }
     doc->Lang = m_langRegistry.DetectLanguage(doc->FilePath);
     const auto& cfg = m_langRegistry.GetConfig(doc->Lang);
 
@@ -2344,7 +2431,10 @@ void CrossForgeEngine::RunLinkerForActiveTarget() {
     auto doc = m_documents[m_activeDocIndex];
     if (!EnsureActiveDocumentPath(doc)) return;
 
-    doc->SaveFile();
+    if (!doc->SaveFile()) {
+        SetStatus("Link cancelled: unable to save " + doc->Title);
+        return;
+    }
     doc->Lang = m_langRegistry.DetectLanguage(doc->FilePath);
     const auto& cfg = m_langRegistry.GetConfig(doc->Lang);
 
@@ -2403,7 +2493,10 @@ void CrossForgeEngine::BuildActiveTarget() {
     auto doc = m_documents[m_activeDocIndex];
     if (!EnsureActiveDocumentPath(doc)) return;
 
-    doc->SaveFile();
+    if (!doc->SaveFile()) {
+        SetStatus("Build cancelled: unable to save " + doc->Title);
+        return;
+    }
     doc->Lang = m_langRegistry.DetectLanguage(doc->FilePath);
     const auto& cfg = m_langRegistry.GetConfig(doc->Lang);
     if (cfg.CompileCmdTemplate.empty()) {
@@ -2453,7 +2546,10 @@ void CrossForgeEngine::RunActiveTarget() {
     auto doc = m_documents[m_activeDocIndex];
     if (!EnsureActiveDocumentPath(doc)) return;
 
-    doc->SaveFile();
+    if (!doc->SaveFile()) {
+        SetStatus("Run cancelled: unable to save " + doc->Title);
+        return;
+    }
     doc->Lang = m_langRegistry.DetectLanguage(doc->FilePath);
 
     fs::path sourcePath = fs::absolute(fs::path(doc->FilePath));
@@ -2546,9 +2642,13 @@ fs::path CrossForgeEngine::GitWorkDir() const {
 // Run a git subcommand in the working directory and show its output.
 // Preflight: verify git is available so the user gets a clear message instead
 // of a failed 'git is not recognized' command dialog.
-void CrossForgeEngine::RunGitCommand(const std::string& title, const std::string& args) {
+void CrossForgeEngine::RunGitCommand(const std::string& title, const std::string& args, const fs::path& cleanupFile) {
     if (FindToolInPath("git.exe").empty() && FindToolInPath("git.cmd").empty()
         && FindToolInPath("git.bat").empty()) {
+        if (!cleanupFile.empty()) {
+            std::error_code ec;
+            fs::remove(cleanupFile, ec);
+        }
         ShowCommandOutputDialog(title, "git " + args,
             "Git was not found on PATH.\n\n"
             "Install Git for Windows (https://git-scm.com/download/win) or add "
@@ -2559,7 +2659,7 @@ void CrossForgeEngine::RunGitCommand(const std::string& title, const std::string
     }
     fs::path workDir = GitWorkDir();
     std::string command = "cmd.exe /c cd /d \"" + workDir.string() + "\" && git " + args;
-    StartToolProcess(title, command, /*isDebug=*/false);
+    StartToolProcess(title, command, /*isDebug=*/false, cleanupFile);
 }
 
 void CrossForgeEngine::GitStatus() { RunGitCommand("Git Status", "status"); }
@@ -2574,7 +2674,6 @@ void CrossForgeEngine::GitDiff() { RunGitCommand("Git Diff", "diff"); }
 
 void CrossForgeEngine::GitAddAll() {
     RunGitCommand("Git Stage All", "add -A");
-    SetStatus("Staged all changes.");
 }
 
 void CrossForgeEngine::GitCommit() {
@@ -2603,8 +2702,7 @@ void CrossForgeEngine::GitCommit() {
         mf.close();
         if (mf.fail()) { fs::remove(msgFile, ec); SetStatus("Commit failed: cannot write message file."); return; }
     }
-    RunGitCommand("Git Commit", "commit -F \"" + msgFile.string() + "\"");
-    fs::remove(msgFile, ec); // best-effort cleanup
+    RunGitCommand("Git Commit", "commit -F \"" + msgFile.string() + "\"", msgFile);
 }
 
 bool CrossForgeEngine::ConfirmDocumentClose(int index) {
@@ -2655,6 +2753,7 @@ void CrossForgeEngine::CloseActiveDocument() {
     } else if (m_activeDocIndex >= static_cast<int>(m_documents.size())) {
         m_activeDocIndex = static_cast<int>(m_documents.size()) - 1;
     }
+    m_selectAllActive = false;
     SetStatus("Closed: " + title);
     m_needsRender = true;
 }
@@ -2782,6 +2881,13 @@ void CrossForgeEngine::PasteClipboardAtCursor() {
     auto doc = m_documents[m_activeDocIndex];
     EnsureDocumentInvariants(doc);
     doc->RecordEdit();
+    if (m_selectAllActive) {
+        doc->Lines.assignSingle("");
+        doc->CursorX = 0;
+        doc->CursorY = 0;
+        doc->InvalidateLineStatesFrom(0);
+        m_selectAllActive = false;
+    }
     doc->InvalidateLineStatesFrom(static_cast<size_t>(doc->CursorY));
     std::string before = doc->Lines[doc->CursorY].substr(0, doc->CursorX);
     std::string after = doc->Lines[doc->CursorY].substr(doc->CursorX);
@@ -2868,6 +2974,8 @@ void CrossForgeEngine::FindNext(bool reverse) {
         if (position != std::string::npos) {
             doc->CursorY = line;
             doc->CursorX = static_cast<int>(position);
+            m_selectAllActive = false;
+            EnsureDocumentInvariants(doc);
             EnsureCursorVisible(doc, m_activeDocIndex);
             SetStatus((reverse ? "Previous: " : "Found: ") + m_lastSearchTerm);
             return;
@@ -2899,6 +3007,9 @@ void CrossForgeEngine::ReplaceTextPrompt() {
     });
     doc->InvalidateLineStatesFrom(0);
     if (count > 0) doc->IsModified = true;
+    m_selectAllActive = false;
+    EnsureDocumentInvariants(doc);
+    EnsureCursorVisible(doc, m_activeDocIndex);
     SetStatus("Replaced " + std::to_string(count) + " occurrence(s).");
 }
 
@@ -2982,7 +3093,7 @@ std::vector<MenuEntry> CrossForgeEngine::GetMenuEntries(TopMenuAction menu) cons
     case TopMenuAction::File:
         return {{"New                Ctrl+N", (int)MenuCommand::FileNew},
             {"Open...            Ctrl+O", (int)MenuCommand::FileOpen},
-            {"Recent File         Ctrl+E", (int)MenuCommand::FileRecent},
+            {"Recent File  Ctrl+Shift+E", (int)MenuCommand::FileRecent},
             {"Save               Ctrl+S", (int)MenuCommand::FileSave},
             {"Save As...    Ctrl+Shift+S", (int)MenuCommand::FileSaveAs},
             {"Close              Ctrl+W", (int)MenuCommand::FileClose},
@@ -3064,6 +3175,7 @@ void CrossForgeEngine::ExecuteMenuCommand(MenuCommand cmd) {
                 doc->Lang = m_langRegistry.DetectLanguage(path);
                 m_documents.push_back(doc);
                 m_activeDocIndex = static_cast<int>(m_documents.size()) - 1;
+                m_selectAllActive = false;
                 SetStatus("Opened recent file: " + doc->Title);
             } else {
                 SetStatus("Recent file no longer exists.");
@@ -3109,6 +3221,7 @@ void CrossForgeEngine::ExecuteMenuCommand(MenuCommand cmd) {
     case MenuCommand::OptionsRunLinker: RunLinkerForActiveTarget(); break;
     case MenuCommand::WindowNext:
         if (!m_documents.empty()) m_activeDocIndex = (m_activeDocIndex + 1) % m_documents.size();
+        m_selectAllActive = false;
         SetStatus("Switched window.");
         break;
     case MenuCommand::WindowNew: NewDocument(); SetStatus("New window created."); break;
@@ -3126,12 +3239,12 @@ void CrossForgeEngine::ExecuteMenuCommand(MenuCommand cmd) {
 void CrossForgeEngine::ShowMenuPopup(TopMenuAction menu) {
     auto entries = GetMenuEntries(menu);
     if (entries.empty()) return;
-    bool prevCursorVisible = SetCursorVisible(false);
 
     if (m_needsRender) {
         RenderScreen();
         m_needsRender = false;
     }
+    bool prevCursorVisible = SetCursorVisible(false);
 
     std::vector<CHAR_INFO> popupBaseBuffer = m_screenBuffer;
 
@@ -3191,7 +3304,7 @@ void CrossForgeEngine::ShowMenuPopup(TopMenuAction menu) {
             popupDirty = false;
         }
 
-        if (WaitForSingleObject(m_hStdIn, 40) != WAIT_OBJECT_0) {
+        if (m_inPos >= m_inBuf.size() && WaitForSingleObject(m_hStdIn, 40) != WAIT_OBJECT_0) {
             continue;
         }
 
@@ -3202,6 +3315,7 @@ void CrossForgeEngine::ShowMenuPopup(TopMenuAction menu) {
             UpdateBufferSize();
             RenderScreen();
             m_needsRender = false;
+            SetCursorVisible(false);
             popupBaseBuffer = m_screenBuffer;
             popupDirty = true;
             continue;
@@ -3462,7 +3576,10 @@ void CrossForgeEngine::RenderSingleWindow(std::shared_ptr<Document> doc, bool is
         int cursorCol = ByteOffsetToDisplayCol(cursorLine, doc->CursorX);
         int curDrawX = 1 + lineNumWidth + (cursorCol - scrollX);
         if (curDrawY > topY && curDrawY < botY && curDrawX >= 1 + lineNumWidth && curDrawX < m_width - 1) {
+            m_cursorVisible = true;
             SetCursorPositionVT(curDrawX, curDrawY);
+        } else {
+            m_cursorVisible = false;
         }
     }
 }
@@ -3671,7 +3788,7 @@ void CrossForgeEngine::ShowHelpDialog() {
         "  Ctrl+Alt+D Debug Current",
         "  Ctrl+N New, Ctrl+W Close Window, Ctrl+E Next Window",
         "  Ctrl+F Find, Ctrl+G Next Find, Ctrl+Shift+G Previous Find, Ctrl+H Replace",
-        "  Ctrl+Z Undo, Ctrl+Y Redo, Ctrl+E Open Most Recent File",
+        "  Ctrl+Z Undo, Ctrl+Y Redo, Ctrl+Shift+E Open Most Recent File",
         "  Ctrl+Shift+C/Ctrl+X/Ctrl+V/Ctrl+A Copy/Cut/Paste/Select All",
         "  Ctrl+L Linker Command, Ctrl+Shift+D Debugger Detection",
         "  Alt+X Exit",
@@ -3802,6 +3919,7 @@ void CrossForgeEngine::ShowHelpDialog() {
 }
 
 void CrossForgeEngine::ShowAboutDialog() {
+    bool prevCursorVisible = SetCursorVisible(false);
     int dWidth = 64;
     int dHeight = 12;
     int startX = (m_width - dWidth) / 2;
@@ -3833,10 +3951,12 @@ void CrossForgeEngine::ShowAboutDialog() {
         }
     }
 
+    SetCursorVisible(prevCursorVisible);
     m_needsRender = true;
 }
 
 void CrossForgeEngine::ShowCompilerDetectDialog() {
+    bool prevCursorVisible = SetCursorVisible(false);
     auto detected = CompilerDetector::DetectAll();
     int contentWidth = 0;
     for (const auto& tool : detected) {
@@ -3891,6 +4011,7 @@ void CrossForgeEngine::ShowCompilerDetectDialog() {
         }
     }
 
+    SetCursorVisible(prevCursorVisible);
     m_needsRender = true;
 }
 
@@ -4005,6 +4126,18 @@ void CrossForgeEngine::ProcessInput() {
         WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
         DWORD state = ir.Event.KeyEvent.dwControlKeyState;
 
+        if (vk == VK_ESCAPE) {
+            if (m_selectAllActive) {
+                m_selectAllActive = false;
+                SetStatus("Selection cleared.");
+            }
+            if (m_toolRunning.load()) {
+                ProcessRunner::RequestCancel();
+                SetStatus("Cancelling " + m_pendingToolTitle + "...");
+            }
+            return;
+        }
+
         // Dedicated function-key accelerators retained for historical flow.
         if (vk == VK_F2) {
             ExecuteMenuCommand(MenuCommand::FileSave);
@@ -4078,6 +4211,13 @@ void CrossForgeEngine::ProcessInput() {
                 m_selectAllActive = false;
             } else if (vk == VK_RETURN) {
                 doc->RecordEdit();
+                if (m_selectAllActive) {
+                    doc->Lines.assignSingle("");
+                    doc->CursorY = 0;
+                    doc->CursorX = 0;
+                    doc->InvalidateLineStatesFrom(0);
+                    m_selectAllActive = false;
+                }
                 doc->InvalidateLineStatesFrom(static_cast<size_t>(doc->CursorY));
                 std::string line = doc->Lines[doc->CursorY];
                 std::string remainder = line.substr(doc->CursorX);
@@ -4088,7 +4228,15 @@ void CrossForgeEngine::ProcessInput() {
                 doc->IsModified = true;
                 m_selectAllActive = false;
             } else if (vk == VK_BACK) {
-                if (doc->CursorX > 0) {
+                if (m_selectAllActive) {
+                    doc->RecordEdit();
+                    doc->Lines.assignSingle("");
+                    doc->CursorX = 0;
+                    doc->CursorY = 0;
+                    doc->InvalidateLineStatesFrom(0);
+                    doc->IsModified = true;
+                    m_selectAllActive = false;
+                } else if (doc->CursorX > 0) {
                     doc->RecordEdit();
                     doc->InvalidateLineStatesFrom(static_cast<size_t>(doc->CursorY));
                     size_t charStart = PrevUtf8CharStart(doc->Lines[doc->CursorY], static_cast<size_t>(doc->CursorX));
@@ -4109,11 +4257,61 @@ void CrossForgeEngine::ProcessInput() {
                     doc->IsModified = true;
                     m_selectAllActive = false;
                 }
-            } else {
+            } else if (vk == VK_DELETE) {
+                int lineLen = static_cast<int>(doc->Lines[doc->CursorY].size());
+                if (m_selectAllActive) {
+                    doc->RecordEdit();
+                    doc->Lines.assignSingle("");
+                    doc->CursorX = 0;
+                    doc->CursorY = 0;
+                    doc->InvalidateLineStatesFrom(0);
+                    doc->IsModified = true;
+                    m_selectAllActive = false;
+                } else if (doc->CursorX < lineLen) {
+                    doc->RecordEdit();
+                    doc->InvalidateLineStatesFrom(static_cast<size_t>(doc->CursorY));
+                    size_t charEnd = NextUtf8CharEnd(doc->Lines[doc->CursorY], static_cast<size_t>(doc->CursorX));
+                    std::string cur = doc->Lines[doc->CursorY];
+                    cur.erase(static_cast<size_t>(doc->CursorX), charEnd - static_cast<size_t>(doc->CursorX));
+                    doc->Lines.set(doc->CursorY, std::move(cur));
+                    doc->IsModified = true;
+                    m_selectAllActive = false;
+                } else if (doc->CursorY + 1 < static_cast<int>(doc->Lines.size())) {
+                    doc->RecordEdit();
+                    doc->InvalidateLineStatesFrom(static_cast<size_t>(doc->CursorY));
+                    doc->Lines.set(doc->CursorY, doc->Lines[doc->CursorY] + doc->Lines[doc->CursorY + 1]);
+                    doc->Lines.erase(doc->CursorY + 1);
+                    doc->IsModified = true;
+                    m_selectAllActive = false;
+                }
+            } else if (vk == VK_TAB && !IsCtrlPressed(state) && !IsAltPressed(state)) {
+                doc->RecordEdit();
+                if (m_selectAllActive) {
+                    doc->Lines.assignSingle("");
+                    doc->CursorX = 0;
+                    doc->CursorY = 0;
+                    doc->InvalidateLineStatesFrom(0);
+                    m_selectAllActive = false;
+                }
+                doc->InvalidateLineStatesFrom(static_cast<size_t>(doc->CursorY));
+                std::string cur = doc->Lines[doc->CursorY];
+                cur.insert(doc->CursorX, "\t");
+                doc->Lines.set(doc->CursorY, std::move(cur));
+                doc->CursorX += 1;
+                doc->IsModified = true;
+                m_selectAllActive = false;
+            } else if (IsCtrlPressed(state) == IsAltPressed(state)) {
                 wchar_t wch = ir.Event.KeyEvent.uChar.UnicodeChar;
                 std::string chUtf8 = Utf8FromWideChar(wch);
                 if (!chUtf8.empty()) {
                     doc->RecordEdit();
+                    if (m_selectAllActive) {
+                        doc->Lines.assignSingle("");
+                        doc->CursorX = 0;
+                        doc->CursorY = 0;
+                        doc->InvalidateLineStatesFrom(0);
+                        m_selectAllActive = false;
+                    }
                     doc->InvalidateLineStatesFrom(static_cast<size_t>(doc->CursorY));
                     std::string cur = doc->Lines[doc->CursorY];
                     cur.insert(doc->CursorX, chUtf8);
@@ -4139,8 +4337,14 @@ void CrossForgeEngine::ProcessInput() {
             int wheel = static_cast<SHORT>(HIWORD(btn));
             int step = (wheel > 0) ? -3 : 3;
             int maxScroll = (std::max)(0, static_cast<int>(doc->Lines.size()) - 1);
+            int viewHeight = GetDocumentViewHeight(m_activeDocIndex);
             doc->ScrollY = (std::max)(0, (std::min)(doc->ScrollY + step, maxScroll));
             if (doc->CursorY < doc->ScrollY) doc->CursorY = doc->ScrollY;
+            if (doc->CursorY >= doc->ScrollY + viewHeight) {
+                doc->CursorY = (std::max)(0, doc->ScrollY + viewHeight - 1);
+            }
+            EnsureDocumentInvariants(doc);
+            EnsureCursorVisible(doc, m_activeDocIndex);
             SetStatus("Scrolled.");
             return;
         }
@@ -4170,36 +4374,50 @@ void CrossForgeEngine::ProcessInput() {
         // Tab-strip click switches the active document (Tabs layout).
         if ((btn & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 && flags == 0) {
             int tabIdx = HitTestTabStrip(pos.X, pos.Y);
-            if (tabIdx >= 0 && tabIdx != m_activeDocIndex) {
-                m_activeDocIndex = tabIdx;
-                SetStatus("Switched window.");
-                m_needsRender = true;
+            if (tabIdx >= 0) {
+                if (tabIdx != m_activeDocIndex) {
+                    m_activeDocIndex = tabIdx;
+                    m_selectAllActive = false;
+                    SetStatus("Switched window.");
+                    m_needsRender = true;
+                }
                 return;
             }
         }
 
-        // Text-area click sets caret location.
+        // Text-area or window-frame click sets active pane and caret location.
         if ((btn & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 && flags == 0 && !m_documents.empty()) {
-            auto doc = m_documents[m_activeDocIndex];
-            int windowTop = 1;
-            int windowBottom = m_height - 2;
-            if (pos.Y > windowTop && pos.Y < windowBottom && pos.X > 5 && pos.X < m_width - 1) {
-                int lineIdx = doc->ScrollY + (pos.Y - (windowTop + 1));
-                lineIdx = (std::max)(0, (std::min)(lineIdx, static_cast<int>(doc->Lines.size()) - 1));
-                // Convert the clicked screen column (plus horizontal scroll) into
-                // a byte offset, accounting for multi-byte/wide characters.
-                int targetCol = (std::max)(0, pos.X - 6) + (std::max)(0, doc->ScrollX);
-                int colIdx = 0;
-                if (lineIdx < static_cast<int>(doc->Lines.size())) {
-                    colIdx = DisplayColToByteOffset(doc->Lines[lineIdx], targetCol);
-                    colIdx = (std::min)(colIdx, static_cast<int>(doc->Lines[lineIdx].size()));
+            for (int i = 0; i < static_cast<int>(m_documents.size()); ++i) {
+                int topY = 0, botY = 0;
+                if (!GetDocWindowFrame(i, topY, botY)) continue;
+                if (pos.Y >= topY && pos.Y <= botY && pos.X >= 0 && pos.X < m_width) {
+                    int prevActive = m_activeDocIndex;
+                    m_activeDocIndex = i;
+                    auto doc = m_documents[i];
+                    if (pos.Y > topY && pos.Y < botY && pos.X > 5 && pos.X < m_width - 1) {
+                        int lineIdx = doc->ScrollY + (pos.Y - (topY + 1));
+                        lineIdx = (std::max)(0, (std::min)(lineIdx, static_cast<int>(doc->Lines.size()) - 1));
+                        // Convert the clicked screen column (plus horizontal scroll) into
+                        // a byte offset, accounting for multi-byte/wide characters.
+                        int targetCol = (std::max)(0, pos.X - 6) + (std::max)(0, doc->ScrollX);
+                        int colIdx = 0;
+                        if (lineIdx < static_cast<int>(doc->Lines.size())) {
+                            colIdx = DisplayColToByteOffset(doc->Lines[lineIdx], targetCol);
+                            colIdx = (std::min)(colIdx, static_cast<int>(doc->Lines[lineIdx].size()));
+                        }
+                        doc->CursorY = lineIdx;
+                        doc->CursorX = colIdx;
+                        m_selectAllActive = false;
+                        EnsureDocumentInvariants(doc);
+                        EnsureCursorVisible(doc, m_activeDocIndex);
+                        SetStatus("Cursor moved.");
+                    } else if (prevActive != i) {
+                        m_selectAllActive = false;
+                        SetStatus("Switched window.");
+                    }
+                    m_needsRender = true;
+                    break;
                 }
-                doc->CursorY = lineIdx;
-                doc->CursorX = colIdx;
-                EnsureDocumentInvariants(doc);
-                EnsureCursorVisible(doc, m_activeDocIndex);
-                SetStatus("Cursor moved.");
-                m_needsRender = true;
             }
         }
     }

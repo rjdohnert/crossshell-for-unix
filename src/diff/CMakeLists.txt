@@ -1,31 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
-project(diff LANGUAGES CXX)
+project(diff LANGUAGES C)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(SOURCES
-    diff.cpp
-    diff_app.cpp
-    arg_parser.cpp
-    formatter.cpp
-    myers_diff.cpp
-    line_reader.cpp
-    normalizer.cpp
-)
-
-set(HEADERS
-    diff.hpp
-    diff_app.hpp
-    arg_parser.hpp
-    formatter.hpp
-    myers_diff.hpp
-    line_reader.hpp
-    normalizer.hpp
-    models.hpp
-)
-
-add_executable(diff ${SOURCES} ${HEADERS})
+add_executable(diff diff.c)
 
 set_target_properties(diff PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../bin"

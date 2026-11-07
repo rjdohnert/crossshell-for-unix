@@ -1,0 +1,16 @@
+groupdel changes
+================
+
+- Replaced the include-fragment implementation with separate CLI, input,
+  local-group, application, and shared-type modules.
+- Switched argument handling to Unicode Windows arguments and strict option
+  parsing; invalid options and conflicting stdin operands now stop execution.
+- Added bounded UTF-8 input records, BOM support, quoted CSV/TSV parsing,
+  comment and blank-line handling, and explicit input-error reporting.
+- Added validation for empty and control-character group names, safe
+  diagnostic output, and consistent exit statuses.
+- Corrected documentation to describe local Windows groups rather than Active
+  Directory deletion and aligned the documented exit codes with behavior.
+- Updated build scripts to compile all modules and install `groupdel.exe` into
+  `bin\`; the installer now verifies the executable is present.
+- Removed the obsolete groupdel .inc fragments.

@@ -29,33 +29,25 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define NOMINMAX
-#include <windows.h>
-#pragma comment(lib, "user32.lib")
-#include <iostream>
-#include <fstream>
-#include <sstream>
+#include "eve_app.h"
+
 #include <filesystem>
-#include <string>
-#include <string_view>
-#include <vector>
-#include <deque>
-#include <unordered_set>
-#include <unordered_map>
-#include <map>
-#include <algorithm>
-#include <atomic>
-#include <cctype>
-#include <cstdint>
-#include <cstdio>
-#include <functional>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
+#include <iostream>
+#include <new>
+#include <stdexcept>
+#include <system_error>
 
-#include "eve_module_01_models.inc"
-#include "eve_module_02_highlighter.inc"
-#include "eve_module_03_editor.inc"
-#include "eve_module_04_app.inc"
-
-int main(int argc, char* argv[]) { return EveApplication().run(argc, argv); }
+int main(int argc, char* argv[]) {
+    try {
+        return RunEveApplication(argc, argv);
+    } catch (const std::bad_alloc&) {
+        std::cerr << "eve: not enough memory\n";
+    } catch (const std::length_error& error) {
+        std::cerr << "eve: data is too large: " << error.what() << '\n';
+    } catch (const std::filesystem::filesystem_error& error) {
+        std::cerr << "eve: filesystem operation failed: " << error.what() << '\n';
+    } catch (const std::system_error& error) {
+        std::cerr << "eve: system operation failed: " << error.what() << '\n';
+    }
+    return 1;
+}

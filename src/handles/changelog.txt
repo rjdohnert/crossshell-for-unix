@@ -1,0 +1,16 @@
+handles changes
+===============
+
+- Replaced the include-fragment implementation with separate CLI, collector,
+  formatter, application, and shared-type modules.
+- Replaced private NT process-information parsing with Tool Help process
+  enumeration and documented OpenProcess/GetProcessHandleCount APIs.
+- Fixed descending sorting for equal keys and made unavailable counts sort
+  consistently after available counts.
+- Added strict option/value validation, overflow-safe PID and top-count parsing,
+  TSV output, and a distinct status for denied or unavailable counts.
+- Added explicit collection/output/pipe errors and meaningful process exit
+  codes; escaped JSON control characters and encoded names as UTF-8.
+- Updated all build scripts to compile the modules and install handles.exe in
+  bin\; the installer now verifies that handles.exe is present.
+- Updated docs\handles.md with supported options, output fields, and statuses.

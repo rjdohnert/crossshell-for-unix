@@ -33,6 +33,13 @@ void Document::LoadFile(const std::string& path) {
         file.close();
     }
     if (Lines.empty()) Lines.push_back("");
+    CursorX = 0;
+    CursorY = 0;
+    ScrollY = 0;
+    ScrollX = 0;
+    IsModified = false;
+    UndoStack.clear();
+    RedoStack.clear();
     // Fresh content: drop any cached highlight line-states.
     m_lineStates.clear();
     m_stateDirtyFrom = 0;
